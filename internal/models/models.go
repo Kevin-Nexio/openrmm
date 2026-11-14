@@ -176,23 +176,28 @@ type Agent struct {
 
 // Job is a unit of work targeted at an agent (currently: run a script).
 type Job struct {
-	ID               string    `json:"id"`
-	AgentID          string    `json:"agent_id"`
-	Type             string    `json:"type"`
-	Description      string    `json:"description"`
-	Shell            string    `json:"shell"`
-	Script           string    `json:"script"`
-	Status           string    `json:"status"`
-	RequiresApproval bool      `json:"requires_approval"`
-	CreatedBy        string    `json:"created_by"`
-	ApprovedBy       *string   `json:"approved_by,omitempty"`
-	TaskID           *string   `json:"task_id,omitempty"`
-	BatchID          *string   `json:"batch_id,omitempty"`
-	ExitCode         *int      `json:"exit_code,omitempty"`
-	Stdout           string    `json:"stdout"`
-	Stderr           string    `json:"stderr"`
-	CreatedAt        time.Time `json:"created_at"`
-	UpdatedAt        time.Time `json:"updated_at"`
+	ID               string  `json:"id"`
+	AgentID          string  `json:"agent_id"`
+	Type             string  `json:"type"`
+	Description      string  `json:"description"`
+	Shell            string  `json:"shell"`
+	Script           string  `json:"script"`
+	Status           string  `json:"status"`
+	RequiresApproval bool    `json:"requires_approval"`
+	CreatedBy        string  `json:"created_by"`
+	ApprovedBy       *string `json:"approved_by,omitempty"`
+	// CreatedByName and ApprovedByName are the usernames behind CreatedBy and
+	// ApprovedBy when those hold a user id (see store.jobCols), for display;
+	// empty otherwise. Never stored.
+	CreatedByName  string    `json:"created_by_name,omitempty"`
+	ApprovedByName string    `json:"approved_by_name,omitempty"`
+	TaskID         *string   `json:"task_id,omitempty"`
+	BatchID        *string   `json:"batch_id,omitempty"`
+	ExitCode       *int      `json:"exit_code,omitempty"`
+	Stdout         string    `json:"stdout"`
+	Stderr         string    `json:"stderr"`
+	CreatedAt      time.Time `json:"created_at"`
+	UpdatedAt      time.Time `json:"updated_at"`
 	// Autonomy says why the job ran without approval at the time: a device
 	// query its creator's role allows, or a script released in advance. Empty
 	// for every other job.

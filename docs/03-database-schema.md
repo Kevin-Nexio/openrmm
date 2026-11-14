@@ -150,7 +150,7 @@ Units of work targeted at an agent.
 | status | text | `awaiting_approval`→`pending`→`sent`→`running`→`completed`/`failed`, or `rejected` |
 | requires_approval | bool | true for AI proposals |
 | created_by | text | actor (`admin`, `api`, `ai:<actor>`, `mcp:<actor>`) |
-| approved_by | text | nullable. For an autonomous job, its basis: `autonomy: <permission>` or `pre-approved by <admin> (hash …)` |
+| approved_by | text | nullable. A user id, or for an autonomous job its basis: `autonomy: <permission>` or `pre-approved by <admin> (hash …)`. Reads add the usernames behind `created_by` and `approved_by` (`created_by_name`, `approved_by_name`; not stored) |
 | task_id | uuid | set when the job was produced by a scheduled task (nullable) |
 | batch_id | uuid | bulk deployment: jobs created together share it; one batch per company (nullable) |
 | exit_code | int | nullable until finished |
