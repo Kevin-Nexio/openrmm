@@ -6,6 +6,8 @@ tag.
 
 ## [Unreleased]
 
+## [0.11.2] - 2026-11-15
+
 ### Fixed
 
 - **Backups no longer fill the disk** (self-hosted Docker Compose installs).
@@ -18,6 +20,23 @@ tag.
   only after the new backup is written; `0` keeps every one. The production
   guide explains how to size the WAL volume for the recovery window. Remote
   rclone copies are left to a bucket lifecycle rule.
+
+### Upgrade notes
+
+- This release changes only the self-hosted backup scripts in `deploy/ops/`.
+  The server, console and agents are unchanged apart from the version, and
+  OpenRMM Cloud is not affected. There are no database migrations.
+- Self-hosted installs get the fix by updating `deploy/ops/` (checkout the
+  `v0.11.2` tag, or `git pull` on `main`). Nothing else is needed: the next
+  `basebackup.sh` run keeps the newest `BASEBACKUP_KEEP` base backups (default
+  2) and deletes the older ones, and the next `ship-wal.sh` run then frees the
+  WAL they held. Likewise the next `backup.sh` run keeps `BACKUP_KEEP` dumps
+  (default 14). Set either to `0` to keep everything, as before.
+- An archive that never had a base backup is not pruned at all: if
+  `deploy/ops/basebackup.sh` is not scheduled, run it once, then
+  `deploy/ops/ship-wal.sh`. To see whether the archive is struggling, check
+  `failed_count` in `pg_stat_archiver` and the size of the `rmm_pgwal` volume
+  (`docker system df -v`).
 
 ## [0.11.1] - 2026-11-14
 
