@@ -6,6 +6,19 @@ tag.
 
 ## [Unreleased]
 
+### Fixed
+
+- **Backups no longer fill the disk** (self-hosted Docker Compose installs).
+  `deploy/ops/basebackup.sh` never deleted old base backups, and `ship-wal.sh`
+  prunes WAL only up to the oldest one still on disk, so the WAL archive
+  (`rmm_pgwal`) grew until the disk filled and PostgreSQL stopped archiving and
+  accepting connections. `backup.sh` likewise kept every nightly dump. Each now
+  keeps the newest `BASEBACKUP_KEEP` base backups (default 2) and
+  `BACKUP_KEEP` dumps (default 14), deleting older ones with their sidecars
+  only after the new backup is written; `0` keeps every one. The production
+  guide explains how to size the WAL volume for the recovery window. Remote
+  rclone copies are left to a bucket lifecycle rule.
+
 ## [0.11.1] - 2026-11-14
 
 ### Added

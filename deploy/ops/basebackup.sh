@@ -20,6 +20,10 @@ BACKUP_DIR=${BACKUP_DIR:-/var/backups/openrmm}
 BASEBACKUP_DIR=${BASEBACKUP_DIR:-$BACKUP_DIR/base}
 BACKUP_REQUIRE_ENCRYPTION=${BACKUP_REQUIRE_ENCRYPTION:-true}
 BACKUP_OFFSITE_REQUIRED=${BACKUP_OFFSITE_REQUIRED:-false}
+# How many base backups to keep (newest first); 0 keeps every one. WAL older
+# than the oldest kept one is what ship-wal.sh prunes, so this also bounds the
+# WAL archive: about BASEBACKUP_KEEP base-backup intervals of WAL.
+BASEBACKUP_KEEP=${BASEBACKUP_KEEP:-2}
 POSTGRES_USER=${POSTGRES_USER:-rmm}
 validate_identifier POSTGRES_USER "$POSTGRES_USER"
 
@@ -79,5 +83,9 @@ if [[ -n "${BACKUP_RCLONE_DEST:-}" ]]; then
     rclone copyto "$file" "$remote/base/$(basename "$file")"
   done
 fi
+
+# The new base backup and its start marker are in place: drop the oldest local
+# ones, so the next ship-wal.sh run can prune the WAL they needed.
+prune_backups "$BASEBACKUP_DIR" 'base-*.tar.gz*' "$BASEBACKUP_KEEP"
 
 printf '%s\n' "$output"

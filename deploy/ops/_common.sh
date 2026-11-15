@@ -66,6 +66,31 @@ checksum_value() {
   fi
 }
 
+# prune_backups DIR GLOB KEEP keeps the KEEP newest archives in DIR whose names
+# match GLOB and deletes the older ones with their .sha256 and .startwal
+# sidecars. Archive names carry a UTC timestamp right after their prefix, so the
+# lexical order is the age order, encrypted (.age) or not. KEEP=0 keeps
+# everything. Callers prune only after a new archive was written and
+# checksummed, so a failed run never deletes a good backup. Without it the
+# directory grew forever, and for base backups so did the WAL archive:
+# ship-wal.sh prunes WAL only up to the oldest base backup still on disk.
+prune_backups() {
+  local dir=$1 pattern=$2 keep=$3 archive i
+  [[ "$keep" =~ ^[0-9]+$ ]] || die "backup retention must be a whole number of backups: $keep"
+  keep=$((10#$keep))
+  (( keep > 0 )) || return 0
+  local -a archives=()
+  while IFS= read -r archive; do
+    archives+=("$archive")
+  done < <(find "$dir" -maxdepth 1 -type f -name "$pattern" ! -name '.*' ! -name '*.sha256' \
+    ! -name '*.startwal' ! -name '*.tmp.*' -print | LC_ALL=C sort -r)
+  for (( i = keep; i < ${#archives[@]}; i++ )); do
+    archive=${archives[$i]}
+    rm -f -- "$archive" "${archive}.sha256" "${archive}.startwal"
+    printf 'removed old backup %s\n' "$(basename -- "$archive")" >&2
+  done
+}
+
 write_checksum() {
   printf '%s  %s\n' "$(checksum_value "$1")" "$(basename "$1")" > "${1}.sha256"
   chmod 0600 "${1}.sha256"

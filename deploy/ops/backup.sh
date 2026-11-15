@@ -10,6 +10,8 @@ require_command docker
 BACKUP_DIR=${BACKUP_DIR:-/var/backups/openrmm}
 BACKUP_REQUIRE_ENCRYPTION=${BACKUP_REQUIRE_ENCRYPTION:-true}
 BACKUP_OFFSITE_REQUIRED=${BACKUP_OFFSITE_REQUIRED:-false}
+# How many local dumps to keep (newest first); 0 keeps every one.
+BACKUP_KEEP=${BACKUP_KEEP:-14}
 POSTGRES_USER=${POSTGRES_USER:-rmm}
 POSTGRES_DB=${POSTGRES_DB:-rmm}
 validate_identifier POSTGRES_USER "$POSTGRES_USER"
@@ -57,5 +59,9 @@ if [[ -n "${BACKUP_RCLONE_DEST:-}" ]]; then
   rclone copyto "$output" "$remote/$(basename "$output")"
   rclone copyto "${output}.sha256" "$remote/$(basename "${output}.sha256")"
 fi
+
+# The new dump is written and checksummed: drop the oldest local ones. The
+# rclone copies are the remote's to expire (a bucket lifecycle rule).
+prune_backups "$BACKUP_DIR" 'rmm-*.dump*' "$BACKUP_KEEP"
 
 printf '%s\n' "$output"
