@@ -6,6 +6,8 @@ tag.
 
 ## [Unreleased]
 
+## [0.11.1] - 2026-11-14
+
 ### Added
 
 - **Script variables on one-off jobs, for those who may bind them.** A device's
@@ -46,6 +48,16 @@ tag.
   in an autonomous run's "pre-approved by …"; the console shows them and keeps
   the stored id on hover. The bootstrap admin, API tokens and the scheduler
   still show as before.
+
+### Upgrade notes
+
+- No database migrations. Agents update to 0.11.1 as usual; the variable and
+  job changes are on the server and console, so older 0.11.0 agents keep
+  working.
+- Runs with script variables or parameters now skip approval only where the
+  instance already allows jobs without approval and the person holds
+  **Manage jobs** and **Manage configuration**; with the setting off (the
+  default) they wait for approval as before.
 
 ## [0.11.0] - 2026-11-13
 
