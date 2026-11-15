@@ -1857,7 +1857,7 @@ function DeviceJobs({ id, navigate, onClose }) {
         <button key={j.id} onClick={() => { onClose(); navigate('jobs', { focus: j.id }); }} className="w-full text-left rounded-xl border border-line bg-card hover:border-line2 hover:bg-elevated/40 transition p-3.5 flex items-center gap-3">
           <div className="min-w-0 flex-1">
             <div className="flex items-center gap-2"><span className="text-[13px] text-ink font-medium truncate">{j.description}</span>{j.created_by.startsWith('ai:') && <Icon name="sparkle" size={12} className="text-brandhi" />}</div>
-            <div className="text-[11.5px] text-faint mt-0.5">{j.created_by} · {timeAgo(j.created_at)}{j.exit_code != null && <span className="mono"> · {t('djobs.exit', { code: j.exit_code })}</span>}</div>
+            <div className="text-[11.5px] text-faint mt-0.5"><span title={j.created_by}>{window.jobCreator ? window.jobCreator(j) : j.created_by}</span> · {timeAgo(j.created_at)}{j.exit_code != null && <span className="mono"> · {t('djobs.exit', { code: j.exit_code })}</span>}</div>
           </div>
           <StatusPill status={j.status} size="sm" pulse />
         </button>

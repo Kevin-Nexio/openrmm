@@ -353,7 +353,7 @@ function ProposedJob({ jobId, navigate }) {
       </div>
       <div className="p-3.5 space-y-3">
         <div className="text-[12.5px] text-ink font-medium">{j.description}</div>
-        {auto && j.approved_by && <div className="text-[11.5px] text-brandhi">{t('chat.autonomyBasis', { basis: j.approved_by })}</div>}
+        {auto && j.approved_by && <div className="text-[11.5px] text-brandhi" title={j.approved_by}>{t('chat.autonomyBasis', { basis: window.jobApprover ? window.jobApprover(j) : j.approved_by })}</div>}
         <CodeBlock code={j.script} shell={j.shell} dryRun={isAwaiting} maxHeight={200} />
         {j.params && Object.keys(j.params).length > 0 && window.JobParams && <window.JobParams params={j.params} />}
         {(j.variables || []).length > 0 && window.JobVariables && <window.JobVariables names={j.variables} oneOff={!j.script_id} />}

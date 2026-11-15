@@ -163,6 +163,14 @@ acknowledges that confirmation.
 | POST | `/api/jobs/batch/{batch_id}/approve` | `jobs.manage` | Approve every awaiting job in the batch |
 | POST | `/api/jobs/batch/{batch_id}/reject` | `jobs.manage` | Reject every awaiting job in the batch |
 
+`created_by` and `approved_by` hold the stored, audited actor: a user id (or
+`ai:<id>` / `mcp:<id>` for the person the assistant acted for, or an autonomous
+run's `autonomy: <permission>` / `pre-approved by <id> (hash …)`), else `admin`,
+`api` or `scheduler`. Every job read also carries `created_by_name` and
+`approved_by_name`, the username behind the user id in each (for
+`pre-approved by …`, the user who released the script), omitted when there is
+none.
+
 `POST /jobs` body:
 ```json
 { "agent_id": "...", "shell": "bash", "script": "...",

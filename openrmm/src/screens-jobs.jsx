@@ -113,9 +113,9 @@ function JobCard({ job, device, defaultOpen, focused }) {
           <div className="text-[12px] text-faint mt-1 flex items-center gap-1.5 flex-wrap">
             <OsIcon os={device?.os} size={12} /><span className="text-muted">{device?.hostname || job.agent_id}</span>
             <span>·</span><span className="mono">{job.type === 'device_query' ? t('jobs.deviceQuery') : job.shell}</span>
-            <span>·</span><span>{ai ? <span className="text-brandhi">{t('jobs.by', { who: t('jobs.aiAssistant') })}</span> : t('jobs.by', { who: job.created_by })}</span>
+            <span>·</span><span title={ai ? undefined : job.created_by}>{ai ? <span className="text-brandhi">{t('jobs.by', { who: t('jobs.aiAssistant') })}</span> : t('jobs.by', { who: jobCreator(job) })}</span>
             <span>·</span><span>{timeAgo(job.created_at)}</span>
-            {job.approved_by && <><span>·</span><span className={job.autonomy ? 'text-brandhi' : undefined}>{job.autonomy ? t('jobs.autonomyBasis', { basis: job.approved_by }) : t('jobs.approvedBy', { who: job.approved_by })}</span></>}
+            {job.approved_by && <><span>·</span><span className={job.autonomy ? 'text-brandhi' : undefined} title={job.approved_by}>{job.autonomy ? t('jobs.autonomyBasis', { basis: jobApprover(job) }) : t('jobs.approvedBy', { who: jobApprover(job) })}</span></>}
           </div>
         </div>
         <div className="flex items-center gap-2 shrink-0">
@@ -215,7 +215,7 @@ function BatchCard({ jobs, devMap, defaultOpen }) {
           </div>
           <div className="text-[12px] text-faint mt-1 flex items-center gap-1.5 flex-wrap">
             <span className="mono">{head.shell}</span><span>·</span>
-            <span>{ai ? <span className="text-brandhi">{t('jobs.by', { who: t('jobs.aiAssistant') })}</span> : t('jobs.by', { who: head.created_by })}</span><span>·</span>
+            <span>{ai ? <span className="text-brandhi">{t('jobs.by', { who: t('jobs.aiAssistant') })}</span> : t('jobs.by', { who: jobCreator(head) })}</span><span>·</span>
             <span>{timeAgo(head.created_at)}</span>
             {Object.entries(counts).map(([s, n]) => <span key={s} className="inline-flex items-center gap-1"><span>·</span><StatusPill status={s} size="sm" /> {n}</span>)}
           </div>
@@ -472,6 +472,21 @@ function AuditScreen() {
 }
 
 window.JobsScreen = JobsScreen;
+
+// Who created and who approved a job, by name. Both fields store a user id
+// (the audited value); the server adds the username behind it
+// (created_by_name / approved_by_name, store.jobCols). Without one — the
+// bootstrap admin, an API token, the scheduler, a deleted user — the stored
+// value is shown as it is. A run released for the AI is approved as
+// "pre-approved by <id> (hash …)": the id inside it becomes the name.
+const JOB_ACTOR_ID = /[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}/;
+function jobCreator(job) { return job.created_by_name || job.created_by; }
+function jobApprover(job) {
+  const stored = job.approved_by || '';
+  return job.approved_by_name ? stored.replace(JOB_ACTOR_ID, job.approved_by_name) : stored;
+}
+window.jobCreator = jobCreator;
+window.jobApprover = jobApprover;
 window.JobCard = JobCard;
 window.AuditScreen = AuditScreen;
 window.useDeviceMap = useDeviceMap;

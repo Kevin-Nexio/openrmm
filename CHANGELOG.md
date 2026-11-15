@@ -39,6 +39,13 @@ tag.
   offers to undo the edits. In Scripts, **Run on device** waits until
   unsaved changes are saved, since a run uses the saved script, and
   **Deploy to many devices** says that only its text is sent.
+- **Jobs name who created and approved them.** Job cards, batch cards, the AI
+  chat's job cards and a device's job list showed a user id ("by 26141e80-…")
+  instead of the username. The job API now sends `created_by_name` and
+  `approved_by_name` with every job, including the user who released a script
+  in an autonomous run's "pre-approved by …"; the console shows them and keeps
+  the stored id on hover. The bootstrap admin, API tokens and the scheduler
+  still show as before.
 
 ## [0.11.0] - 2026-11-13
 

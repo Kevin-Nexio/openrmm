@@ -497,16 +497,26 @@ func (s *Store) APITokenExists(ctx context.Context, hash string) (bool, error) {
 
 // ---------- Jobs ----------
 
+// jobCols reads a job from an unaliased `FROM jobs`. The last two columns are
+// display names, not stored: the username behind created_by (a user id, or
+// ai:/mcp: and the id of the person the assistant acted for) and behind
+// approved_by (a user id, or the user who released the script in an
+// autonomous run's "pre-approved by <id> (hash …)"). Ids stay the stored,
+// audited value; the console shows the name and falls back to the id.
 const jobCols = `id, agent_id, type, description, shell, script, status, requires_approval,
 	created_by, approved_by, task_id, batch_id, exit_code, stdout, stderr, created_at, updated_at,
-	autonomy, script_id, params, variables`
+	autonomy, script_id, params, variables,
+	COALESCE((SELECT u.username FROM users u WHERE u.id::text =
+		COALESCE(substring(jobs.created_by from '^(?:ai|mcp):([0-9a-f-]{36})$'), jobs.created_by)), ''),
+	COALESCE((SELECT u.username FROM users u WHERE u.id::text =
+		COALESCE(substring(jobs.approved_by from '^pre-approved by ([0-9a-f-]{36}) \(hash '), jobs.approved_by)), '')`
 
 func scanJob(row pgx.Row) (*models.Job, error) {
 	var j models.Job
 	var params, variables []byte
 	err := row.Scan(&j.ID, &j.AgentID, &j.Type, &j.Description, &j.Shell, &j.Script, &j.Status,
 		&j.RequiresApproval, &j.CreatedBy, &j.ApprovedBy, &j.TaskID, &j.BatchID, &j.ExitCode, &j.Stdout, &j.Stderr,
-		&j.CreatedAt, &j.UpdatedAt, &j.Autonomy, &j.ScriptID, &params, &variables)
+		&j.CreatedAt, &j.UpdatedAt, &j.Autonomy, &j.ScriptID, &params, &variables, &j.CreatedByName, &j.ApprovedByName)
 	if errors.Is(err, pgx.ErrNoRows) {
 		return nil, ErrNotFound
 	}
