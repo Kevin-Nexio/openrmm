@@ -30,7 +30,8 @@ func meshLoginToken(tokenKeyHex, meshUser string) (string, error) {
 	}
 
 	payload := map[string]any{
-		"userid":   "user//" + meshUser,
+		"a": 3,
+		"u":   "user//" + meshUser,
 		"domainid": "",
 		"time":     time.Now().Unix(),
 	}
