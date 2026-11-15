@@ -59,7 +59,7 @@ jobs:
           # and chown rejecting nobody's uid on BSD — were in files matched here.
           has '(^cmd/agent/servicecheck(_test)?\.go$|^internal/protocol/servicecheck(_test)?\.go$|_darwin\.(go|m)$|^cmd/rmm-remote/macapp/|^scripts/build-macos-bundle\.sh$|^scripts/test-install-migration\.sh$|^deploy/public/(install|uninstall)\.sh$)' && macos=true
           has '^openrmm/'                                          && frontend=true
-          has '^(deploy/public/install\.|scripts/|cmd/agent/|internal/protocol/)' && installers=true
+          has '^(deploy/public/install\.|deploy/ops/|scripts/|cmd/agent/|internal/protocol/)' && installers=true
           has '^(Dockerfile$|\.dockerignore$|deploy/)'             && docker=true
           # A change to the workflows themselves has to be proven by running them.
           if has '^\.github/workflows/'; then
@@ -272,9 +272,11 @@ jobs:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
       - name: Shell syntax and lint
         run: |
-          bash -n deploy/public/install.sh deploy/public/uninstall.sh scripts/test-install-migration.sh
-          shellcheck -x deploy/public/install.sh deploy/public/uninstall.sh scripts/test-install-migration.sh deploy/ops/*.sh
+          bash -n deploy/public/install.sh deploy/public/uninstall.sh scripts/test-install-migration.sh scripts/test-backup-retention.sh
+          shellcheck -x deploy/public/install.sh deploy/public/uninstall.sh scripts/test-install-migration.sh scripts/test-backup-retention.sh deploy/ops/*.sh
           for script in deploy/ops/*.sh; do bash -n "$script"; done
+      - name: Backup retention
+        run: bash scripts/test-backup-retention.sh
       # Installs into the runner's real system paths, which is why it only runs
       # on a throwaway machine. It covers the installer's transaction, the
       # directory-ownership refusal and uninstall.sh; the agent is a stand-in,

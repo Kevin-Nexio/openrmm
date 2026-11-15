@@ -312,6 +312,8 @@ BACKUP_AGE_RECIPIENT=age1...
 BACKUP_AGE_IDENTITY_FILE=/root/.config/age/openrmm.txt
 BACKUP_RCLONE_DEST=remote:openrmm
 BACKUP_OFFSITE_REQUIRED=true
+BACKUP_KEEP=14
+BASEBACKUP_KEEP=2
 VERIFY_FULL_RESTORE=true
 ```
 
@@ -321,6 +323,13 @@ age, write a SHA-256 sidecar, and copy both files with rclone when configured:
 ```bash
 deploy/ops/backup.sh
 ```
+
+Each run then keeps the newest `BACKUP_KEEP` local dumps (default 14: two weeks
+of the nightly `openrmm-backup.timer`) and deletes the older ones with their
+`.sha256`. It prunes only after the new dump is written and checksummed, so a
+failed run deletes nothing; `BACKUP_KEEP=0` keeps every dump. The rclone copies
+are not pruned: expire them with a lifecycle rule on the bucket, kept at least
+as long as your restore window.
 
 `BACKUP_OFFSITE_REQUIRED=true` fails early unless an rclone destination is set;
 it does not independently prove retention, immutability, or later readability.
@@ -376,7 +385,30 @@ deploy/ops/ship-wal.sh       # hourly: copies WAL offsite and prunes
 
 `ship-wal.sh` prunes against the **oldest** retained base backup, never the
 newest — pruning to the newest would silently destroy the ability to recover to
-any point before it. Recover with:
+any point before it.
+
+`basebackup.sh` keeps the newest `BASEBACKUP_KEEP` base backups (default 2) and
+deletes the older ones with their `.sha256` and `.startwal`, so the next
+`ship-wal.sh` run frees the WAL they needed. You can recover to any point after
+the oldest base backup kept: with the weekly `openrmm-basebackup.timer` and the
+default, one to two weeks back. `BASEBACKUP_KEEP=0` keeps every base backup —
+and then the WAL archive grows without bound. (Earlier releases never pruned base
+backups, so it always did, until the disk filled and PostgreSQL could neither
+archive nor accept new connections.) A WAL archive with no base backup
+at all is never pruned either: run `basebackup.sh` once as soon as archiving is
+on.
+
+Size the `rmm_pgwal` volume for the window you keep. An RMM database is never
+idle (agents send a heartbeat every 20 seconds), so PostgreSQL closes a 16 MB segment at
+least every `POSTGRES_ARCHIVE_TIMEOUT` — up to about 4.6 GB a day at the default
+300 s. The archive holds WAL back to the oldest kept base backup: roughly
+`BASEBACKUP_KEEP` × the base-backup interval × the daily amount. To need less,
+take base backups more often (edit `OnCalendar` in `openrmm-basebackup.timer`),
+keep fewer, or raise `POSTGRES_ARCHIVE_TIMEOUT` and accept a longer recovery
+point. A filling archive shows first as `failed_count` rising in
+`pg_stat_archiver` (the check above).
+
+Recover with:
 
 ```bash
 RESTORE_CONFIRM=rmm PITR_TARGET_TIME='2026-07-27 03:20:00+00' \
