@@ -21,6 +21,15 @@ tag.
   sdm216 (#270). It was validated against a real MeshCentral 1.3.1 server, with
   a desktop session opened from the console.
 
+### Security
+
+- **Go dependencies updated.**
+  - go-jose 4.1.9, golang.org/x/oauth2 0.38.0 and golang.org/x/sys 0.50.0.
+  - golang.org/x/crypto 0.59.0, with the x/text 0.44.0 and x/sync 0.25.0 it
+    requires. This clears GO-2026-5932. OpenRMM does not call the affected
+    code, but image scanners still report the module.
+  - The third-party notices are regenerated to match.
+
 ### Upgrade notes
 
 - **Check your shared MeshCentral account before you upgrade.** This applies
@@ -34,8 +43,9 @@ tag.
   5 minutes after it is minted.
   Both were already part of the setup in the remote access guide
   (`docs/08-remote-access.md`).
-- Only the server changes. The console and agents are unchanged apart from the
-  version, and 0.11.x agents keep working. There are no database migrations.
+- The server and agents change: the MeshCentral fix and the updated
+  dependencies. The console is unchanged apart from the version. 0.11.x agents
+  keep working, and there are no database migrations.
 
 ## [0.11.2] - 2026-11-15
 
