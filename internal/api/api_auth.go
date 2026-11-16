@@ -789,10 +789,10 @@ func (s *Server) setUserSSO(w http.ResponseWriter, r *http.Request) {
 	writeJSON(w, http.StatusOK, map[string]bool{"sso_required": *in.Required})
 }
 
-// meshCentralUserPattern is a MeshCentral account name as its user ids hold
-// it (user//<name>, lowercase): ordinary names, e-mail-style names, and the
-// "~oidc:…"/"~ldap:…" forms of accounts that sign in through a provider.
-var meshCentralUserPattern = regexp.MustCompile(`^[a-z0-9_~][a-z0-9._@~:+-]{0,127}$`)
+// meshCentralUserPattern is a MeshCentral account name as its user ids hold.
+// Ordinary account names are normalized to lowercase; OIDC identifiers
+// preserve their original case.
+var meshCentralUserPattern = regexp.MustCompile(`^[A-Za-z0-9_~][A-Za-z0-9._@~:+-]{0,127}$`)
 
 // setUserMeshCentral sets the MeshCentral account a user's remote sessions sign
 // in as when the server mints login tokens. The token is a full MeshCentral
@@ -815,7 +815,10 @@ func (s *Server) setUserMeshCentral(w http.ResponseWriter, r *http.Request) {
 		writeErr(w, http.StatusBadRequest, `user is needed: the MeshCentral account name, or "" for none`)
 		return
 	}
-	name := strings.ToLower(strings.TrimSpace(*in.User))
+	name := strings.TrimSpace(*in.User)
+	if !strings.HasPrefix(strings.ToLower(name), "~oidc:") {
+    	name = strings.ToLower(name)
+	}
 	if name != "" && !meshCentralUserPattern.MatchString(name) {
 		writeErr(w, http.StatusBadRequest, "a MeshCentral account name holds letters, digits and . _ @ ~ : + - only, up to 128 characters")
 		return
