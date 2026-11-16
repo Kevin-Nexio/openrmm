@@ -268,10 +268,19 @@ func TestMeshCentralSignsEachUserInAsTheirOwnAccount(t *testing.T) {
 	}
 
 	// The audit trail names who set which account, and which one each session used.
+	// The technician's account was set three times above: the two provider
+	// accounts (case kept) and then the lower-cased local one.
 	entries, _, err := st.ListAudit(ctx, store.AuditFilter{Action: "user.meshcentral_account", Target: tech.ID, Limit: 10})
 	must(err)
-	if len(entries) != 1 || entries[0].Actor != admin.ID || meshAuditDetail(t, entries[0].Detail)["meshcentral_user"] != "tech.one@example.com" {
-		t.Fatalf("setting a MeshCentral account is not audited: %+v", entries)
+	audited := map[string]bool{}
+	for _, e := range entries {
+		if e.Actor != admin.ID {
+			t.Fatalf("a MeshCentral account change is audited to the wrong actor: %+v", e)
+		}
+		audited[meshAuditDetail(t, e.Detail)["meshcentral_user"]] = true
+	}
+	if len(entries) != 3 || !audited["~oidc:00uAbC123"] || !audited["~saml:Jane.Doe@Example.com"] || !audited["tech.one@example.com"] {
+		t.Fatalf("setting a MeshCentral account is not audited as set: %+v", entries)
 	}
 	entries, _, err = st.ListAudit(ctx, store.AuditFilter{Action: "remote.start", Target: unlinked.ID, Limit: 10})
 	must(err)

@@ -168,6 +168,9 @@ func TestMeshAccount(t *testing.T) {
 		{"unrestricted, no account", StartOptions{Unrestricted: true}, "admin", true, "admin", "shared", ""},
 		{"unrestricted, no account, shared turned off", StartOptions{Unrestricted: true}, "admin", false, "", "", "turned off"},
 		{"unrestricted, no account, no shared name", StartOptions{Unrestricted: true}, " ", true, "", "", "turned off"},
+		// Named as MeshCentral holds them: lower case, except provider accounts.
+		{"unrestricted, shared typed in mixed case", StartOptions{Unrestricted: true}, " OpenRMM-Tech ", true, "openrmm-tech", "shared", ""},
+		{"own provider account keeps its case", StartOptions{MeshUser: "~oidc:00uAbC123"}, "admin", true, "~oidc:00uAbC123", "personal", ""},
 	} {
 		account, kind, err := meshAccount(c.opts, c.shared, c.sharedOn)
 		if c.errHas != "" {
