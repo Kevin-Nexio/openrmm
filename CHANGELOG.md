@@ -6,19 +6,36 @@ tag.
 
 ## [Unreleased]
 
+## [0.11.3] - 2026-11-16
+
 ### Fixed
 
 - **MeshCentral opens signed in.** The login token OpenRMM mints for MeshCentral
-  carried `{userid, domainid}`, which MeshCentral decrypted but matched to no
-  user, so the MeshCentral tab stayed on its sign-in page. It now carries what
-  MeshCentral's own `--logintoken` mints (`{u, a: 3}`), and it works once and for
-  5 minutes. Account names follow MeshCentral: lower case, except an account
-  that signs in through a provider (`~oidc:…`, `~saml:…` and the like), which
-  keeps its case. Reported and fixed by sdm216 (#270). **Check your shared account:** with a login token
-  key set and the shared account on (the default), users with access to every
-  device now really open MeshCentral signed in as it. Make it a MeshCentral user
-  with only the device groups technicians need, not MeshCentral's administrator,
-  or turn the shared account off and give each user an account of their own.
+  carried `{userid, domainid}`. MeshCentral decrypted it but matched it to no
+  user, so the MeshCentral tab stayed on its sign-in page. The token now carries
+  what MeshCentral's own `--logintoken` mints (`{u, a: 3}`), and it works once
+  and for 5 minutes. Account names follow MeshCentral's rules. They are lower
+  case, except an account that signs in through a provider (`~oidc:…`,
+  `~saml:…` and the like), which keeps its case. The remote session and its
+  audit entry record the account as MeshCentral holds it. Reported and fixed by
+  sdm216 (#270). It was validated against a real MeshCentral 1.3.1 server, with
+  a desktop session opened from the console.
+
+### Upgrade notes
+
+- **Check your shared MeshCentral account before you upgrade.** This applies
+  when a login token key is set and the shared account is on (the default).
+  Users with access to every device now really open MeshCentral signed in as
+  that account. Make it a MeshCentral user with only the device groups that
+  technicians need, not MeshCentral's administrator. Otherwise, turn the shared
+  account off and give each user their own account.
+- MeshCentral must allow login tokens (`"AllowLoginToken": true`). Keep the
+  OpenRMM and MeshCentral clocks in sync (NTP), because a token expires
+  5 minutes after it is minted.
+  Both were already part of the setup in the remote access guide
+  (`docs/08-remote-access.md`).
+- Only the server changes. The console and agents are unchanged apart from the
+  version, and 0.11.x agents keep working. There are no database migrations.
 
 ## [0.11.2] - 2026-11-15
 
