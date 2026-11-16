@@ -57,13 +57,18 @@ func meshTokenUser(t *testing.T, keyHex, connectURL string) string {
 	if err != nil {
 		t.Fatalf("the login token does not open with the server's key: %v", err)
 	}
+	// What MeshCentral's root handler reads from ?login=: a === 3 and u.
 	var payload struct {
-		UserID string `json:"userid"`
+		A int    `json:"a"`
+		U string `json:"u"`
 	}
 	if err := json.Unmarshal(plain, &payload); err != nil {
 		t.Fatal(err)
 	}
-	return payload.UserID
+	if payload.A != 3 {
+		t.Fatalf("the login token is not a MeshCentral login token (a = %d)", payload.A)
+	}
+	return payload.U
 }
 
 // With login tokens, each user signs in to MeshCentral as the account an
@@ -209,7 +214,13 @@ func TestMeshCentralSignsEachUserInAsTheirOwnAccount(t *testing.T) {
 			t.Fatalf("MeshCentral account %v was accepted: %d %s", bad, rec.Code, rec.Body)
 		}
 	}
-	// MeshCentral keeps account names in lowercase.
+	// MeshCentral keeps the accounts it makes in lowercase, but an account that
+	// signs in through a provider keeps the provider's id as it came.
+	for _, provider := range []string{"~oidc:00uAbC123", "~saml:Jane.Doe@Example.com"} {
+		if rec := setAccount(adminToken, tech.ID, " "+provider+" "); rec.Code != http.StatusOK || !strings.Contains(rec.Body.String(), `"`+provider+`"`) {
+			t.Fatalf("setting a provider account %q: %d %s", provider, rec.Code, rec.Body)
+		}
+	}
 	if rec := setAccount(adminToken, tech.ID, "  Tech.One@Example.com "); rec.Code != http.StatusOK || !strings.Contains(rec.Body.String(), `"tech.one@example.com"`) {
 		t.Fatalf("setting the technician's account: %d %s", rec.Code, rec.Body)
 	}
@@ -257,10 +268,19 @@ func TestMeshCentralSignsEachUserInAsTheirOwnAccount(t *testing.T) {
 	}
 
 	// The audit trail names who set which account, and which one each session used.
+	// The technician's account was set three times above: the two provider
+	// accounts (case kept) and then the lower-cased local one.
 	entries, _, err := st.ListAudit(ctx, store.AuditFilter{Action: "user.meshcentral_account", Target: tech.ID, Limit: 10})
 	must(err)
-	if len(entries) != 1 || entries[0].Actor != admin.ID || meshAuditDetail(t, entries[0].Detail)["meshcentral_user"] != "tech.one@example.com" {
-		t.Fatalf("setting a MeshCentral account is not audited: %+v", entries)
+	audited := map[string]bool{}
+	for _, e := range entries {
+		if e.Actor != admin.ID {
+			t.Fatalf("a MeshCentral account change is audited to the wrong actor: %+v", e)
+		}
+		audited[meshAuditDetail(t, e.Detail)["meshcentral_user"]] = true
+	}
+	if len(entries) != 3 || !audited["~oidc:00uAbC123"] || !audited["~saml:Jane.Doe@Example.com"] || !audited["tech.one@example.com"] {
+		t.Fatalf("setting a MeshCentral account is not audited as set: %+v", entries)
 	}
 	entries, _, err = st.ListAudit(ctx, store.AuditFilter{Action: "remote.start", Target: unlinked.ID, Limit: 10})
 	must(err)

@@ -66,11 +66,20 @@ choose a configured fallback provider.
 
 ### `meshcentral`
 - Builds a connect URL into a configured MeshCentral server for the agent's node.
-- **Seamless login-token embed**: when a token key is
+- **Seamless login-token sign-in**: when a token key is
   configured, the server mints a MeshCentral login token (AES-256-GCM,
-  `internal/remote/meshtoken.go`) so the iframe opens without a second login.
-  Without the key it falls back to a deep link that works once you're logged into
-  MeshCentral.
+  `internal/remote/meshtoken.go`) so the MeshCentral tab the console opens is
+  already signed in. Without the key it falls back to a deep link that works once
+  you're logged into MeshCentral.
+  - The token is the one MeshCentral's own `--logintoken` mints (`{u, a: 3}`),
+    for the account named as MeshCentral stores it (see below). It works **once**
+    (MeshCentral refuses a second use of the same link) and for **5 minutes**;
+    after the first use the tab stays signed in through MeshCentral's own
+    session. MeshCentral rejects a token dated more than 30 seconds in its
+    future, so keep the OpenRMM and MeshCentral clocks in sync (NTP).
+  - Before this fix, OpenRMM sent `{userid, domainid}`, a payload MeshCentral
+    decrypted but matched to no user, so the tab stayed on MeshCentral's sign-in
+    page.
 - **Whose MeshCentral account a login token signs in as.** The token is a full
   MeshCentral sign-in, with no password asked and no tie to one device: the
   session can go wherever that account may go in MeshCentral. OpenRMM's client
@@ -81,10 +90,12 @@ choose a configured fallback provider.
     shown while MeshCentral and a login token key are set). That user's
     sessions then sign in as it, with whatever MeshCentral lets that account
     do: give each restricted technician an account limited to their clients'
-    device groups, in MeshCentral. Account names are lowercase, as MeshCentral
-    keeps them; letters, digits and `. _ @ ~ : + -`, which covers e-mail-style
-    names and `~oidc:…`/`~ldap:…` accounts. Only those who may already name
-    the shared account set it: a restricted administrator, or a user manager
+    device groups, in MeshCentral. Account names follow MeshCentral: the
+    accounts it makes itself are lowercase, so OpenRMM lower-cases the name,
+    but an account that signs in through a provider (`~oidc:…`, `~saml:…`,
+    `~google:…` and the like) keeps the provider's id as it came, so a name
+    that starts with `~` keeps its case. Letters, digits and `. _ @ ~ : + -`.
+    Only those who may already name the shared account set it: a restricted administrator, or a user manager
     without `settings.manage`, cannot, since naming an account hands over what
     it can do. The change is audited as `user.meshcentral_account`.
   - **The shared account** (`RMM_MESHCENTRAL_USER`, "Shared MeshCentral
@@ -145,8 +156,12 @@ choose a configured fallback provider.
    ```
    RMM_MESHCENTRAL_URL=https://your-mesh-server
    RMM_MESHCENTRAL_TOKEN_KEY=<loginTokenKey hex>   # omit for deep-link mode
-   RMM_MESHCENTRAL_USER=admin                       # the shared account: user//admin
+   RMM_MESHCENTRAL_USER=openrmm-tech                # the shared account: user//openrmm-tech
    ```
+   Make the shared account a MeshCentral user created for this, with only the
+   device groups technicians need: every user with access to every device opens
+   MeshCentral signed in as it. Do not use MeshCentral's own administrator,
+   which would also hand them MeshCentral's server settings and users.
    Then give each restricted technician their own MeshCentral account in Users
    (above).
 3. Install the MeshCentral agent on the endpoint and find its **node id**.

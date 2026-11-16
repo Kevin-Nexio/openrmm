@@ -389,8 +389,10 @@ func (p *meshProvider) StartSession(ctx context.Context, agent *models.Agent, cr
 // which only a caller with access to every device may use. kind is
 // "personal" or "shared".
 func meshAccount(opts StartOptions, sharedUser string, sharedOn bool) (account, kind string, err error) {
-	own := strings.TrimSpace(opts.MeshUser)
-	shared := strings.TrimSpace(sharedUser)
+	// Named as MeshCentral holds them, so the session, its audit row and the
+	// token all carry the account that really signs in.
+	own := MeshAccountName(opts.MeshUser)
+	shared := MeshAccountName(sharedUser)
 	switch {
 	case own != "" && !opts.Unrestricted && strings.EqualFold(own, shared):
 		// Set to the shared account's name, a restricted caller's own account

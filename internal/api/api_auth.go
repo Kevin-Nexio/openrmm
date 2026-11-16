@@ -17,6 +17,7 @@ import (
 
 	"github.com/p1ngu/rmm/internal/auth"
 	"github.com/p1ngu/rmm/internal/models"
+	"github.com/p1ngu/rmm/internal/remote"
 	"github.com/p1ngu/rmm/internal/settings"
 	"github.com/p1ngu/rmm/internal/store"
 )
@@ -790,9 +791,10 @@ func (s *Server) setUserSSO(w http.ResponseWriter, r *http.Request) {
 }
 
 // meshCentralUserPattern is a MeshCentral account name as its user ids hold
-// it (user//<name>, lowercase): ordinary names, e-mail-style names, and the
-// "~oidc:…"/"~ldap:…" forms of accounts that sign in through a provider.
-var meshCentralUserPattern = regexp.MustCompile(`^[a-z0-9_~][a-z0-9._@~:+-]{0,127}$`)
+// it (user//<name>), after remote.MeshAccountName: ordinary names and
+// e-mail-style names in lower case, and the "~oidc:…"/"~saml:…"-style ids of
+// accounts that sign in through a provider, which keep their case.
+var meshCentralUserPattern = regexp.MustCompile(`^[A-Za-z0-9_~][A-Za-z0-9._@~:+-]{0,127}$`)
 
 // setUserMeshCentral sets the MeshCentral account a user's remote sessions sign
 // in as when the server mints login tokens. The token is a full MeshCentral
@@ -815,7 +817,7 @@ func (s *Server) setUserMeshCentral(w http.ResponseWriter, r *http.Request) {
 		writeErr(w, http.StatusBadRequest, `user is needed: the MeshCentral account name, or "" for none`)
 		return
 	}
-	name := strings.ToLower(strings.TrimSpace(*in.User))
+	name := remote.MeshAccountName(*in.User)
 	if name != "" && !meshCentralUserPattern.MatchString(name) {
 		writeErr(w, http.StatusBadRequest, "a MeshCentral account name holds letters, digits and . _ @ ~ : + - only, up to 128 characters")
 		return

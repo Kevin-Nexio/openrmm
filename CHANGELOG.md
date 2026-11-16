@@ -6,6 +6,20 @@ tag.
 
 ## [Unreleased]
 
+### Fixed
+
+- **MeshCentral opens signed in.** The login token OpenRMM mints for MeshCentral
+  carried `{userid, domainid}`, which MeshCentral decrypted but matched to no
+  user, so the MeshCentral tab stayed on its sign-in page. It now carries what
+  MeshCentral's own `--logintoken` mints (`{u, a: 3}`), and it works once and for
+  5 minutes. Account names follow MeshCentral: lower case, except an account
+  that signs in through a provider (`~oidc:…`, `~saml:…` and the like), which
+  keeps its case. Reported and fixed by sdm216 (#270). **Check your shared account:** with a login token
+  key set and the shared account on (the default), users with access to every
+  device now really open MeshCentral signed in as it. Make it a MeshCentral user
+  with only the device groups technicians need, not MeshCentral's administrator,
+  or turn the shared account off and give each user an account of their own.
+
 ## [0.11.2] - 2026-11-15
 
 ### Fixed
