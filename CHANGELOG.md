@@ -6,6 +6,19 @@ tag.
 
 ## [Unreleased]
 
+### Changed
+
+- **Each release page carries its own `docker-compose.images.yml`.** A
+  release's tag, and the "Source code" archives GitHub makes from it, are cut
+  before that release's images are built, so their compose file pins the
+  previous release. The release workflow now checks that the server, console
+  and artifacts images were built from the tag by this repository's workflows,
+  attaches the compose file pinned to them to the release, and pushes the
+  branch that moves the pins on `main`. The release notes and
+  `deploy/QUICKSTART.md` say which file to use.
+- The artifacts image now has a build-provenance attestation, like the server
+  and console images, so `gh attestation verify` can check all three.
+
 ## [0.11.3] - 2026-11-16
 
 ### Fixed

@@ -24,6 +24,12 @@ cd openrmm/deploy
 `docker-compose.images.yml` pins the release images. The `deploy/` files of
 the same checkout are the ones that go with them.
 
+Clone `main`, as above. A release's tag, and the "Source code" archives on its
+release page, are made before that release's images are built, so their
+`docker-compose.images.yml` still pins the previous release. To install one
+release exactly, check out its tag and replace `docker-compose.images.yml` with
+the one attached to its release page.
+
 ## 2. Configure
 
 ```bash
@@ -108,8 +114,9 @@ there, and they check every file against the release key.
    docker compose up -d
    ```
 
-Each release moves the pinned images in `docker-compose.images.yml`, and the
-server migrates the database when it starts.
+Shortly after each release, `main` moves the pinned images in
+`docker-compose.images.yml` to it, and the server migrates the database when it
+starts.
 
 ## Using your own TLS edge
 

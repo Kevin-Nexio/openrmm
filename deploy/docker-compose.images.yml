@@ -6,9 +6,11 @@
 # or list the files in COMPOSE_FILE in deploy/.env (deploy/QUICKSTART.md).
 #
 # - The images are the release's, from ghcr.io/openrmm-project, pinned to a
-#   version and its digest. The release PR moves the three pins together;
-#   override them with OPENRMM_*_IMAGE to run another release, and keep this
-#   checkout's deploy/ files at the same release.
+#   version and its digest. After each release, a pull request moves the three
+#   pins on main together, and the release page carries this file with them; a
+#   release's tag still pins the previous release, because its images are
+#   built from it. Override them with OPENRMM_*_IMAGE to run another release,
+#   and keep this checkout's deploy/ files at the same release.
 # - They are built for x86-64 (linux/amd64).
 # - The agent binaries come from the openrmm-artifacts image, signed with the
 #   project's release key, so RMM_UPDATE_PUBLIC_KEY in deploy/.env must be that

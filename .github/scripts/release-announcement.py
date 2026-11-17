@@ -1,7 +1,8 @@
 #!/usr/bin/env python3
 """A release's notes and its Discord announcement, both from CHANGELOG.md.
 
-    release-announcement.py notes   <version>   the CHANGELOG section, for the GitHub release body
+    release-announcement.py notes   <version>   the GitHub release body: the CHANGELOG section,
+                                                and for a stable release the self-hosted note
     release-announcement.py discord <version>   the Discord payload as JSON (no network)
     release-announcement.py post    <version>   post it to $DISCORD_ANNOUNCEMENTS_WEBHOOK
 
@@ -42,6 +43,25 @@ def section(version, changelog):
     if is_prerelease(version):
         return f'Pre-release {version}. See CHANGELOG.md for the changes so far.'
     raise SystemExit(f'CHANGELOG.md has no section for {version}: add it before tagging')
+
+
+# Which compose file to use: the tag, and the "Source code" archives GitHub
+# makes from it, are cut before the release's images exist, so they pin the
+# previous release. The release workflow's compose-pins job attaches the file
+# pinned to this release's images, and prepares the pins for main.
+SELF_HOSTED = '''### Self-hosted with Docker Compose
+
+Install and upgrade from `main` (deploy/QUICKSTART.md), or use the
+`docker-compose.images.yml` attached to this release. The "Source code"
+archives on this page are the tag, which is created before the images are
+built, so their compose file still pins the previous release.'''
+
+
+def notes(version, changelog):
+    body = section(version, changelog)
+    if is_prerelease(version):
+        return body  # main never pins a pre-release
+    return f'{body}\n\n{SELF_HOSTED}'
 
 
 def for_discord(markdown):
@@ -181,7 +201,7 @@ def main(argv):
         return 2
     mode, version = argv
     if mode == 'notes':
-        print(section(version, changelog))
+        print(notes(version, changelog))
         return 0
     if mode == 'discord':
         print(json.dumps(payload(version, changelog), indent=2, ensure_ascii=False))
