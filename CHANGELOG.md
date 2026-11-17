@@ -6,6 +6,18 @@ tag.
 
 ## [Unreleased]
 
+## [0.11.4] - 2026-11-17
+
+### Fixed
+
+- **Alerts ▸ Silences & maintenance lists again for administrators.** For any
+  principal without a scope restriction, such as an administrator or the admin
+  token, `GET /api/alert-suppressions` answered 500 (`invalid input syntax for
+  type uuid: ""`), so the dialog showed no silences or maintenance windows. The
+  list sent the empty scope user where PostgreSQL expects a uuid. Creating and
+  enforcing suppressions was not affected, and restricted users never saw the
+  error. Affected since 0.6.0.
+
 ### Changed
 
 - **The console's stylesheet is built with Tailwind CSS 4** (4.3.5, through
@@ -33,16 +45,20 @@ tag.
 
   Both were build-time only and never reached the browser. It now reports none
   (#195).
+- **Release workflow actions updated:** `softprops/action-gh-release` 3.0.4 and
+  `docker/login-action` 4.8.0. Both releases are dependency updates. They were
+  reviewed before the pins moved: the tags match the pinned commits, and the
+  bundles reach no new hosts and read no new variables. They run only in CI.
+- **The documentation site's Astro is 7.4.7** (GHSA-r3h5-4585-7x3w,
+  GHSA-mh32-jxcr-mh9f). The site is static and is not part of the release.
 
-### Fixed
+### Upgrade notes
 
-- **Alerts ▸ Silences & maintenance lists again for administrators.** For any
-  principal without a scope restriction, such as an administrator or the admin
-  token, `GET /api/alert-suppressions` answered 500 (`invalid input syntax for
-  type uuid: ""`), so the dialog showed no silences or maintenance windows. The
-  list sent the empty scope user where PostgreSQL expects a uuid. Creating and
-  enforcing suppressions was not affected, and restricted users never saw the
-  error. Affected since 0.6.0.
+- **Check the browsers your team uses.** The console now needs Safari 16.4+,
+  Chrome or Edge 111+, or Firefox 128+. On anything older the console's styles
+  do not apply.
+- Only the server and the console change. Agents report 0.11.4, but their code is
+  the same as 0.11.3. There are no database migrations.
 
 ## [0.11.3] - 2026-11-16
 
