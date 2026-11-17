@@ -77,3 +77,38 @@ test('the console rules sit in the utilities layer, after the utilities', () => 
   assert.match(layered, /textarea, input \{ font-family: inherit; \}/);
   assert.match(layered, /:root \{/);
 });
+
+// Tailwind 4 kept some Tailwind 3 names with another meaning (shadow-sm is now
+// the old bare shadow, rounded-sm the old bare rounded...), and the upgrade
+// renamed every use. A class copied from a Tailwind 3 snippet would silently
+// render differently, so the names that changed meaning or vanished stay out.
+test('no Tailwind 3 utility name whose meaning changed comes back', () => {
+  const renamed = { rounded: 'rounded-sm', shadow: 'shadow-sm', 'outline-none': 'outline-hidden', 'backdrop-blur': 'backdrop-blur-sm' };
+  const found = [];
+  for (const source of [...sources, html]) {
+    for (const m of source.matchAll(/["'`]([^"'`\n]*)["'`]/g)) {
+      const tokens = m[1].split(/\s+/).filter(Boolean);
+      if (tokens.length < 2) continue; // a class list, not a word such as an event name
+      for (const token of tokens) {
+        const name = token.split(':').at(-1).replace(/^!/, '');
+        if (Object.hasOwn(renamed, name)) found.push(`${token} (use ${renamed[name]})`);
+      }
+    }
+  }
+  assert.deepEqual(found, []);
+});
+
+// The build and the image compile the stylesheet the way these tests do.
+test('the build and the image use the Tailwind 4 pipeline', async () => {
+  const build = await readFile(path.join(root, 'scripts/build.mjs'), 'utf8');
+  const dockerfile = await readFile(path.join(root, '..', 'Dockerfile'), 'utf8');
+  const pkg = JSON.parse(await readFile(path.join(root, 'package.json'), 'utf8'));
+  assert.match(build, /from '@tailwindcss\/postcss'/);
+  assert.match(build, /tailwindcss\(\{[^}]*optimize: true/, 'Lightning CSS has to flatten nesting and prefix for the browser floor');
+  assert.doesNotMatch(build, /from 'autoprefixer'|tailwind\.config\.cjs/, 'no Tailwind 3 config or autoprefixer in the build');
+  assert.doesNotMatch(dockerfile, /tailwind\.config/);
+  assert.match(pkg.devDependencies.tailwindcss, /^4\.\d+\.\d+$/, 'tailwindcss is pinned to an exact 4.x');
+  assert.equal(pkg.devDependencies['@tailwindcss/postcss'], pkg.devDependencies.tailwindcss, 'the PostCSS plugin matches the engine');
+  assert.equal(pkg.devDependencies.autoprefixer, undefined);
+  assert.equal(pkg.dependencies.tailwindcss, undefined, 'Tailwind is build-time only');
+});
