@@ -91,7 +91,7 @@ function ToastProvider({ children }) {
           const c = note.kind === 'success' ? 'ok' : note.kind === 'error' ? 'bad' : 'run';
           const icon = note.kind === 'success' ? 'approve' : note.kind === 'error' ? 'alert' : 'info';
           return (
-            <div key={note.id} className="animate-slide-in flex gap-3 items-start rounded-xl border border-line bg-elevated/95 backdrop-blur px-3.5 py-3 shadow-2xl shadow-black/40">
+            <div key={note.id} className="animate-slide-in flex gap-3 items-start rounded-xl border border-line bg-elevated/95 backdrop-blur-sm px-3.5 py-3 shadow-2xl shadow-black/40">
               <span className={`mt-0.5 text-${c}`}><Icon name={icon} size={17} /></span>
               <div className="min-w-0 flex-1">
                 <div className="text-[13px] font-semibold text-ink">{note.title}</div>
@@ -107,15 +107,15 @@ function ToastProvider({ children }) {
 
 /* -------------------------------- buttons --------------------------------- */
 function Button({ variant = 'secondary', size = 'md', icon, iconRight, children, className = '', loading, ...rest }) {
-  const base = 'inline-flex items-center justify-center gap-2 font-medium rounded-lg transition-all duration-150 select-none disabled:opacity-45 disabled:pointer-events-none whitespace-nowrap focus:outline-none focus-visible:ring-2 focus-visible:ring-brand/60';
+  const base = 'inline-flex items-center justify-center gap-2 font-medium rounded-lg transition-all duration-150 select-none disabled:opacity-45 disabled:pointer-events-none whitespace-nowrap focus:outline-hidden focus-visible:ring-2 focus-visible:ring-brand/60';
   const sizes = { sm: 'h-7 px-2.5 text-[12.5px]', md: 'h-9 px-3.5 text-[13px]', lg: 'h-11 px-5 text-[14px]', icon: 'h-9 w-9' };
   const variants = {
-    primary: 'bg-brand text-white hover:bg-brandhi shadow-sm shadow-brand/30',
+    primary: 'bg-brand text-white hover:bg-brandhi shadow-xs shadow-brand/30',
     secondary: 'bg-elevated text-ink border border-line2 hover:border-faint hover:bg-card',
     ghost: 'text-muted hover:text-ink hover:bg-elevated',
     subtle: 'bg-elevated/60 text-muted hover:text-ink hover:bg-elevated border border-line',
     danger: 'bg-bad/15 text-bad border border-bad/30 hover:bg-bad/25',
-    success: 'bg-ok text-[#04130c] hover:brightness-110 shadow-sm shadow-ok/30 font-semibold',
+    success: 'bg-ok text-[#04130c] hover:brightness-110 shadow-xs shadow-ok/30 font-semibold',
   };
   return (
     <button className={cx(base, sizes[size], variants[variant], className)} {...rest}>
@@ -222,9 +222,9 @@ function Field({ label, hint, children, className = '' }) {
     </label>
   );
 }
-const inputCls = 'w-full h-9 rounded-lg bg-app border border-line2 px-3 text-[13px] text-ink placeholder:text-faint focus:outline-none focus:border-brand focus:ring-2 focus:ring-brand/25 transition';
+const inputCls = 'w-full h-9 rounded-lg bg-app border border-line2 px-3 text-[13px] text-ink placeholder:text-faint focus:outline-hidden focus:border-brand focus:ring-2 focus:ring-brand/25 transition';
 function Input(props) { return <input {...props} className={cx(inputCls, props.className)} />; }
-function Textarea(props) { return <textarea {...props} className={cx('w-full rounded-lg bg-app border border-line2 px-3 py-2 text-[13px] text-ink placeholder:text-faint focus:outline-none focus:border-brand focus:ring-2 focus:ring-brand/25 transition resize-none', props.className)} />; }
+function Textarea(props) { return <textarea {...props} className={cx('w-full rounded-lg bg-app border border-line2 px-3 py-2 text-[13px] text-ink placeholder:text-faint focus:outline-hidden focus:border-brand focus:ring-2 focus:ring-brand/25 transition resize-none', props.className)} />; }
 function Select({ children, ...props }) {
   return (
     <div className="relative">
@@ -337,7 +337,7 @@ function Toggle({ checked, onChange, disabled }) {
   return (
     <button type="button" disabled={disabled} onClick={() => onChange(!checked)}
       className={cx('relative h-[22px] w-[38px] rounded-full transition-colors shrink-0 disabled:opacity-40', checked ? 'bg-brand' : 'bg-line2')}>
-      <span className={cx('absolute top-[3px] h-4 w-4 rounded-full bg-white transition-all shadow', checked ? 'left-[19px]' : 'left-[3px]')} />
+      <span className={cx('absolute top-[3px] h-4 w-4 rounded-full bg-white transition-all shadow-sm', checked ? 'left-[19px]' : 'left-[3px]')} />
     </button>
   );
 }
@@ -353,7 +353,7 @@ function RoleBadge({ role }) {
   const builtin = role === 'admin' || role === 'tech' || role === 'readonly';
   return <span className={cx('inline-flex items-center rounded-md border px-1.5 py-0.5 text-[10.5px] font-semibold uppercase tracking-wide', map[role] || map.readonly)}>{builtin ? t('role.' + role) : role}</span>;
 }
-function Kbd({ children }) { return <kbd className="inline-flex items-center h-5 px-1.5 rounded border border-line2 bg-elevated text-[10.5px] text-muted font-sans">{children}</kbd>; }
+function Kbd({ children }) { return <kbd className="inline-flex items-center h-5 px-1.5 rounded-sm border border-line2 bg-elevated text-[10.5px] text-muted font-sans">{children}</kbd>; }
 
 function Skeleton({ className = '' }) { return <div className={cx('relative overflow-hidden rounded-md bg-elevated', className)}><div className="absolute inset-0 -translate-x-full animate-[shimmer_1.4s_infinite] bg-gradient-to-r from-transparent via-white/[0.04] to-transparent" /></div>; }
 
@@ -537,7 +537,7 @@ function CodeEditor({ value, onChange, shell = 'bash', minHeight = 200, placehol
           {lines.map((ln, i) => <div key={i}>{tokenizeLine(ln, shell).length ? tokenizeLine(ln, shell) : '\u00a0'}</div>)}
         </pre>
         <textarea ref={taRef} value={value} onChange={(e) => onChange(e.target.value)} onScroll={sync} spellCheck={false} placeholder={placeholder}
-          className={cx('absolute inset-0 w-full h-full m-0 p-3 bg-transparent text-transparent caret-white resize-none outline-none whitespace-pre overflow-auto scroll-area placeholder:text-faint', `min-h-code-${minHeight}`)} />
+          className={cx('absolute inset-0 w-full h-full m-0 p-3 bg-transparent text-transparent caret-white resize-none outline-hidden whitespace-pre overflow-auto scroll-area placeholder:text-faint', `min-h-code-${minHeight}`)} />
       </div>
     </div>
   );

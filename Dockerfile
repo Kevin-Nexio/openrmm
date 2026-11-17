@@ -23,7 +23,7 @@ ARG OPENRMM_BASE_PATH=/
 WORKDIR /src/openrmm
 COPY openrmm/package.json openrmm/package-lock.json ./
 RUN npm ci
-COPY openrmm/index.html openrmm/config.js openrmm/tailwind.config.cjs ./
+COPY openrmm/index.html openrmm/config.js ./
 COPY openrmm/scripts ./scripts
 COPY openrmm/src ./src
 COPY openrmm/assets ./assets

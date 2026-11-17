@@ -89,7 +89,7 @@ function ColumnPicker({ columns, hidden, onToggle, labelOf = colLabel }) {
             return (
               <button key={c.key} onClick={() => onToggle(c.key)}
                 className="flex w-full items-center gap-2.5 px-2 py-1.5 rounded-lg hover:bg-elevated text-[13px] text-ink transition-colors">
-                <span className={cx('h-4 w-4 rounded border flex items-center justify-center shrink-0', vis ? 'bg-brand border-brand text-white' : 'border-line2')}>
+                <span className={cx('h-4 w-4 rounded-sm border flex items-center justify-center shrink-0', vis ? 'bg-brand border-brand text-white' : 'border-line2')}>
                   {vis && <Icon name="approve" size={12} />}
                 </span>
                 <span className="flex-1 text-left">{labelOf(c)}</span>
@@ -236,7 +236,7 @@ function ReportsScreen() {
         ) : (
           <div className="overflow-auto scroll-area max-h-[calc(100vh-280px)]">
             <table className="w-full text-[12.5px] border-collapse">
-              <thead className="sticky top-0 z-10 bg-elevated/95 backdrop-blur">
+              <thead className="sticky top-0 z-10 bg-elevated/95 backdrop-blur-sm">
                 <tr className="text-left text-faint">
                   {visibleCols.map((c) => <th key={c.key} className="font-medium px-4 py-2.5 whitespace-nowrap border-b border-line">{colLabel(c)}</th>)}
                 </tr>

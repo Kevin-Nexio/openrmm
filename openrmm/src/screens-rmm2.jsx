@@ -564,7 +564,7 @@ function PoliciesScreen() {
 
 // PolicyOffBadge marks a policy that is switched off and applies nothing.
 function PolicyOffBadge() {
-  return <span className="inline-flex items-center rounded px-1.5 py-0.5 text-[10.5px] font-semibold uppercase tracking-wide border border-line2 text-faint">{t('pol.inactive')}</span>;
+  return <span className="inline-flex items-center rounded-sm px-1.5 py-0.5 text-[10.5px] font-semibold uppercase tracking-wide border border-line2 text-faint">{t('pol.inactive')}</span>;
 }
 
 // PolicyActivation is the one confirmation that switches a policy on: where it
@@ -1071,7 +1071,7 @@ function EnrollCommands({ token, site }) {
         <div className="inline-flex rounded-lg border border-line bg-elevated p-0.5">
           {OSES.map((o) => (
             <button key={o.v} onClick={() => setOs(o.v)}
-              className={cx('px-3 h-7 rounded-md text-[12px] font-medium transition-colors', os === o.v ? 'bg-card text-ink shadow-sm' : 'text-faint hover:text-muted')}>{o.l}</button>
+              className={cx('px-3 h-7 rounded-md text-[12px] font-medium transition-colors', os === o.v ? 'bg-card text-ink shadow-xs' : 'text-faint hover:text-muted')}>{o.l}</button>
           ))}
         </div>
         <CopyButton value={cmd} label={t('enroll.copyCommand')} size="sm" variant="ghost" />
@@ -1091,7 +1091,7 @@ function EnrollCommands({ token, site }) {
           <div className="inline-flex rounded-lg border border-line bg-elevated p-0.5">
             {[{ v: 'signed', l: t('enroll.signed') }, { v: 'adhoc', l: t('enroll.adhoc') }].map((o) => (
               <button key={o.v} onClick={() => setMacBundle(o.v)}
-                className={cx('px-3 h-7 rounded-md text-[12px] font-medium transition-colors', macBundle === o.v ? 'bg-card text-ink shadow-sm' : 'text-faint hover:text-muted')}>{o.l}</button>
+                className={cx('px-3 h-7 rounded-md text-[12px] font-medium transition-colors', macBundle === o.v ? 'bg-card text-ink shadow-xs' : 'text-faint hover:text-muted')}>{o.l}</button>
             ))}
           </div>
           <div className="text-[11.5px] text-faint mt-1.5">
@@ -1676,7 +1676,7 @@ function OAuthAppsPanel() {
                       {hosts.map((h) => (
                         <div key={h} className="flex items-center gap-1.5 text-[12px] mono text-muted">
                           {h}
-                          {!isKnown(h) && <span className="text-[10.5px] px-1.5 py-0.5 rounded bg-warnsoft text-warn font-sans" title={t('oauthApps.unknownHostHint')}>{t('oauthApps.unknownHost')}</span>}
+                          {!isKnown(h) && <span className="text-[10.5px] px-1.5 py-0.5 rounded-sm bg-warnsoft text-warn font-sans" title={t('oauthApps.unknownHostHint')}>{t('oauthApps.unknownHost')}</span>}
                         </div>
                       ))}
                     </td>
@@ -2197,14 +2197,14 @@ function UsersPanel({ canAdmin }) {
               <td className="px-4 py-3"><div className="flex items-center gap-2.5">
                 <Avatar name={u.username} size={28} />
                 <span className={cx('text-[13px] font-medium', u.disabled_at ? 'text-faint line-through' : 'text-ink')}>{u.username}</span>
-                {u.disabled_at && <span className="text-[10.5px] px-1.5 py-0.5 rounded bg-elevated text-faint" title={t('users.disabledAt', { when: fmtTime(u.disabled_at) })}>{t('users.disabledBadge')}</span>}
-                {meshTokens && u.meshcentral_user && <span className="text-[10.5px] mono px-1.5 py-0.5 rounded bg-elevated text-muted" title={t('users.meshAccount')}>{u.meshcentral_user}</span>}
+                {u.disabled_at && <span className="text-[10.5px] px-1.5 py-0.5 rounded-sm bg-elevated text-faint" title={t('users.disabledAt', { when: fmtTime(u.disabled_at) })}>{t('users.disabledBadge')}</span>}
+                {meshTokens && u.meshcentral_user && <span className="text-[10.5px] mono px-1.5 py-0.5 rounded-sm bg-elevated text-muted" title={t('users.meshAccount')}>{u.meshcentral_user}</span>}
               </div></td>
               <td className="px-3 py-3 text-[12px] mono">
                 {u.email ? <span className="text-muted">{u.email}</span> : <span className="text-faint">{t('users.noAlerts')}</span>}
                 {u.email && (u.email_verified_at
-                  ? <span className="ml-1.5 font-sans text-[10.5px] px-1.5 py-0.5 rounded bg-oksoft text-ok" title={t('users.confirmedAt', { when: fmtTime(u.email_verified_at) })}>{t('users.confirmed')}</span>
-                  : <span className="ml-1.5 font-sans text-[10.5px] px-1.5 py-0.5 rounded bg-warnsoft text-warn" title={t('users.unconfirmedHint')}>{t('users.unconfirmed')}</span>)}
+                  ? <span className="ml-1.5 font-sans text-[10.5px] px-1.5 py-0.5 rounded-sm bg-oksoft text-ok" title={t('users.confirmedAt', { when: fmtTime(u.email_verified_at) })}>{t('users.confirmed')}</span>
+                  : <span className="ml-1.5 font-sans text-[10.5px] px-1.5 py-0.5 rounded-sm bg-warnsoft text-warn" title={t('users.unconfirmedHint')}>{t('users.unconfirmed')}</span>)}
               </td>
               <td className="px-3 py-3">
                 {canAdmin && u.username !== 'admin'
@@ -2350,7 +2350,7 @@ function RolesPanel() {
         {roles.map((r) => (
           <div key={r.key} className="px-4 py-3 flex items-center gap-3 hover:bg-elevated/30 transition">
             <div className="min-w-0 flex-1">
-              <div className="flex items-center gap-2"><RoleBadge role={r.key} /><span className="text-[13px] font-semibold text-ink truncate">{r.name}</span>{r.system && <span className="text-[10.5px] uppercase text-faint border border-line2 rounded px-1.5 py-0.5">{t('roles.system')}</span>}</div>
+              <div className="flex items-center gap-2"><RoleBadge role={r.key} /><span className="text-[13px] font-semibold text-ink truncate">{r.name}</span>{r.system && <span className="text-[10.5px] uppercase text-faint border border-line2 rounded-sm px-1.5 py-0.5">{t('roles.system')}</span>}</div>
               <div className="text-[12px] text-muted mt-1 truncate">{r.description || t('pol.noDescription')}</div>
             </div>
             <div className="text-[11.5px] text-faint tabular hidden sm:block">{t('roles.permCount', { n: (r.permissions || []).length })}</div>
@@ -2528,7 +2528,7 @@ function ScopePicker({ scopes, setScopes, mode, setMode }) {
   const deviceCovered = (siteCovered, d) => siteCovered || (d.group_id && sel.has('group:' + d.group_id));
 
   const Row = ({ depth, icon, name, checked, disabled, onCheck, expandable, expanded, onExpand, hint }) => (
-    <div className={cx('flex items-center gap-1.5 py-1 hover:bg-elevated rounded', `tree-depth-${depth}`)}>
+    <div className={cx('flex items-center gap-1.5 py-1 hover:bg-elevated rounded-sm', `tree-depth-${depth}`)}>
       {expandable
         ? <button onClick={onExpand} className="text-faint hover:text-ink w-4"><Icon name={expanded ? 'chevdown' : 'chevright'} size={14} /></button>
         : <span className="w-4" />}
@@ -2664,7 +2664,7 @@ function RemoteProviderSettings({ form, onChange, remote, canManage }) {
     <Card className="p-4 md:col-span-2">
       <div className="flex items-center gap-2 mb-4"><div className="h-8 w-8 rounded-lg bg-elevated border border-line flex items-center justify-center text-muted"><Icon name="remote" size={15} /></div><div className="text-[13px] font-semibold text-ink">{t('cfg.remote')}</div></div>
       <div role="tablist" aria-label={t('cfg.remote')} className="grid grid-cols-2 sm:grid-cols-4 gap-1 rounded-xl border border-line bg-elevated/50 p-1 mb-4">
-        {tabs.map((item) => <button key={item.key} type="button" role="tab" id={'remote-config-tab-' + item.key} aria-controls={'remote-config-panel-' + item.key} aria-selected={tab === item.key} tabIndex={tab === item.key ? 0 : -1} onClick={() => setTab(item.key)} onKeyDown={navigate} className={cx('rounded-lg px-3 py-2 text-[12.5px] font-medium transition-colors focus-visible:outline focus-visible:outline-2 focus-visible:outline-brand', tab === item.key ? 'bg-card text-brandhi shadow-sm' : 'text-muted hover:text-ink hover:bg-card/50')}>{item.label}</button>)}
+        {tabs.map((item) => <button key={item.key} type="button" role="tab" id={'remote-config-tab-' + item.key} aria-controls={'remote-config-panel-' + item.key} aria-selected={tab === item.key} tabIndex={tab === item.key ? 0 : -1} onClick={() => setTab(item.key)} onKeyDown={navigate} className={cx('rounded-lg px-3 py-2 text-[12.5px] font-medium transition-colors focus-visible:outline focus-visible:outline-2 focus-visible:outline-brand', tab === item.key ? 'bg-card text-brandhi shadow-xs' : 'text-muted hover:text-ink hover:bg-card/50')}>{item.label}</button>)}
       </div>
       {tabs.map((item) => <div key={item.key} role="tabpanel" id={'remote-config-panel-' + item.key} aria-labelledby={'remote-config-tab-' + item.key} hidden={tab !== item.key} tabIndex={0} className="space-y-3">
         {item.key === 'native' && <>

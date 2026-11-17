@@ -411,7 +411,7 @@ function Topbar({ route, navigate, onToggleTheme, theme, onOpenNav }) {
     reports: t('title.reports'), patches: t('title.patches'),
   };
   return (
-    <header className="h-14 shrink-0 border-b border-line bg-panel/70 backdrop-blur flex items-center gap-3 px-3 sm:px-5">
+    <header className="h-14 shrink-0 border-b border-line bg-panel/70 backdrop-blur-sm flex items-center gap-3 px-3 sm:px-5">
       <button aria-label={t('app.openNav')} onClick={onOpenNav} className="h-9 w-9 shrink-0 items-center justify-center rounded-lg border border-line2 text-muted hover:text-ink md:hidden flex"><Icon name="menu" size={18} /></button>
       <div className="text-[14.5px] font-semibold text-ink tracking-tight whitespace-nowrap">{titles[route.name] || ''}</div>
       <div className="flex-1" />
