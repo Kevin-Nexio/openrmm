@@ -25,7 +25,10 @@ npm test
 npm run build
 ```
 
-O build usa esbuild + PostCSS/Tailwind e recria `dist/`. A imagem Docker executa o
+O build usa esbuild + PostCSS com Tailwind CSS 4 (`@tailwindcss/postcss`) e recria
+`dist/`. O tema, as fontes, as animações e as regras de compatibilidade com o
+Tailwind 3 ficam em `src/styles.css`; não há `tailwind.config.cjs`. O CSS gerado
+exige Safari 16.4+, Chrome/Edge 111+ ou Firefox 128+. A imagem Docker executa o
 mesmo fluxo e copia apenas `dist/` para nginx. `npm run smoke` recompila e executa
 o smoke test headless quando Chrome/Chromium está disponível.
 

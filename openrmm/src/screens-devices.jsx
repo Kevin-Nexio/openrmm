@@ -204,7 +204,7 @@ function DevicesScreen({ navigate }) {
                   </div>
                 </td>
                 {shows('description') && <td className="px-3 py-3 text-[12.5px] truncate max-w-[220px]">{d.description ? <span className="text-ink">{d.description}</span> : <span className="text-faint">—</span>}</td>}
-                {shows('os') && <td className="px-3 py-3"><div className="flex items-center gap-2 text-[12.5px] text-muted"><OsIcon os={d.os} size={15} /><span className="truncate max-w-[170px]" title={d.os}>{window.osLabel(d.os)}</span><span className="text-faint text-[11px] mono">{d.arch}</span>{d.role && <span className="text-faint text-[11px]">{t('target.role.' + d.role)}</span>}{presence[d.id]?.length ? <Tip label={presenceSummary(presence[d.id])}><span className="inline-flex items-center gap-1 text-[11px] text-brandhi border border-brandhi/40 rounded px-1.5 py-0.5"><Icon name="remote" size={11} />{presence[d.id].length > 1 ? presence[d.id].length : t('presence.inUse')}</span></Tip> : null}</div></td>}
+                {shows('os') && <td className="px-3 py-3"><div className="flex items-center gap-2 text-[12.5px] text-muted"><OsIcon os={d.os} size={15} /><span className="truncate max-w-[170px]" title={d.os}>{window.osLabel(d.os)}</span><span className="text-faint text-[11px] mono">{d.arch}</span>{d.role && <span className="text-faint text-[11px]">{t('target.role.' + d.role)}</span>}{presence[d.id]?.length ? <Tip label={presenceSummary(presence[d.id])}><span className="inline-flex items-center gap-1 text-[11px] text-brandhi border border-brandhi/40 rounded-sm px-1.5 py-0.5"><Icon name="remote" size={11} />{presence[d.id].length > 1 ? presence[d.id].length : t('presence.inUse')}</span></Tip> : null}</div></td>}
                 {shows('user') && <td className="px-3 py-3 hidden sm:table-cell text-[12.5px] truncate max-w-[200px]"><LoggedInUser device={d} /></td>}
                 {shows('client') && <td className="px-3 py-3 hidden md:table-cell text-[12.5px] text-muted truncate max-w-[180px]">{clientName(d.site_id)}</td>}
                 {shows('site') && <td className="px-3 py-3 hidden md:table-cell text-[12.5px] text-muted">{siteName(d.site_id)}</td>}
@@ -745,7 +745,7 @@ function GuestRequests({ deviceId }) {
       </div>
     ))}
     {guests.map((g) => (
-      <div key={g.id} className="pointer-events-auto rounded-full border border-line2 bg-card px-3 py-1 shadow flex items-center gap-2 text-[11.5px] text-ink">
+      <div key={g.id} className="pointer-events-auto rounded-full border border-line2 bg-card px-3 py-1 shadow-sm flex items-center gap-2 text-[11.5px] text-ink">
         <span className={cx('h-2 w-2 rounded-full', g.connected ? 'bg-ok' : 'bg-faint')} />
         <span>{t(g.connected ? 'guest.chipConnected' : 'guest.chipWaiting', { name: g.guest_name, mode: tEnum('guest.mode', g.mode) })}</span>
         <button onClick={() => act(() => api.closeRemoteShare(g.id))} className="text-bad hover:underline">{t('guest.remove')}</button>
@@ -829,8 +829,8 @@ function ShareAccessModal({ open, onClose, device }) {
           {shares.map((s) => (
             <div key={s.id} className="flex items-center gap-2 border-b border-line/50 py-1.5 text-[12px]">
               <span className="text-ink">{s.guest_name || tEnum('guest.mode', s.mode)}</span>
-              <span className="text-[11px] px-1.5 py-0.5 rounded bg-elevated text-muted">{tEnum('share.status', s.status)}</span>
-              {!s.reusable && <span className="text-[11px] px-1.5 py-0.5 rounded bg-elevated text-muted">{t('share.singleUse')}</span>}
+              <span className="text-[11px] px-1.5 py-0.5 rounded-sm bg-elevated text-muted">{tEnum('share.status', s.status)}</span>
+              {!s.reusable && <span className="text-[11px] px-1.5 py-0.5 rounded-sm bg-elevated text-muted">{t('share.singleUse')}</span>}
               <span className="text-faint">{t('share.expires', { when: fmtTime(s.expires_at) })}</span>
               <button onClick={() => close(s.id)} className="ml-auto text-bad hover:underline">{s.status === 'accepted' ? t('guest.remove') : t('share.revoke')}</button>
             </div>
@@ -1467,7 +1467,7 @@ function RemoteViewer({ deviceId, hostname, os, filesOnly, onClose, guest, theme
           </div>
         ) : (<>
         <div className="relative flex-1 overflow-auto p-2 scroll-area">
-          <canvas ref={canvasRef} tabIndex={0} style={canvasStyle} className={cx('outline-none remote-canvas', scale === 'fit' ? 'absolute inset-0 m-auto max-w-full max-h-full' : 'block mx-auto')} />
+          <canvas ref={canvasRef} tabIndex={0} style={canvasStyle} className={cx('outline-hidden remote-canvas', scale === 'fit' ? 'absolute inset-0 m-auto max-w-full max-h-full' : 'block mx-auto')} />
           {conflict && (
             <div className="absolute inset-0 z-[3] flex items-center justify-center bg-black/70 p-4">
               <div className="max-w-sm rounded-xl border border-line bg-card p-5 text-center shadow-2xl">
@@ -1500,7 +1500,7 @@ function RemoteViewer({ deviceId, hostname, os, filesOnly, onClose, guest, theme
           <div ref={chatBoxRef} onScroll={(e) => { const el = e.currentTarget; chatStickRef.current = el.scrollHeight - el.scrollTop - el.clientHeight < 48; }} className="flex-1 overflow-y-auto p-3 space-y-2">
             {chat.length === 0 && <div className="text-[11.5px] text-faint">{isGuest ? t('guest.chatEmpty') : t('viewer.noMessages', { host: hostname })}</div>}
             {chat.map((m, i) => (
-              <div key={i} className={cx('text-[12px] max-w-[85%] rounded-lg px-2.5 py-1.5', m.from === 'self' ? 'ml-auto bg-brand text-white shadow-sm shadow-brand/20' : 'mr-auto bg-elevated text-ink border border-line2')}>
+              <div key={i} className={cx('text-[12px] max-w-[85%] rounded-lg px-2.5 py-1.5', m.from === 'self' ? 'ml-auto bg-brand text-white shadow-xs shadow-brand/20' : 'mr-auto bg-elevated text-ink border border-line2')}>
                 <div className={cx('text-[10px] mb-0.5 font-semibold', m.from === 'self' ? 'text-white/75' : m.from === 'guest' ? 'text-warn' : m.from === 'tech' ? 'text-brandhi' : 'text-run')}>{chatLabel(m)}</div>{m.text}
               </div>
             ))}

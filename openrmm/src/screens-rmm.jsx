@@ -612,7 +612,7 @@ function awaitingReview(row) {
 function ProposalBadge() {
   return (
     <span title={t('proposal.hint')}
-      className="inline-flex items-center gap-1 rounded px-1.5 py-0.5 text-[10.5px] font-semibold uppercase tracking-wide bg-brand/15 text-brandhi">
+      className="inline-flex items-center gap-1 rounded-sm px-1.5 py-0.5 text-[10.5px] font-semibold uppercase tracking-wide bg-brand/15 text-brandhi">
       <Icon name="sparkle" size={11} />{t('proposal.badge')}
     </span>
   );
