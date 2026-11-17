@@ -220,10 +220,10 @@ function ChatThread({ sessionId, navigate, onOpenSessions }) {
         </div>
       </div>
 
-      <div className="border-t border-line bg-panel/70 backdrop-blur px-2 sm:px-5 py-2.5 sm:py-3.5">
+      <div className="border-t border-line bg-panel/70 backdrop-blur-sm px-2 sm:px-5 py-2.5 sm:py-3.5">
         <div className="max-w-[760px] mx-auto">
           <div className="flex items-end gap-2 rounded-2xl border border-line2 bg-app px-3 py-2 focus-within:border-brand focus-within:ring-2 focus-within:ring-brand/25 transition">
-            <textarea value={input} onChange={(e) => setInput(e.target.value)} onKeyDown={(e) => { if (e.key === 'Enter' && !e.shiftKey) { e.preventDefault(); send(); } }} rows={1} placeholder={t('chat.placeholder')} className="flex-1 bg-transparent resize-none outline-none text-[13.5px] text-ink placeholder:text-faint py-1.5 max-h-32 chat-input" />
+            <textarea value={input} onChange={(e) => setInput(e.target.value)} onKeyDown={(e) => { if (e.key === 'Enter' && !e.shiftKey) { e.preventDefault(); send(); } }} rows={1} placeholder={t('chat.placeholder')} className="flex-1 bg-transparent resize-none outline-hidden text-[13.5px] text-ink placeholder:text-faint py-1.5 max-h-32 chat-input" />
             <Button variant="primary" size="icon" onClick={() => send()} disabled={!input.trim() || working}><Icon name="send" size={16} /></Button>
           </div>
           <div className="text-[11px] text-faint mt-1.5 text-center flex items-center justify-center gap-1.5"><Icon name="shield" size={11} />{t('chat.footer')}</div>

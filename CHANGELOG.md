@@ -8,6 +8,20 @@ tag.
 
 ### Changed
 
+- **The console's stylesheet is built with Tailwind CSS 4** (4.3.5, through
+  `@tailwindcss/postcss`; autoprefixer is gone). Nothing in the console should
+  look different. The theme moved from `tailwind.config.cjs` into
+  `src/styles.css`, together with the Tailwind 3 behaviour the console relies on:
+  - the grey default border;
+  - the placeholder colour and the pointer cursor on buttons;
+  - rings without a colour, which stay blue;
+  - the table cell padding and disabled select opacity;
+  - Tailwind 3's spacing and divider rules for stacks.
+
+  Every screen of the demo was compared against the Tailwind 3 build, pixel by
+  pixel and by computed style, in both themes and at phone width.
+- **Browser floor.** The console now needs Safari 16.4+, Chrome or Edge 111+, or
+  Firefox 128+. It relies on cascade layers, `@property` and `color-mix()`.
 - **Each release page carries its own `docker-compose.images.yml`.** A
   release's tag, and the "Source code" archives GitHub makes from it, are cut
   before that release's images are built, so their compose file pins the
@@ -18,6 +32,27 @@ tag.
   `deploy/QUICKSTART.md` say which file to use.
 - The artifacts image now has a build-provenance attestation, like the server
   and console images, so `gh attestation verify` can check all three.
+
+### Security
+
+- **The console's build no longer pulls the Tailwind 3 dependency chain.**
+  `npm audit` in `openrmm/` reported seven alerts through it:
+  - `braces` (GHSA-vfj7-8cjw-p6xm), which has no fixed release;
+  - `postcss-selector-parser` (GHSA-rj75-hqrm-r3gf), which Tailwind 3 pins below
+    the fix.
+
+  Both were build-time only and never reached the browser. It now reports none
+  (#195).
+
+### Fixed
+
+- **Alerts ▸ Silences & maintenance lists again for administrators.** For any
+  principal without a scope restriction, such as an administrator or the admin
+  token, `GET /api/alert-suppressions` answered 500 (`invalid input syntax for
+  type uuid: ""`), so the dialog showed no silences or maintenance windows. The
+  list sent the empty scope user where PostgreSQL expects a uuid. Creating and
+  enforcing suppressions was not affected, and restricted users never saw the
+  error. Affected since 0.6.0.
 
 ## [0.11.3] - 2026-11-16
 

@@ -172,7 +172,7 @@ function DashboardScreen({ navigate }) {
           {customizable.map((w) => (
             <button key={w.id} onClick={(e) => { e.stopPropagation(); toggleWidget(w.id); }}
               className="w-full flex items-center gap-2.5 px-3 py-2 text-[13px] text-left text-muted hover:text-ink hover:bg-card transition">
-              <span className={cx('h-4 w-4 rounded border flex items-center justify-center shrink-0', show(w.id) ? 'bg-brand border-brand text-white' : 'border-line2')}>
+              <span className={cx('h-4 w-4 rounded-sm border flex items-center justify-center shrink-0', show(w.id) ? 'bg-brand border-brand text-white' : 'border-line2')}>
                 {show(w.id) && <Icon name="check" size={12} />}
               </span>
               <span className="flex-1">{t('dash.widget.' + w.id)}</span>
@@ -187,7 +187,7 @@ function DashboardScreen({ navigate }) {
             <div className="h-9 w-9 rounded-xl bg-brandsoft border border-brand/30 flex items-center justify-center text-brandhi shrink-0"><Icon name="sparkle" size={18} /></div>
             <input value={ask} onChange={(e) => setAsk(e.target.value)} onKeyDown={(e) => e.key === 'Enter' && submitAsk()}
               placeholder={t('dash.askPlaceholder')}
-              className="flex-1 bg-transparent text-[14px] text-ink placeholder:text-faint outline-none min-w-0" />
+              className="flex-1 bg-transparent text-[14px] text-ink placeholder:text-faint outline-hidden min-w-0" />
             <Button variant="primary" icon="arrowright" onClick={submitAsk} disabled={!ask.trim()}>{t('dash.ask')}</Button>
           </div>
         </Card>

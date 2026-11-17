@@ -1,16 +1,12 @@
 import { readFile, writeFile, rm, mkdir, cp } from 'node:fs/promises';
-import { createRequire } from 'node:module';
 import path from 'node:path';
 import { fileURLToPath } from 'node:url';
-import autoprefixer from 'autoprefixer';
 import { build, transform } from 'esbuild';
 import postcss from 'postcss';
-import tailwindcss from 'tailwindcss';
+import tailwindcss from '@tailwindcss/postcss';
 
 const root = path.resolve(path.dirname(fileURLToPath(import.meta.url)), '..');
 const dist = path.join(root, 'dist');
-const require = createRequire(import.meta.url);
-const tailwindConfig = require(path.join(root, 'tailwind.config.cjs'));
 const rawBasePath = (process.env.OPENRMM_BASE_PATH || '/').trim();
 if (/[:?#]/.test(rawBasePath)) throw new Error('OPENRMM_BASE_PATH must be a URL path, not an origin, query, or fragment');
 if (rawBasePath.split('/').some((part) => part === '.' || part === '..')) throw new Error('OPENRMM_BASE_PATH cannot contain . or .. segments');
@@ -97,7 +93,11 @@ await build({
 });
 
 const inputCss = await readFile(path.join(root, 'src/styles.css'), 'utf8');
-const css = await postcss([tailwindcss(tailwindConfig), autoprefixer]).process(inputCss, {
+// The theme, the sources it scans and the Tailwind 3 compatibility rules are
+// in src/styles.css. optimize runs Lightning CSS, which flattens nesting and
+// adds prefixes for Tailwind 4's browser floor (Safari 16.4, Chrome 111,
+// Firefox 128); it is what autoprefixer did for Tailwind 3.
+const css = await postcss([tailwindcss({ base: root, optimize: true })]).process(inputCss, {
   from: path.join(root, 'src/styles.css'),
   to: path.join(assetsOut, 'styles.css'),
 });

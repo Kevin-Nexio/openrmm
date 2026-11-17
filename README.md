@@ -104,7 +104,8 @@ docker compose up -d
 ```
 
 [deploy/QUICKSTART.md](deploy/QUICKSTART.md) covers what to put in `.env`, the
-first administrator, adding devices and upgrades. The full runbook (backups,
+first administrator, adding devices and upgrades. The console needs Safari 16.4+,
+Chrome or Edge 111+, or Firefox 128+. The full runbook (backups,
 point-in-time recovery, standby) is
 [deploy/README-production.md](deploy/README-production.md).
 

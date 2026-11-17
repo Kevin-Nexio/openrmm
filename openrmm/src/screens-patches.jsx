@@ -119,7 +119,7 @@ function ComplianceTab() {
           : (
             <div className="overflow-auto scroll-area max-h-[calc(100vh-260px)]">
               <table className="w-full text-[12.5px] border-collapse">
-                <thead className="sticky top-0 bg-elevated/95 backdrop-blur text-left text-faint">
+                <thead className="sticky top-0 bg-elevated/95 backdrop-blur-sm text-left text-faint">
                   <tr>{[t('patches.col.host'), t('devices.col.os'), t('patches.col.status'), t('patches.col.missing'), t('patches.col.security'), t('patches.col.approved'), t('patches.col.failed'), t('patches.col.reboot'), t('patches.col.lastScan'), ''].map((h, i) => <th key={i} className="font-medium px-4 py-2.5 whitespace-nowrap border-b border-line">{h}</th>)}</tr>
                 </thead>
                 <tbody>
@@ -193,7 +193,7 @@ function CatalogTab() {
           : (
             <div className="overflow-auto scroll-area max-h-[calc(100vh-260px)]">
               <table className="w-full text-[12.5px] border-collapse">
-                <thead className="sticky top-0 bg-elevated/95 backdrop-blur text-left text-faint">
+                <thead className="sticky top-0 bg-elevated/95 backdrop-blur-sm text-left text-faint">
                   <tr>{[t('patches.col.class'), t('patches.col.title'), t('devices.col.os'), 'KB', t('patches.col.devices'), t('patches.col.approval'), t('patches.col.reboot'), ''].map((h, i) => <th key={i} className="font-medium px-4 py-2.5 whitespace-nowrap border-b border-line">{h}</th>)}</tr>
                 </thead>
                 <tbody>
@@ -249,7 +249,7 @@ function PoliciesTab() {
                 <div className="flex-1 min-w-0">
                   <div className="flex items-center gap-2">
                     <span className="text-[14px] font-semibold text-ink">{p.name}</span>
-                    {!p.enabled && <span className="text-[10.5px] uppercase text-faint border border-line2 rounded px-1.5 py-0.5">{t('patchpol.disabled')}</span>}
+                    {!p.enabled && <span className="text-[10.5px] uppercase text-faint border border-line2 rounded-sm px-1.5 py-0.5">{t('patchpol.disabled')}</span>}
                     {p.pending && <ProposalBadge />}
                   </div>
                   {p.pending && <div className="text-[12px] text-warn mt-1">{t('patchpol.pendingHint', { who: p.proposed_by })}</div>}

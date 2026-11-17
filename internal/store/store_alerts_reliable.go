@@ -973,7 +973,10 @@ func (s *Store) applySuppressionToAlerts(ctx context.Context, sup *models.AlertS
 }
 
 func (s *Store) ListAlertSuppressions(ctx context.Context, userID string, scoped bool, activeOnly bool) ([]models.AlertSuppression, error) {
-	args := []any{userID, scoped, activeOnly}
+	// An unrestricted principal (an administrator, the admin token) has no
+	// scope user. $1 is compared with a uuid column, so it is sent as NULL then:
+	// an empty string fails the whole query, even where NOT $2 skips the scope.
+	args := []any{scopeArg(userID), scoped, activeOnly}
 	rows, err := s.pool.Query(ctx, `SELECT s.id, s.kind, s.scope_type, s.scope_id,
 		s.starts_at, s.ends_at, s.reason, s.created_by, s.created_at,
 		s.canceled_at, s.canceled_by

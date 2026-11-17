@@ -6,6 +6,9 @@
   (to run via compose).
 - PostgreSQL 14+.
 - Node/npm only when building the console outside Docker.
+- A browser for the console: Safari 16.4+, Chrome or Edge 111+, or Firefox 128+.
+  Its stylesheet is built with Tailwind CSS 4, which relies on cascade layers,
+  `@property` and `color-mix()`.
 
 ## Run with Docker Compose
 
