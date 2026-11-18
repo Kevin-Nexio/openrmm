@@ -65,6 +65,14 @@ const policyExclusions = [];
 // The assistant's patch policy, as its searchable pickers change it.
 const patchAssignments = [{ id: 'pasg-1', policy_id: 'patch-ai', scope_type: 'agent', scope_id: 'dev-1', os: '', role: '' }];
 const patchExclusions = [];
+// Alerts > Silences & maintenance: one window of each state the dialog shows.
+const hourFromNow = (h) => new Date(Date.now() + h * 3600 * 1000).toISOString();
+const suppressions = [
+  { id: 'sup-active', kind: 'maintenance', scope_type: 'agent', scope_id: 'dev-1', starts_at: hourFromNow(-1), ends_at: hourFromNow(2), reason: 'Nightly patching', created_by: 'user-1', created_at: hourFromNow(-1) },
+  { id: 'sup-canceled', kind: 'silence', scope_type: 'agent', scope_id: 'dev-1', starts_at: hourFromNow(-3), ends_at: hourFromNow(3), reason: 'Called off', created_by: 'user-1', created_at: hourFromNow(-3), canceled_at: hourFromNow(-2), canceled_by: 'user-1' },
+  { id: 'sup-ended', kind: 'silence', scope_type: 'agent', scope_id: 'dev-1', starts_at: hourFromNow(-5), ends_at: hourFromNow(-4), reason: 'Old window', created_by: 'user-1', created_at: hourFromNow(-5) },
+];
+const suppressionQueries = [];
 
 const remoteConfig = {
   ai: { provider: 'openai-compatible', base_url: '', model: '', api_key_set: true, configured: true },
@@ -220,6 +228,17 @@ const server = createServer(async (req, res) => {
           { id: 'audit-legacy', actor: user.id, action: 'alert.resolve', target: 'alert-target-2', detail: { version: 2 }, target_label: 'ORDINARY-HOST', created_at: '2026-11-10T12:00:00Z' },
         ] : [];
         return json(res, 200, { entries, total: entries.length });
+      }
+      if (pathname === '/api/alert-suppressions' && req.method === 'GET') {
+        suppressionQueries.push(url.search);
+        const all = url.searchParams.get('active') === 'false';
+        return json(res, 200, { suppressions: suppressions.filter((s) => all || (!s.canceled_at && new Date(s.ends_at) > new Date())) });
+      }
+      if (pathname.startsWith('/api/alert-suppressions/') && req.method === 'DELETE') {
+        const row = suppressions.find((s) => s.id === pathname.split('/').pop() && !s.canceled_at);
+        if (!row) return json(res, 404, { error: 'suppression not found' });
+        Object.assign(row, { canceled_at: new Date().toISOString(), canceled_by: user.id });
+        return json(res, 200, { status: 'canceled' });
       }
       if (pathname === '/api/alerts') return json(res, 200, { alerts: [] });
       if (pathname === '/api/sites') return json(res, 200, { sites: [] });
@@ -874,6 +893,92 @@ async function auditCsvBrowserFlow() {
   } finally { URL.createObjectURL = original; }
 }
 
+// Alerts > Silences & maintenance lists every window (active=false) with its
+// state, and a manager cancels the active one from the list.
+async function alertSilencesBrowserFlow() {
+  const wait = async (fn, what) => {
+    for (let i = 0; i < 150; i++) { const v = fn(); if (v) return v; await new Promise((r) => setTimeout(r, 50)); }
+    throw new Error('Silences flow timed out: ' + what);
+  };
+  const button = (text, root = document) => [...root.querySelectorAll('button')].find((el) => el.textContent.trim() === text);
+  (await wait(() => [...document.querySelectorAll('aside button, nav button')].find((el) => el.textContent.trim().startsWith('Alerts')), 'Alerts nav')).click();
+  (await wait(() => button('Silences & maintenance'), 'dialog button')).click();
+  const dialog = await wait(() => [...document.querySelectorAll('div')].find((el) => el.textContent.includes('Scheduled and previous') && el.textContent.includes('Nightly patching') && el.querySelector('button')), 'the list');
+  const row = (reason) => [...dialog.querySelectorAll('div.rounded-lg')].find((el) => el.textContent.includes(reason));
+  const active = await wait(() => row('Nightly patching'), 'active row');
+  if (!active.textContent.includes('Maintenance window') || !button('Cancel', active)) throw new Error('the active window must show its kind and a Cancel button');
+  if (!row('Called off')?.textContent.includes('Canceled') || button('Cancel', row('Called off'))) throw new Error('the canceled window must say so and offer no Cancel');
+  if (!row('Old window')?.textContent.includes('Ended') || button('Cancel', row('Old window'))) throw new Error('the ended window must say so and offer no Cancel');
+  if (document.body.textContent.includes('No suppression windows.')) throw new Error('a list with rows must not show the empty state');
+  button('Cancel', active).click();
+  await wait(() => document.body.textContent.includes('Suppression canceled'), 'cancel toast');
+  document.documentElement.dataset.alertSilencesE2e = 'passed';
+  return true;
+}
+
+// Tailwind 4 with the console's Tailwind 3 compatibility rules, checked in a
+// real browser cascade: probes built from classes the console uses, measured
+// with getComputedStyle. Each assertion would fail on a plain Tailwind 4 build.
+async function tailwindCompatBrowserFlow() {
+  for (let i = 0; i < 150 && !document.querySelector('aside'); i++) await new Promise((r) => setTimeout(r, 50));
+  const host = document.createElement('div');
+  host.style.cssText = 'position:fixed;left:0;top:0;width:400px;';
+  host.innerHTML = `
+    <div class="space-y-1"><div id="tw-a">a</div><code id="tw-b">b</code></div>
+    <div class="space-y-2"><div class="hidden">x</div><div id="tw-c">y</div></div>
+    <div class="space-y-2"><div>a</div><div id="tw-d" class="mt-4">b</div></div>
+    <div class="divide-y divide-line"><div id="tw-e">a</div><div id="tw-f">b</div></div>
+    <div id="tw-line" class="border border-line">ref</div>
+    <div id="tw-g" class="border">bare border</div>
+    <table><tbody><tr><td id="tw-h">cell</td></tr></tbody></table>
+    <select id="tw-i" disabled><option>x</option></select>
+    <input id="tw-j" class="focus:ring-2" placeholder="placeholder">
+    <div id="tw-k" class="bg-elevated/40">dormant</div>
+    <button id="tw-l">on</button><button id="tw-m" disabled>off</button>
+    <div class="relative overflow-hidden w-40 h-4"><div id="tw-n" class="absolute inset-0 -translate-x-full animate-[shimmer_1.4s_infinite]"></div></div>`;
+  document.body.appendChild(host);
+  const css = (id, prop, pseudo) => getComputedStyle(document.getElementById(id), pseudo).getPropertyValue(prop);
+  const fail = (what, got) => { throw new Error('Tailwind compat: ' + what + ' (got ' + JSON.stringify(got) + ')'); };
+  try {
+    // Stacks keep Tailwind 3's "every child after the first" rule.
+    if (css('tw-a', 'margin-bottom') !== '0px' || css('tw-b', 'margin-top') !== '4px') fail('space-y spaces from the second child', [css('tw-a', 'margin-bottom'), css('tw-b', 'margin-top')]);
+    if (css('tw-c', 'margin-top') !== '8px') fail('a child after a class-hidden one is spaced', css('tw-c', 'margin-top'));
+    if (css('tw-d', 'margin-top') !== '8px') fail('the stack rule beats a child margin utility', css('tw-d', 'margin-top'));
+    if (css('tw-e', 'border-bottom-width') !== '0px' || css('tw-f', 'border-top-width') !== '1px') fail('divide-y borders from the second child', [css('tw-e', 'border-bottom-width'), css('tw-f', 'border-top-width')]);
+    if (css('tw-f', 'border-top-color') !== css('tw-line', 'border-top-color')) fail('divide-line colours the divider', css('tw-f', 'border-top-color'));
+    // Preflight defaults the console relied on.
+    if (css('tw-g', 'border-top-color') !== 'rgb(229, 231, 235)') fail('a bare border is gray-200', css('tw-g', 'border-top-color'));
+    if (css('tw-h', 'padding-left') !== '1px') fail('table cells keep the browser padding', css('tw-h', 'padding-left'));
+    if (!(parseFloat(css('tw-i', 'opacity')) < 1)) fail('a disabled select stays dimmed', css('tw-i', 'opacity'));
+    if (css('tw-j', 'color', '::placeholder') !== 'rgb(156, 163, 175)') fail('placeholders are gray-400', css('tw-j', 'color', '::placeholder'));
+    if (css('tw-l', 'cursor') !== 'pointer' || css('tw-m', 'cursor') !== 'default') fail('pointer on buttons, default when disabled', [css('tw-l', 'cursor'), css('tw-m', 'cursor')]);
+    document.getElementById('tw-j').focus();
+    if (!css('tw-j', 'box-shadow').includes('rgba(59, 130, 246, 0.5)')) fail('a ring with no colour is blue-500 at 50%', css('tw-j', 'box-shadow'));
+    // A palette opacity Tailwind 3 never generated stays off.
+    if (css('tw-k', 'background-color') !== 'rgba(0, 0, 0, 0)') fail('dormant palette opacity classes render nothing', css('tw-k', 'background-color'));
+    // The skeleton sweep runs from -100% to +100% of its track.
+    const sweep = document.getElementById('tw-n');
+    const [animation] = sweep.getAnimations();
+    if (!animation) fail('the shimmer animation runs', null);
+    animation.pause();
+    const offset = () => sweep.getBoundingClientRect().left - sweep.parentElement.getBoundingClientRect().left;
+    const width = sweep.parentElement.getBoundingClientRect().width;
+    animation.currentTime = 0;
+    const start = offset();
+    animation.currentTime = 1400 * 0.999;
+    const end = offset();
+    if (!(start < -0.95 * width && end > 0.95 * width)) fail('the shimmer sweeps the whole track', { start, end, width });
+    // Hover is not wrapped in a hover-capable media query.
+    const hoverMedia = [...document.styleSheets].flatMap((sheet) => { try { return [...sheet.cssRules]; } catch { return []; } })
+      .some(function hasHover(rule) { return (rule.conditionText || '').includes('hover') || [...(rule.cssRules || [])].some(hasHover); });
+    if (hoverMedia) fail('hover applies on every device', 'an @media (hover) rule');
+  } finally {
+    host.remove();
+  }
+  document.documentElement.dataset.tailwindCompatE2e = 'passed';
+  return true;
+}
+
 function assertBrowser(result, pattern) {
   assert.equal(result.code, 0, result.stderr);
   assert.match(result.stdout, pattern, result.stderr);
@@ -996,6 +1101,13 @@ try {
     assertBrowser(hardwareFlow, /data-hardware-user-e2e="passed"/);
     const csvFlow = await runMobileChrome(chrome, baseURL + '/authenticated/', { width: 1280, flow: auditCsvBrowserFlow });
     assertBrowser(csvFlow, /data-audit-csv-e2e="passed"/);
+    const silencesFlow = await runMobileChrome(chrome, baseURL + '/authenticated/', { width: 1280, flow: alertSilencesBrowserFlow });
+    assertBrowser(silencesFlow, /data-alert-silences-e2e="passed"/);
+    assert.ok(suppressionQueries.includes('?active=false'), 'the dialog lists every window, ended and canceled ones included');
+    assert.ok(apiRequests.some((r) => r.method === 'DELETE' && r.pathname === '/api/alert-suppressions/sup-active'), 'Cancel reached the API for the active window');
+    assert.ok(suppressions.find((s) => s.id === 'sup-active').canceled_at, 'the active window was canceled');
+    const compatFlow = await runMobileChrome(chrome, baseURL + '/authenticated/', { width: 1280, flow: tailwindCompatBrowserFlow });
+    assertBrowser(compatFlow, /data-tailwind-compat-e2e="passed"/);
     assert.ok(apiRequests.some((request) => request.pathname === '/api/me' && request.token === 'smoke-token'), 'authenticated API requests must include the bearer token');
     assert.ok(apiRequests.some((request) => request.pathname === '/api/me' && request.token === 'expire-token'), '401 scenario must exercise an authenticated request');
   }

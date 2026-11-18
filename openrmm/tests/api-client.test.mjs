@@ -206,6 +206,22 @@ test('alerts client carries filters, optimistic versions, bulk actions and suppr
   assert.equal(last().method, 'DELETE');
 });
 
+// Alerts ▸ Silences & maintenance lists every window, ended and canceled ones
+// included (active=false), and the plain list asks only for active ones. The
+// dialog's request is the one that answered 500 for unrestricted users.
+test('the suppression list asks for every window or only the active ones', async () => {
+  const { api, last } = await loadApi();
+
+  await api.listAlertSuppressions({ active: false });
+  const all = new URL(last().url);
+  assert.equal(all.pathname, '/api/alert-suppressions');
+  assert.equal(all.searchParams.get('active'), 'false');
+  assert.equal(last().method, 'GET');
+
+  await api.listAlertSuppressions();
+  assert.equal(last().url, 'https://console.test/api/alert-suppressions');
+});
+
 test('the software report exposes its manufacturer column', async () => {
   const reports = await readFile(path.join(root, 'src', 'screens-reports.jsx'), 'utf8');
 
