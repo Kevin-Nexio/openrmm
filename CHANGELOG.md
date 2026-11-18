@@ -34,6 +34,16 @@ tag.
   pixel and by computed style, in both themes and at phone width.
 - **Browser floor.** The console now needs Safari 16.4+, Chrome or Edge 111+, or
   Firefox 128+. It relies on cascade layers, `@property` and `color-mix()`.
+- **Each release page carries its own `docker-compose.images.yml`.** A
+  release's tag, and the "Source code" archives GitHub makes from it, are cut
+  before that release's images are built, so their compose file pins the
+  previous release. The release workflow now checks that the server, console
+  and artifacts images were built from the tag by this repository's workflows,
+  attaches the compose file pinned to them to the release, and pushes the
+  branch that moves the pins on `main`. The release notes and
+  `deploy/QUICKSTART.md` say which file to use.
+- The artifacts image now has a build-provenance attestation, like the server
+  and console images, so `gh attestation verify` can check all three.
 
 ### Security
 

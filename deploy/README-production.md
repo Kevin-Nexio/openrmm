@@ -256,7 +256,13 @@ Container images are published to GHCR by separate workflows:
 the minor line, `latest` for releases, `main` for every push to main) and
 `openrmm-artifacts` (`release.yml`: the signed `/dl` set, for Kubernetes; see
 [`docs/02-getting-started.md`](../docs/02-getting-started.md#serving-dl-on-kubernetes)).
-This compose file builds the server and frontend from source instead. The
+Once all three are out, `release.yml` checks that each was built from the tag
+by this repository's workflows (`gh attestation verify`), attaches
+`docker-compose.images.yml` pinned to them to the release, and pushes
+`chore/pin-images-<version>`, the same pins for main, ready for a pull request.
+A release's tag cannot carry those pins, because the images are built from it,
+so the tag still pins the previous release.
+`docker-compose.prod.yml` builds the server and frontend from source instead. The
 server image carries its version, shown in Settings ▸ Configuration and printed
 by `rmm-server -version`: the workflow passes the tag's version as the
 Dockerfile's `VERSION` build arg, and a build without it reports `dev` — pass
