@@ -46,8 +46,10 @@ test('a policy\'s checks and tasks can be edited from the drawer', async () => {
     const signature = rmm.slice(start, rmm.indexOf('{', rmm.indexOf(')', start)));
     assert.match(signature, /defaultPolicyId/, `${editor} must accept defaultPolicyId`);
   }
-  assert.match(rmm, /defaultPolicyId \? 'pol:' \+ defaultPolicyId : ''/,
-    'the default has to seed the target, and only when nothing else did');
+  assert.match(rmm, /check \? attachmentTargets\(check\.attachments\) : defaultPolicyId \? \[\{ policy_id: defaultPolicyId \}\] : \[\]/,
+    'the default has to seed where a new check applies, and only when nothing else did');
+  assert.match(rmm, /task \? attachmentTargets\(task\.attachments\) : defaultPolicyId \? \[\{ policy_id: defaultPolicyId \}\] : \[\]/,
+    'the same for a new task');
 
   const source = await readFile(path.join(root, 'src/screens-rmm2.jsx'), 'utf8');
   const detail = source.slice(source.indexOf('function PolicyDetail('), source.indexOf('/* ============================ CLIENTS & SITES'));

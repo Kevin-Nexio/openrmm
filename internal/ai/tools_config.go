@@ -155,7 +155,9 @@ func proposeTask(ctx context.Context, tc ToolContext, args json.RawMessage) (any
 	if err != nil {
 		return nil, err
 	}
-	t.AgentID, t.PolicyID = agentID, policyID
+	// A proposal applies to the one device or policy it names; it can be
+	// attached elsewhere only once a person has approved it.
+	t.Attachments = []models.Attachment{{AgentID: agentID, PolicyID: policyID, AddedBy: t.ProposedBy}}
 	out, err := tc.Store.CreateTask(ctx, t)
 	if err != nil {
 		return nil, err
@@ -193,8 +195,8 @@ func (in proposedCheckArgs) check(tc ToolContext, agentID, policyID *string) (*m
 		in.Type = canonical
 	}
 	c := &models.Check{
-		AgentID: agentID, PolicyID: policyID,
-		Type: in.Type, Name: in.Name, Config: in.Config,
+		Attachments: []models.Attachment{{AgentID: agentID, PolicyID: policyID, AddedBy: tc.proposalActor()}},
+		Type:        in.Type, Name: in.Name, Config: in.Config,
 		WarnThreshold: in.WarnThreshold, ErrThreshold: in.ErrThreshold,
 		IntervalSec: in.IntervalSec,
 		Enabled:     false,
@@ -468,7 +470,17 @@ func listTasksTool(ctx context.Context, tc ToolContext, args json.RawMessage) (a
 	if err != nil {
 		return nil, err
 	}
-	return tc.Store.ListTasks(ctx, agentID, policyID)
+	tasks, err := tc.Store.ListTasks(ctx, agentID, policyID)
+	if err != nil {
+		return nil, err
+	}
+	for i := range tasks {
+		if tasks[i].Attachments, err = tc.visibleAttachments(ctx, tasks[i].Attachments); err != nil {
+			return nil, err
+		}
+		tasks[i].SingleAgentID, tasks[i].SinglePolicyID = models.SingleTarget(tasks[i].Attachments)
+	}
+	return tasks, nil
 }
 
 func listChecksTool(ctx context.Context, tc ToolContext, args json.RawMessage) (any, error) {
@@ -476,7 +488,44 @@ func listChecksTool(ctx context.Context, tc ToolContext, args json.RawMessage) (
 	if err != nil {
 		return nil, err
 	}
-	return tc.Store.ListChecks(ctx, agentID, policyID)
+	checks, err := tc.Store.ListChecks(ctx, agentID, policyID)
+	if err != nil {
+		return nil, err
+	}
+	for i := range checks {
+		if checks[i].Attachments, err = tc.visibleAttachments(ctx, checks[i].Attachments); err != nil {
+			return nil, err
+		}
+		checks[i].SingleAgentID, checks[i].SinglePolicyID = models.SingleTarget(checks[i].Attachments)
+	}
+	return checks, nil
+}
+
+// visibleAttachments is what the user the assistant acts for may see of a
+// check's or task's attachments: devices in their scope and policies visible
+// to them. A shared check names no device or policy outside it.
+func (tc ToolContext) visibleAttachments(ctx context.Context, atts []models.Attachment) ([]models.Attachment, error) {
+	if tc.ScopeUserID == "" {
+		return atts, nil
+	}
+	out := make([]models.Attachment, 0, len(atts))
+	for _, a := range atts {
+		switch {
+		case a.AgentID != nil:
+			if tc.allows(ctx, *a.AgentID) {
+				out = append(out, a)
+			}
+		case a.PolicyID != nil:
+			ok, err := tc.Store.PolicyAllowedForUser(ctx, tc.ScopeUserID, *a.PolicyID)
+			if err != nil {
+				return nil, err
+			}
+			if ok {
+				out = append(out, a)
+			}
+		}
+	}
+	return out, nil
 }
 
 func listPoliciesTool(ctx context.Context, tc ToolContext) (any, error) {

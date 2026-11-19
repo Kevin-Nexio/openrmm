@@ -84,7 +84,7 @@ func (s *Store) CreatePolicyProposal(ctx context.Context, p *PolicyProposal) (*m
 	}
 	for i := range p.Tasks {
 		t := p.Tasks[i]
-		t.AgentID, t.PolicyID = nil, &pol.ID
+		t.Attachments = []models.Attachment{{PolicyID: &pol.ID, AddedBy: p.ProposedBy}}
 		t.Enabled, t.ProposedBy, t.ApprovedBy = false, p.ProposedBy, ""
 		if err := insertTask(ctx, tx, &t); err != nil {
 			return nil, err
@@ -92,7 +92,7 @@ func (s *Store) CreatePolicyProposal(ctx context.Context, p *PolicyProposal) (*m
 	}
 	for i := range p.Checks {
 		c := p.Checks[i]
-		c.AgentID, c.PolicyID = nil, &pol.ID
+		c.Attachments = []models.Attachment{{PolicyID: &pol.ID, AddedBy: p.ProposedBy}}
 		c.Enabled, c.ProposedBy, c.ApprovedBy = false, p.ProposedBy, ""
 		if err := insertCheck(ctx, tx, &c); err != nil {
 			return nil, err
@@ -141,18 +141,37 @@ func policyReview(ctx context.Context, q dbQuerier, id string, lock bool) (*mode
 	if err := rows.Err(); err != nil {
 		return nil, err
 	}
-	taskRows, err := q.Query(ctx, `SELECT `+taskCols+` FROM tasks WHERE policy_id=$1 ORDER BY created_at, id`+forUpdate, id)
+	// The tasks and checks attached to the policy, shared ones included, with
+	// their attachments. With lock the attachment rows are held too, so none
+	// can be taken away until the activation commits; a new one references the
+	// locked policy row and waits as well.
+	itemLock := ""
+	if lock {
+		itemLock = " FOR UPDATE OF t"
+	}
+	taskRows, err := q.Query(ctx, `SELECT `+taskCols+` FROM tasks t
+		WHERE t.id IN (SELECT task_id FROM task_attachments WHERE policy_id=$1) ORDER BY t.created_at, t.id`+itemLock, id)
 	if err != nil {
 		return nil, err
 	}
 	if review.Tasks, err = scanTasks(taskRows); err != nil {
 		return nil, err
 	}
-	checkRows, err := q.Query(ctx, `SELECT `+checkCols+` FROM checks WHERE policy_id=$1 ORDER BY created_at, id`+forUpdate, id)
+	if review.Tasks, err = withTaskAttachments(ctx, q, review.Tasks, lock); err != nil {
+		return nil, err
+	}
+	if lock {
+		itemLock = " FOR UPDATE OF c"
+	}
+	checkRows, err := q.Query(ctx, `SELECT `+checkCols+` FROM checks c
+		WHERE c.id IN (SELECT check_id FROM check_attachments WHERE policy_id=$1) ORDER BY c.created_at, c.id`+itemLock, id)
 	if err != nil {
 		return nil, err
 	}
 	if review.Checks, err = scanChecks(checkRows); err != nil {
+		return nil, err
+	}
+	if review.Checks, err = withCheckAttachments(ctx, q, review.Checks, lock); err != nil {
 		return nil, err
 	}
 	if review.Tasks == nil {
@@ -212,14 +231,22 @@ func (s *Store) ActivatePolicy(ctx context.Context, id, actor, fingerprint strin
 		return nil, ErrApprovalNotPermitted
 	}
 	out := &PolicyActivation{ApprovedPolicy: review.Policy.Pending}
-	tag, err := tx.Exec(ctx, `UPDATE tasks SET enabled=true, approved_by=$2
-		WHERE policy_id=$1 AND proposed_by<>'' AND approved_by=''`, id, actor)
+	// Only the proposals attached here and nowhere else: a proposal takes one
+	// attachment (ErrPendingSingleAttachment), and this guard keeps it so even
+	// if a row slipped past, so approving one policy never makes something
+	// live through another nobody reviewed.
+	tag, err := tx.Exec(ctx, `UPDATE tasks t SET enabled=true, approved_by=$2
+		WHERE t.proposed_by<>'' AND t.approved_by=''
+		  AND EXISTS (SELECT 1 FROM task_attachments a WHERE a.task_id=t.id AND a.policy_id=$1)
+		  AND NOT EXISTS (SELECT 1 FROM task_attachments o WHERE o.task_id=t.id AND o.policy_id IS DISTINCT FROM $1)`, id, actor)
 	if err != nil {
 		return nil, err
 	}
 	out.ApprovedTasks = tag.RowsAffected()
-	tag, err = tx.Exec(ctx, `UPDATE checks SET enabled=true, approved_by=$2
-		WHERE policy_id=$1 AND proposed_by<>'' AND approved_by=''`, id, actor)
+	tag, err = tx.Exec(ctx, `UPDATE checks c SET enabled=true, approved_by=$2
+		WHERE c.proposed_by<>'' AND c.approved_by=''
+		  AND EXISTS (SELECT 1 FROM check_attachments a WHERE a.check_id=c.id AND a.policy_id=$1)
+		  AND NOT EXISTS (SELECT 1 FROM check_attachments o WHERE o.check_id=c.id AND o.policy_id IS DISTINCT FROM $1)`, id, actor)
 	if err != nil {
 		return nil, err
 	}

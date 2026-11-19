@@ -1,7 +1,6 @@
 package api
 
 import (
-	"context"
 	"errors"
 	"net/http"
 	"sort"
@@ -26,11 +25,23 @@ import (
 // disabled check, or an AI proposal nobody has reviewed, is not applied to the
 // machine, and the Checks and Scheduled tasks screens are where to find those.
 
+// monitoringSource is one way a check or task reaches a device: attached to
+// the device itself (Direct), or through a policy that reaches it.
+type monitoringSource struct {
+	Direct   bool    `json:"direct,omitempty"`
+	PolicyID *string `json:"policy_id,omitempty"`
+	Name     string  `json:"name,omitempty"`
+}
+
 // deviceCheck is a check as it stands on one device.
 type deviceCheck struct {
 	models.Check
-	// PolicyName names the policy the check came through; empty when it is
-	// assigned to the device directly.
+	// Sources are how the check reaches this device, direct first. A check
+	// shared by several policies that reach the device lists each; it still
+	// runs once.
+	Sources []monitoringSource `json:"sources"`
+	// PolicyName names the first policy it came through, for clients of the
+	// one-owner API; empty when it reaches the device only directly.
 	PolicyName string `json:"policy_name,omitempty"`
 	// State is this device's: never-run checks read unknown.
 	Status       string     `json:"status"`
@@ -42,7 +53,8 @@ type deviceCheck struct {
 // deviceTask is a task as it stands on one device.
 type deviceTask struct {
 	models.Task
-	PolicyName string `json:"policy_name,omitempty"`
+	Sources    []monitoringSource `json:"sources"`
+	PolicyName string             `json:"policy_name,omitempty"`
 	// LastRunAt is when the task last queued a job on this device.
 	LastRunAt *time.Time `json:"last_run_at,omitempty"`
 }
@@ -75,12 +87,19 @@ func (s *Server) listDeviceChecks(w http.ResponseWriter, r *http.Request) {
 		}
 		states[c.ID] = st
 	}
-	names, err := s.policyNames(ctx)
+	reaching, err := s.store.PoliciesReachingAgent(ctx, id)
 	if err != nil {
 		writeErr(w, http.StatusInternalServerError, err.Error())
 		return
 	}
-	writeJSON(w, http.StatusOK, map[string]any{"checks": deviceChecks(checks, states, names)})
+	rows := deviceChecks(checks, states, id, reaching)
+	for i := range rows {
+		if err := s.redactCheck(r, &rows[i].Check); err != nil {
+			writeErr(w, http.StatusInternalServerError, err.Error())
+			return
+		}
+	}
+	writeJSON(w, http.StatusOK, map[string]any{"checks": rows})
 }
 
 func (s *Server) listDeviceTasks(w http.ResponseWriter, r *http.Request) {
@@ -108,38 +127,58 @@ func (s *Server) listDeviceTasks(w http.ResponseWriter, r *http.Request) {
 		}
 		lastRuns[t.ID] = at
 	}
-	names, err := s.policyNames(ctx)
+	reaching, err := s.store.PoliciesReachingAgent(ctx, id)
 	if err != nil {
 		writeErr(w, http.StatusInternalServerError, err.Error())
 		return
 	}
-	writeJSON(w, http.StatusOK, map[string]any{"tasks": deviceTasks(tasks, lastRuns, names)})
+	rows := deviceTasks(tasks, lastRuns, id, reaching)
+	for i := range rows {
+		if err := s.redactTask(r, &rows[i].Task); err != nil {
+			writeErr(w, http.StatusInternalServerError, err.Error())
+			return
+		}
+	}
+	writeJSON(w, http.StatusOK, map[string]any{"tasks": rows})
 }
 
-// policyNames maps policy id to name. The names are those of policies already
+// sourcesOn lists how attachments reach the device agentID: directly, then
+// through each policy among reaching, by name. The policies are those already
 // applied to a device the caller may see, so no scope filter narrows them.
-func (s *Server) policyNames(ctx context.Context) (map[string]string, error) {
-	policies, err := s.store.ListPolicies(ctx)
-	if err != nil {
-		return nil, err
+func sourcesOn(atts []models.Attachment, agentID string, reaching map[string]bool) []monitoringSource {
+	var direct []monitoringSource
+	var policies []monitoringSource
+	for _, a := range atts {
+		switch {
+		case a.AgentID != nil && *a.AgentID == agentID:
+			direct = append(direct, monitoringSource{Direct: true})
+		case a.PolicyID != nil && reaching[*a.PolicyID]:
+			id := *a.PolicyID
+			policies = append(policies, monitoringSource{PolicyID: &id, Name: a.Name})
+		}
 	}
-	names := make(map[string]string, len(policies))
-	for _, p := range policies {
-		names[p.ID] = p.Name
-	}
-	return names, nil
+	sort.SliceStable(policies, func(i, j int) bool { return policies[i].Name < policies[j].Name })
+	return append(direct, policies...)
 }
 
-// deviceChecks pairs each check with this device's state and the policy it
-// came through. Direct assignments first, then by policy, then by name, so the
-// drawer reads the same on every refresh.
-func deviceChecks(checks []models.Check, states map[string]*models.CheckState, policies map[string]string) []deviceCheck {
+// firstPolicy is the first policy among sources, for the one-owner fields.
+func firstPolicy(sources []monitoringSource) (*string, string) {
+	for _, s := range sources {
+		if s.PolicyID != nil {
+			return s.PolicyID, s.Name
+		}
+	}
+	return nil, ""
+}
+
+// deviceChecks pairs each check with this device's state and how it reaches
+// the device. Direct ones first, then by policy, then by name, so the drawer
+// reads the same on every refresh.
+func deviceChecks(checks []models.Check, states map[string]*models.CheckState, agentID string, reaching map[string]bool) []deviceCheck {
 	out := make([]deviceCheck, 0, len(checks))
 	for _, c := range checks {
-		row := deviceCheck{Check: c, Status: models.CheckUnknown}
-		if c.PolicyID != nil {
-			row.PolicyName = policies[*c.PolicyID]
-		}
+		row := deviceCheck{Check: c, Status: models.CheckUnknown, Sources: sourcesOn(c.Attachments, agentID, reaching)}
+		_, row.PolicyName = firstPolicy(row.Sources)
 		if st := states[c.ID]; st != nil {
 			if st.Status != "" {
 				row.Status = st.Status
@@ -149,20 +188,18 @@ func deviceChecks(checks []models.Check, states map[string]*models.CheckState, p
 		out = append(out, row)
 	}
 	sort.SliceStable(out, func(i, j int) bool {
-		return lessBySource(out[i].PolicyID, out[i].PolicyName, out[i].Name, out[j].PolicyID, out[j].PolicyName, out[j].Name)
+		return lessBySource(out[i].Sources, out[i].Name, out[j].Sources, out[j].Name)
 	})
 	return out
 }
 
 // deviceTasks pairs each task with its last run on this device; a zero time
 // means it has not run here.
-func deviceTasks(tasks []models.Task, lastRuns map[string]time.Time, policies map[string]string) []deviceTask {
+func deviceTasks(tasks []models.Task, lastRuns map[string]time.Time, agentID string, reaching map[string]bool) []deviceTask {
 	out := make([]deviceTask, 0, len(tasks))
 	for _, t := range tasks {
-		row := deviceTask{Task: t}
-		if t.PolicyID != nil {
-			row.PolicyName = policies[*t.PolicyID]
-		}
+		row := deviceTask{Task: t, Sources: sourcesOn(t.Attachments, agentID, reaching)}
+		_, row.PolicyName = firstPolicy(row.Sources)
 		if at := lastRuns[t.ID]; !at.IsZero() {
 			at := at
 			row.LastRunAt = &at
@@ -170,17 +207,23 @@ func deviceTasks(tasks []models.Task, lastRuns map[string]time.Time, policies ma
 		out = append(out, row)
 	}
 	sort.SliceStable(out, func(i, j int) bool {
-		return lessBySource(out[i].PolicyID, out[i].PolicyName, out[i].Name, out[j].PolicyID, out[j].PolicyName, out[j].Name)
+		return lessBySource(out[i].Sources, out[i].Name, out[j].Sources, out[j].Name)
 	})
 	return out
 }
 
-func lessBySource(aPolicy *string, aPolicyName, aName string, bPolicy *string, bPolicyName, bName string) bool {
-	if (aPolicy == nil) != (bPolicy == nil) {
-		return aPolicy == nil
+// lessBySource orders direct items first, then by their first policy's name,
+// then by name.
+func lessBySource(a []monitoringSource, aName string, b []monitoringSource, bName string) bool {
+	aDirect := len(a) > 0 && a[0].Direct
+	bDirect := len(b) > 0 && b[0].Direct
+	if aDirect != bDirect {
+		return aDirect
 	}
-	if aPolicyName != bPolicyName {
-		return aPolicyName < bPolicyName
+	_, aPolicy := firstPolicy(a)
+	_, bPolicy := firstPolicy(b)
+	if aPolicy != bPolicy {
+		return aPolicy < bPolicy
 	}
 	return aName < bName
 }

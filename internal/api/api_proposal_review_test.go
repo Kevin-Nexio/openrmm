@@ -48,7 +48,7 @@ func newProposalReviewFixture(t *testing.T) proposalReviewFixture {
 func (f proposalReviewFixture) proposedTask(t *testing.T) *models.Task {
 	t.Helper()
 	task, err := f.store.CreateTask(f.ctx, &models.Task{
-		AgentID: &f.agent, Name: "nightly-" + uuid.NewString(), Shell: "bash", Script: "echo hi",
+		Attachments: models.OnAgent(&f.agent), Name: "nightly-" + uuid.NewString(), Shell: "bash", Script: "echo hi",
 		ScheduleKind: models.ScheduleInterval, IntervalSec: 3600,
 		Enabled: false, ProposedBy: "ai:assistant",
 	})
@@ -147,7 +147,7 @@ func TestEditingAProposalWithoutEnablingDoesNotApproveItIntegration(t *testing.T
 func TestEnablingAHumanAuthoredTaskRecordsNoApproverIntegration(t *testing.T) {
 	f := newProposalReviewFixture(t)
 	task, err := f.store.CreateTask(f.ctx, &models.Task{
-		AgentID: &f.agent, Name: "human-" + uuid.NewString(), Shell: "bash", Script: "echo hi",
+		Attachments: models.OnAgent(&f.agent), Name: "human-" + uuid.NewString(), Shell: "bash", Script: "echo hi",
 		ScheduleKind: models.ScheduleInterval, IntervalSec: 3600, Enabled: false,
 	})
 	if err != nil {
@@ -174,7 +174,7 @@ func TestEnablingAProposedCheckThroughTheAPIAcceptsItIntegration(t *testing.T) {
 	f := newProposalReviewFixture(t)
 	warn, errT := 20.0, 10.0
 	check, err := f.store.CreateCheck(f.ctx, &models.Check{
-		AgentID: &f.agent, Type: models.CheckMemory, Name: "ram-" + uuid.NewString(),
+		Attachments: models.OnAgent(&f.agent), Type: models.CheckMemory, Name: "ram-" + uuid.NewString(),
 		Config: json.RawMessage(`{}`), WarnThreshold: &warn, ErrThreshold: &errT,
 		IntervalSec: 300, FailureCount: 2, RecoveryCount: 2, TimeoutSec: 180,
 		Enabled: false, ProposedBy: "mcp:assistant",

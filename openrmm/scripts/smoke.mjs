@@ -388,7 +388,7 @@ async function alertRulesBrowserFlow() {
   (await wait(() => button('New check'))).click();
   const type = await wait(() => [...document.querySelectorAll('select')].find((el) => [...el.options].some((o) => o.value === 'connectivity')));
   choose(type, 'connectivity');
-  (await wait(() => button('Select target…'))).click();
+  (await wait(() => button('Add a policy or device…'))).click();
   (await wait(() => button('SMOKE-PC'))).click();
   const mode = await wait(() => [...document.querySelectorAll('select')].find((el) => [...el.options].some((o) => o.value === 'ignore')));
   choose(mode, 'ignore');
@@ -589,7 +589,7 @@ async function servicesAndRemoteSettingsBrowserFlow() {
       const state = await wait(() => [...document.querySelectorAll('select')].find((el) => [...el.options].some((o) => o.value === 'loaded')));
       change(state, 'loaded');
     }
-    (await wait(() => button('Select target…'))).click();
+    (await wait(() => button('Add a policy or device…'))).click();
     (await wait(() => button('SMOKE-PC'))).click();
     (await wait(() => button('Create check') && !button('Create check').disabled && button('Create check'))).click();
     await wait(() => !button('Create check'));

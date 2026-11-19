@@ -63,7 +63,8 @@ test('console creates an enabled ignore rule and keeps agent check settings dist
   assert.equal(ui.find(tree, (n) => n.type === 'Field' && n.props.label === 'checks.intervalSec').length, 0);
   await ui.find(tree, (n) => n.type === 'Button' && n.children.includes('checks.create'))[0].props.onClick();
   assert.equal(calls.length, 1);
-  assert.equal(calls[0].policy_id, 'p');
+  assert.deepEqual(calls[0].attachments, [{ policy_id: 'p' }], 'opened from a policy, it applies to that policy');
+  assert.equal('policy_id' in calls[0], false, 'the one-owner field is not sent alongside');
   assert.equal(calls[0].enabled, true, 'ignore rules must remain enabled to override inherited defaults');
   assert.deepEqual(calls[0].config, { mode: 'ignore', severity: 'error', after_min: 3 });
   assert.equal('warn_threshold' in calls[0], false);
@@ -140,7 +141,7 @@ test('console creates Linux and macOS service checks with platform-specific fiel
   assert.equal(ui.find(tree, (n) => n.type === 'Field' && n.props.label === 'check.service.state').length, 0);
   await save();
   assert.deepEqual(calls[0].config, { service: 'sshd.service' });
-  assert.equal(calls[0].policy_id, 'mixed-policy');
+  assert.deepEqual(calls[0].attachments, [{ policy_id: 'mixed-policy' }]);
   assert.equal('warn_threshold' in calls[0], false);
   changeType('macservice');
   changeField('check.cfg.macservice', 'gui/501/com.example.worker');

@@ -61,13 +61,15 @@ var governingCandidates = `
 	FROM agents a
 	JOIN LATERAL (
 	  SELECT c.id AS check_id, NULL::uuid AS policy_id, 'device' AS scope, 5 AS rank, false AS filtered
-	  FROM checks c WHERE c.agent_id = a.id AND c.type = $1
+	  FROM checks c JOIN check_attachments da ON da.check_id = c.id AND da.agent_id = a.id
+	  WHERE c.type = $1
 	  UNION ALL
 	  SELECT c.id, pa.policy_id, pa.scope_type,
 	         CASE pa.scope_type WHEN 'global' THEN 0 WHEN 'client' THEN 1 WHEN 'site' THEN 2 WHEN 'group' THEN 3 ELSE 4 END,
 	         (pa.os <> '' OR pa.role <> '')
 	  FROM policy_assignments pa
-	  JOIN checks c ON c.policy_id = pa.policy_id AND c.type = $1
+	  JOIN check_attachments pca ON pca.policy_id = pa.policy_id
+	  JOIN checks c ON c.id = pca.check_id AND c.type = $1
 	  WHERE pa.policy_id IN ` + activePoliciesSQL + ` AND ` + assignmentReachesSQL("pa", "a") + `
 	    AND NOT EXISTS (SELECT 1 FROM policy_exclusions pe WHERE pe.policy_id = pa.policy_id AND pe.agent_id = a.id)
 	) src ON true
@@ -126,15 +128,12 @@ func (s *Store) GoverningRules(ctx context.Context, ruleType string) (map[string
 	return out, rows.Err()
 }
 
-// CheckCoveredAgents lists the devices a check applies to: the one that owns
-// it, or every device under the scopes its policy is assigned to.
+// CheckCoveredAgents lists the devices a check applies to through any of its
+// attachments: the devices it is attached to, and every device a policy it is
+// attached to reaches.
 func (s *Store) CheckCoveredAgents(ctx context.Context, checkID string) ([]string, error) {
 	rows, err := s.pool.Query(ctx, `
-		SELECT a.id FROM checks c JOIN agents a ON a.id = c.agent_id
-		WHERE c.id = $1 AND a.status <> 'revoked'
-		UNION
-		SELECT a.id FROM checks c
-		JOIN agents a ON c.policy_id IN `+policiesReachingSQL("a")+`
+		SELECT a.id FROM checks c JOIN agents a ON `+checkReachesSQL("c", "a")+`
 		WHERE c.id = $1 AND a.status <> 'revoked'`, checkID)
 	if err != nil {
 		return nil, err

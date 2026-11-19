@@ -284,13 +284,11 @@ until the first inventory). It moves only when it changes by more than two
 minutes, so the few seconds each snapshot drifts do not rewrite the row.
 
 ### `checks`
-A monitoring check, owned **either** by an agent **or** a policy — exactly one of
-`agent_id` / `policy_id` is set.
+A monitoring check. Since migration 037 it has no owner column: where it applies
+is its rows in `check_attachments` (below).
 | Column | Type | Notes |
 |--------|------|-------|
 | id | uuid PK | |
-| agent_id | uuid FK → agents | nullable (direct check) |
-| policy_id | uuid FK → policies | nullable (inherited check) |
 | type | text | `diskspace`/`memory`/`cpuload`/`ping`/`winservice`/`linuxservice`/`macservice`/`script` |
 | name | text | |
 | config | jsonb | type-specific (path / host / service / inline script) |
@@ -330,12 +328,34 @@ Latest status + history per (check, agent): `id`, `check_id` FK → checks,
 `agent_id` FK → agents, `status` (`passing`/`warning`/`failing`), `value` (double,
 nullable), `output`, `ran_at`. Indexed by (check_id, agent_id, ran_at desc).
 
+### `check_attachments` / `task_attachments`
+Where a check or task applies (migration 037): one row per policy or device,
+exactly one of `policy_id` / `agent_id` set, unique per item and target. Columns:
+`check_id` (or `task_id`), `policy_id`, `agent_id`, `added_by`, `added_at`. The
+migration turned each former owner column into one row dated when the item was
+made, and dropped the columns. An item with no row is Not in use.
+
+### `edit_proposals`
+Edits the AI proposed to existing objects (migration 038): `kind` (script, check,
+task, policy, patch_policy), `target_id`, `base_hash` (the object's editable view
+as the proposal saw it), `changes` (JSONB: fields, attachments, assignments,
+exclusions), `reason`, `proposed_by`, `status` (pending, applied, rejected,
+stale, superseded, failed), `decided_by`, `outcome`, `created_at`,
+`decided_at`. One pending row per object (partial unique index).
+
+### `alert_suppression_agents`
+What a check-scoped silence covered when it was made (migration 037): one row per
+device the check was attached to directly, with that device's
+`monitoring_scope_since`; the silence holds on a device only while it keeps that
+scope. `alert_suppressions.covers_policy_reach` is true when the check had a
+policy attachment then, and the silence follows the check everywhere it reaches.
+
 ### `tasks`
-Scheduled automation, owned by an agent or a policy (like checks).
+Scheduled automation. Like checks, it applies through its rows in
+`task_attachments`.
 | Column | Type | Notes |
 |--------|------|-------|
 | id | uuid PK | |
-| agent_id / policy_id | uuid | exactly one set |
 | name | text | |
 | script_id | uuid FK → scripts | nullable; inline `shell`+`script` is the fallback |
 | shell, script | text | inline source when no `script_id` |

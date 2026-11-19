@@ -85,6 +85,9 @@ server (`11-mcp`).
 | `propose_library_script` | `scripts.manage` | **write (gated)** | A library script awaiting review: it cannot run, be scheduled or be released until approved. Unrestricted admins only |
 | `propose_move_devices` | `clients.manage` | **write (gated)** | Propose moving up to 500 devices to a site (and optional department). Changes nothing until a person approves it under Devices ▸ Pending operations |
 | `propose_delete_devices` | `devices.delete` | **write (gated)** | Propose deleting up to 500 devices. The approver must type the device count |
+| `list_scripts` | `scripts.view` | read | Library scripts: id, name, category, shell, parameters and variable names, review state. No body |
+| `get_editable_object` | the object's view permission | read | What an edit proposal can change of a script, check, task, policy or patch policy: its editable fields, where a check or task applies, a policy's assignments and excluded devices, with names. Scope-filtered |
+| `propose_script_edit` / `propose_check_edit` / `propose_task_edit` / `propose_policy_edit` / `propose_patch_policy_edit` | `scripts.manage` / `checks.manage` / `tasks.manage` / `policies.manage` / `patches.policies.manage` | **write (gated)** | Propose an edit to an existing object (fields, a check's or task's attachments, a policy's assignments and exclusions). **Nothing changes** until a person applies it in the object's screen; see [Edits proposed by the AI](#edits-proposed-by-the-ai). Scripts and policies: unrestricted admins only |
 
 ### Configuration is proposed too, and here is why
 
@@ -129,6 +132,40 @@ Configuration is not created enabled even for an unrestricted administrator. The
 model reads inventory, hostnames and alert text — data that comes from the
 monitored machines. "An admin asked" is not evidence that an admin *authored* the
 request, so the gate does not depend on who is asking.
+
+### Edits proposed by the AI
+
+The assistant may also propose an **edit** to an existing library script,
+check, task, policy or patch policy (`propose_*_edit`). An edit proposal is a
+row in `edit_proposals`; the object does not change.
+
+- **Bound to what it saw.** The proposal records a hash of the object as the
+  assistant read it (`get_editable_object`). If the object changes before
+  anyone applies the proposal, it is **stale** and cannot be applied; the
+  assistant has to propose again. One proposal per object is open at a time: a
+  new one supersedes the previous.
+- **Reviewed where the object lives.** Scripts, Checks, Scheduled tasks,
+  Policies and Patches ▸ Policies list the edits waiting for them. The review
+  shows each changed field before and after, and the attachments, assignments
+  and exclusions added or removed, with names.
+- **Applied as the person.** Applying runs the console's own handlers as the
+  person who applies it, one step after another: the fields, then what is
+  removed, then what is added. The same validation, scope rules, side effects
+  and audit apply as for the same edit by hand, so an edit that person could
+  not make is refused. A step the server refuses stops the proposal as
+  **failed**, and the outcome names the step and what was applied before it.
+  Deciding takes the permission an edit by hand takes. Applying is audited as
+  `<kind>.edit.apply` (or `.reject`, `.fail`) with the proposal and its
+  proposer.
+- **Never autonomous.** No autonomy setting applies an edit. A policy can be
+  switched off by an edit, but switched on only through its activation review.
+- **Never on a proposal awaiting review.** An object the AI proposed and nobody
+  has reviewed yet cannot be edited this way. Switching such a check or task on
+  through an edit would approve it while the review showed only the changed
+  fields, not the script it runs; it is reviewed on its own screen instead.
+- **What a restricted user sees.** Only proposals for checks, tasks and scripts,
+  with the devices and policies outside their scope left out. Policy and patch
+  policy proposals are for unrestricted administrators.
 
 ### Why the write tools only *propose*
 

@@ -91,33 +91,37 @@ func enabledDefaultTrue(body []byte) bool {
 
 // ---------- checks ----------
 
+// requireCheck loads a check the caller may see (manage false) or change
+// (manage true), with its attachments as the caller may see them; the
+// decision itself reads every attachment (requireAttachments).
 func (s *Server) requireCheck(w http.ResponseWriter, r *http.Request, id string, manage bool) (*models.Check, bool) {
 	c, err := s.store.GetCheck(r.Context(), id)
 	if err != nil {
 		writeErr(w, httpStatusFor(err), err.Error())
 		return nil, false
 	}
-	if c.AgentID != nil {
-		if !s.requireAgent(w, r, *c.AgentID) {
-			return nil, false
-		}
-	} else if c.PolicyID == nil || !s.requirePolicy(w, r, *c.PolicyID, manage) {
+	if !s.requireAttachments(w, r, c.Attachments, manage) {
+		return nil, false
+	}
+	if err := s.redactCheck(r, c); err != nil {
+		writeErr(w, http.StatusInternalServerError, err.Error())
 		return nil, false
 	}
 	return c, true
 }
 
+// requireTask is requireCheck for a scheduled task.
 func (s *Server) requireTask(w http.ResponseWriter, r *http.Request, id string, manage bool) (*models.Task, bool) {
 	t, err := s.store.GetTask(r.Context(), id)
 	if err != nil {
 		writeErr(w, httpStatusFor(err), err.Error())
 		return nil, false
 	}
-	if t.AgentID != nil {
-		if !s.requireAgent(w, r, *t.AgentID) {
-			return nil, false
-		}
-	} else if t.PolicyID == nil || !s.requirePolicy(w, r, *t.PolicyID, manage) {
+	if !s.requireAttachments(w, r, t.Attachments, manage) {
+		return nil, false
+	}
+	if err := s.redactTask(r, t); err != nil {
+		writeErr(w, http.StatusInternalServerError, err.Error())
 		return nil, false
 	}
 	return t, true
@@ -137,29 +141,22 @@ func (s *Server) listChecks(w http.ResponseWriter, r *http.Request) {
 		writeErr(w, http.StatusInternalServerError, err.Error())
 		return
 	}
-	if set, scoped, err := s.scopedAgentSet(r); err != nil {
-		writeErr(w, http.StatusInternalServerError, err.Error())
-		return
-	} else if scoped {
-		visiblePolicies := map[string]bool{}
+	if s.scopeUserID(r) != "" {
 		f := checks[:0]
 		for _, c := range checks {
-			policyVisible := false
-			if c.PolicyID != nil {
-				var found bool
-				policyVisible, found = visiblePolicies[*c.PolicyID]
-				if !found {
-					policyVisible, err = s.store.PolicyAllowedForUser(r.Context(), s.scopeUserID(r), *c.PolicyID)
-					if err != nil {
-						writeErr(w, http.StatusInternalServerError, err.Error())
-						return
-					}
-					visiblePolicies[*c.PolicyID] = policyVisible
-				}
+			visible, _, err := s.attachmentAccess(r, c.Attachments)
+			if err != nil {
+				writeErr(w, http.StatusInternalServerError, err.Error())
+				return
 			}
-			if inScope(set, c.AgentID) || policyVisible {
-				f = append(f, c)
+			if !visible {
+				continue
 			}
+			if err := s.redactCheck(r, &c); err != nil {
+				writeErr(w, http.StatusInternalServerError, err.Error())
+				return
+			}
+			f = append(f, c)
 		}
 		checks = f
 	}
@@ -201,16 +198,11 @@ func (s *Server) createCheck(w http.ResponseWriter, r *http.Request) {
 		writeErr(w, http.StatusBadRequest, "type required")
 		return
 	}
-	if (c.AgentID == nil) == (c.PolicyID == nil) {
-		writeErr(w, http.StatusBadRequest, "exactly one of agent_id or policy_id is required")
+	atts, ok := s.requestedAttachments(w, r, c.Attachments, c.SingleAgentID, c.SinglePolicyID)
+	if !ok {
 		return
 	}
-	if c.AgentID != nil && !s.requireAgent(w, r, *c.AgentID) {
-		return
-	}
-	if c.PolicyID != nil && !s.requirePolicy(w, r, *c.PolicyID, true) {
-		return
-	}
+	c.Attachments = atts
 	// Provenance is the server's to record: a person's check has none, and a
 	// client cannot pass one off as an approved AI proposal.
 	c.ProposedBy, c.ApprovedBy = "", ""
@@ -241,9 +233,11 @@ func (s *Server) updateCheck(w http.ResponseWriter, r *http.Request) {
 		writeErr(w, http.StatusBadRequest, "invalid body")
 		return
 	}
-	if (c.AgentID != nil && (existing.AgentID == nil || *c.AgentID != *existing.AgentID)) ||
-		(c.PolicyID != nil && (existing.PolicyID == nil || *c.PolicyID != *existing.PolicyID)) {
-		writeErr(w, http.StatusBadRequest, "check ownership cannot be changed")
+	// Where a check applies changes through its attachments endpoints; an edit
+	// that names other targets is refused rather than silently ignored.
+	if requested, err := models.RequestedAttachments(c.Attachments, c.SingleAgentID, c.SinglePolicyID); err != nil ||
+		(len(requested) > 0 && !sameTargets(requested, existing.Attachments)) {
+		writeErr(w, http.StatusBadRequest, "change where a check applies through /api/checks/{id}/attachments")
 		return
 	}
 	c.ID = id
@@ -365,29 +359,22 @@ func (s *Server) listTasks(w http.ResponseWriter, r *http.Request) {
 		writeErr(w, http.StatusInternalServerError, err.Error())
 		return
 	}
-	if set, scoped, err := s.scopedAgentSet(r); err != nil {
-		writeErr(w, http.StatusInternalServerError, err.Error())
-		return
-	} else if scoped {
-		visiblePolicies := map[string]bool{}
+	if s.scopeUserID(r) != "" {
 		f := tasks[:0]
 		for _, t := range tasks {
-			policyVisible := false
-			if t.PolicyID != nil {
-				var found bool
-				policyVisible, found = visiblePolicies[*t.PolicyID]
-				if !found {
-					policyVisible, err = s.store.PolicyAllowedForUser(r.Context(), s.scopeUserID(r), *t.PolicyID)
-					if err != nil {
-						writeErr(w, http.StatusInternalServerError, err.Error())
-						return
-					}
-					visiblePolicies[*t.PolicyID] = policyVisible
-				}
+			visible, _, err := s.attachmentAccess(r, t.Attachments)
+			if err != nil {
+				writeErr(w, http.StatusInternalServerError, err.Error())
+				return
 			}
-			if inScope(set, t.AgentID) || policyVisible {
-				f = append(f, t)
+			if !visible {
+				continue
 			}
+			if err := s.redactTask(r, &t); err != nil {
+				writeErr(w, http.StatusInternalServerError, err.Error())
+				return
+			}
+			f = append(f, t)
 		}
 		tasks = f
 	}
@@ -401,16 +388,11 @@ func (s *Server) createTask(w http.ResponseWriter, r *http.Request) {
 		writeErr(w, http.StatusBadRequest, "invalid body")
 		return
 	}
-	if (t.AgentID == nil) == (t.PolicyID == nil) {
-		writeErr(w, http.StatusBadRequest, "exactly one of agent_id or policy_id is required")
+	atts, ok := s.requestedAttachments(w, r, t.Attachments, t.SingleAgentID, t.SinglePolicyID)
+	if !ok {
 		return
 	}
-	if t.AgentID != nil && !s.requireAgent(w, r, *t.AgentID) {
-		return
-	}
-	if t.PolicyID != nil && !s.requirePolicy(w, r, *t.PolicyID, true) {
-		return
-	}
+	t.Attachments = atts
 	if t.ScheduleKind == "" {
 		t.ScheduleKind = models.ScheduleInterval
 	}
@@ -458,9 +440,9 @@ func (s *Server) updateTask(w http.ResponseWriter, r *http.Request) {
 		writeErr(w, http.StatusBadRequest, "invalid body")
 		return
 	}
-	if (t.AgentID != nil && (existing.AgentID == nil || *t.AgentID != *existing.AgentID)) ||
-		(t.PolicyID != nil && (existing.PolicyID == nil || *t.PolicyID != *existing.PolicyID)) {
-		writeErr(w, http.StatusBadRequest, "task ownership cannot be changed")
+	if requested, err := models.RequestedAttachments(t.Attachments, t.SingleAgentID, t.SinglePolicyID); err != nil ||
+		(len(requested) > 0 && !sameTargets(requested, existing.Attachments)) {
+		writeErr(w, http.StatusBadRequest, "change where a task applies through /api/tasks/{id}/attachments")
 		return
 	}
 	t.ID = id
@@ -499,18 +481,12 @@ func (s *Server) deleteTask(w http.ResponseWriter, r *http.Request) {
 	writeJSON(w, http.StatusOK, map[string]string{"status": "deleted"})
 }
 
-// taskTargetAgents resolves the agents a task runs on (its own agent, or every
-// agent its policy is assigned to), narrowed to the caller's access scope.
+// taskTargetAgents resolves the agents a task runs on, through every one of its
+// attachments and once each, narrowed to the caller's access scope.
 func (s *Server) taskTargetAgents(r *http.Request, t *models.Task) ([]string, error) {
-	var ids []string
-	switch {
-	case t.AgentID != nil:
-		ids = []string{*t.AgentID}
-	case t.PolicyID != nil:
-		var err error
-		if ids, err = s.store.AgentIDsForPolicy(r.Context(), *t.PolicyID); err != nil {
-			return nil, err
-		}
+	ids, err := s.store.AgentIDsForTask(r.Context(), t.ID)
+	if err != nil {
+		return nil, err
 	}
 	if set, scoped, err := s.scopedAgentSet(r); err != nil {
 		return nil, err
@@ -948,7 +924,10 @@ func (s *Server) createAlertSuppression(w http.ResponseWriter, r *http.Request) 
 		writeErr(w, http.StatusBadRequest, "invalid suppression scope")
 		return
 	}
-	snapshot, snapshotErr := s.store.SuppressionAgentSnapshot(r.Context(), &sup)
+	// Captured before the scope is authorized and stored as captured: a device
+	// attached to the check, or a policy attachment added, after this point was
+	// never authorized and is not covered.
+	snapshot, snapshotErr := s.store.SuppressionSnapshot(r.Context(), &sup)
 	if !s.requireSuppressionScope(w, r, sup.ScopeType, sup.ScopeID) {
 		return
 	}
@@ -956,8 +935,19 @@ func (s *Server) createAlertSuppression(w http.ResponseWriter, r *http.Request) 
 		writeErr(w, httpStatusFor(snapshotErr), snapshotErr.Error())
 		return
 	}
-	if snapshot != nil {
-		sup.MonitoringScopeSince = &snapshot.MonitoringScopeSince
+	// What was authorized is what the second look sees: had the check gained
+	// or lost an attachment in between (a policy detached, a device moved off
+	// it), the first snapshot could cover something this caller was never
+	// authorized for. Refuse and let them try again.
+	if again, err := s.store.SuppressionSnapshot(r.Context(), &sup); err != nil || !snapshot.Same(again) {
+		writeErr(w, http.StatusConflict, "what this silence covers changed while it was being made; try again")
+		return
+	}
+	sup.Snapshot = snapshot
+	if snapshot != nil && sup.ScopeType == models.ScopeAgent {
+		if since, ok := snapshot.Agents[sup.ScopeID]; ok {
+			sup.MonitoringScopeSince = &since
+		}
 	}
 	now := time.Now()
 	if sup.StartsAt.IsZero() {

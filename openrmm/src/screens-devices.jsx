@@ -1981,11 +1981,18 @@ function DeviceJobs({ id, navigate, onClose }) {
   );
 }
 
-// Where a check or task on this device comes from: assigned to the device, or
-// a policy on its department, site or client.
+// Where a check or task on this device comes from: attached to the device,
+// and/or each policy that reaches it. A shared one lists every source and
+// still runs once. A server without sources sends one policy or none.
 function MonitoringSource({ row }) {
-  if (!row.policy_id) return <span>{t('dmon.direct')}</span>;
-  return <span className="inline-flex items-center gap-1 text-brandhi"><Icon name="policy" size={12} />{row.policy_name || t('dmon.policy')}</span>;
+  const sources = row.sources || (row.policy_id ? [{ policy_id: row.policy_id, name: row.policy_name }] : [{ direct: true }]);
+  return (
+    <span className="inline-flex flex-wrap items-center gap-x-2 gap-y-0.5">
+      {sources.map((s, i) => (s.direct
+        ? <span key={'direct-' + i}>{t('dmon.direct')}</span>
+        : <span key={s.policy_id} className="inline-flex items-center gap-1 text-brandhi"><Icon name="policy" size={12} />{s.name || t('dmon.policy')}</span>))}
+    </span>
+  );
 }
 
 // The link to the screen where these are created and changed: the drawer only

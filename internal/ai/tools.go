@@ -317,7 +317,7 @@ func Tools() []Tool {
 			},"additionalProperties":false}`),
 		}},
 	}
-	return append(append(append(base, highLevelTools()...), deviceToolDefs...), autonomyToolDefs...)
+	return append(append(append(append(base, highLevelTools()...), deviceToolDefs...), autonomyToolDefs...), editToolDefs...)
 }
 
 func ToolsForPermissions(perms map[string]bool) []Tool {
@@ -343,6 +343,9 @@ func toolPermission(name string) string {
 		return permission
 	}
 	if permission, ok := autonomyToolPermission(name); ok {
+		return permission
+	}
+	if permission, ok := editToolPermission(name); ok {
 		return permission
 	}
 	switch name {
@@ -413,6 +416,9 @@ func Execute(ctx context.Context, tc ToolContext, name string, args json.RawMess
 		return res
 	}
 	if res, ok := executeDeviceTool(ctx, tc, name, args); ok {
+		return res
+	}
+	if res, ok := executeEditTool(ctx, tc, name, args); ok {
 		return res
 	}
 	switch name {

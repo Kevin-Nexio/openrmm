@@ -8,6 +8,40 @@ tag.
 
 ### Added
 
+- **The AI can propose edits to existing objects.** AI Chat and MCP can propose
+  an edit to a library script, check, scheduled task, policy or patch policy:
+  its fields, where a check or task applies, and a policy's assignments and
+  excluded devices.
+  - **Nothing changes until a person applies it** in the object's screen. The
+    review shows each changed field before and after.
+  - **Applying makes the edit as that person**, through the same checks as an
+    edit by hand.
+  - **A proposal is stale if the object changed since**, and cannot be applied.
+    A newer proposal for the same object replaces the open one.
+  - **No autonomy setting applies an edit**, and a policy is switched on only
+    through its activation review.
+  - **An object still awaiting review cannot be edited this way.** It is
+    reviewed whole on its own screen.
+  - New tools: `list_scripts`, `get_editable_object` and `propose_*_edit`.
+    New endpoints: `/api/edit-proposals`. Migration 038.
+- **Checks and scheduled tasks in any number of policies and devices.** A check
+  or task is no longer owned by one policy or device: it is attached to as many
+  as needed, and a device gets it once whichever of them reach it. Policies
+  organised by function ("File server", "Backup server") can share a check and
+  edit it once.
+  - The editors take several policies and devices as chips.
+  - A policy's drawer has **Add an existing check** and **Add an existing task**.
+  - Inside a policy, a shared item offers **Make a copy for this policy** and
+    **Remove from this policy**.
+  - The lists show where each item applies, or **Not in use**, and the device
+    page lists every source.
+  - Migration 037 attaches every existing check and task to its policy or device.
+  - A restricted user changes a shared item only when every attachment is a
+    device in their scope, and sees only those attachments.
+  - An AI proposal awaiting review stays on its one attachment, and a check
+    silence never widens to where the check is attached later.
+  - API: `attachments` on checks and tasks, and `/attachments` and `/copy`
+    endpoints. `agent_id` and `policy_id` keep working for one target.
 - **Devices ▸ Last boot.** An optional column shows when each device last
   booted, with the exact time on hover, and sorts the devices that have run
   longest first. It starts hidden: turn it on from **Columns**. The server works

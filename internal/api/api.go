@@ -329,6 +329,11 @@ func (s *Server) Router() http.Handler {
 		r.With(s.requirePermission(models.PermChecksManage)).Post("/checks", s.createCheck)
 		r.With(s.requirePermission(models.PermChecksManage)).Put("/checks/{id}", s.updateCheck)
 		r.With(s.requirePermission(models.PermChecksManage)).Delete("/checks/{id}", s.deleteCheck)
+		// Where a check applies: any number of policies and devices.
+		r.With(s.requirePermission(models.PermChecksView)).Get("/checks/{id}/attachments", s.listCheckAttachments)
+		r.With(s.requirePermission(models.PermChecksManage)).Post("/checks/{id}/attachments", s.attachCheck)
+		r.With(s.requirePermission(models.PermChecksManage)).Delete("/checks/{id}/attachments/{kind}/{target}", s.detachCheck)
+		r.With(s.requirePermission(models.PermChecksManage)).Post("/checks/{id}/copy", s.copyCheck)
 
 		r.With(s.requirePermission(models.PermTasksView)).Get("/tasks", s.listTasks)
 		r.With(s.requirePermission(models.PermTasksView)).Get("/tasks/{id}/targets", s.taskTargets)
@@ -336,6 +341,19 @@ func (s *Server) Router() http.Handler {
 		r.With(s.requirePermission(models.PermTasksManage)).Put("/tasks/{id}", s.updateTask)
 		r.With(s.requirePermission(models.PermTasksManage)).Post("/tasks/{id}/run", s.runTask)
 		r.With(s.requirePermission(models.PermTasksManage)).Delete("/tasks/{id}", s.deleteTask)
+		r.With(s.requirePermission(models.PermTasksView)).Get("/tasks/{id}/attachments", s.listTaskAttachments)
+		r.With(s.requirePermission(models.PermTasksManage)).Post("/tasks/{id}/attachments", s.attachTask)
+		r.With(s.requirePermission(models.PermTasksManage)).Delete("/tasks/{id}/attachments/{kind}/{target}", s.detachTask)
+		r.With(s.requirePermission(models.PermTasksManage)).Post("/tasks/{id}/copy", s.copyTask)
+
+		// Edits the AI proposed to scripts, checks, tasks, policies and patch
+		// policies. Each handler checks the kind's own permissions: seeing one
+		// takes the view permission of its object, deciding it the one an edit
+		// by hand takes.
+		r.Get("/edit-proposals", s.listEditProposals)
+		r.Get("/edit-proposals/{id}", s.getEditProposal)
+		r.Post("/edit-proposals/{id}/apply", s.applyEditProposal)
+		r.Post("/edit-proposals/{id}/reject", s.rejectEditProposal)
 
 		r.With(s.requirePermission(models.PermPoliciesView)).Get("/policies", s.listPolicies)
 		r.With(s.requirePermission(models.PermPoliciesView)).Get("/policies/{id}/assignments", s.listPolicyAssignments)
