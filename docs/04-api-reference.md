@@ -116,7 +116,7 @@ the caller's authority.
 
 | Method | Path | Permission | Description |
 |--------|------|------------|-------------|
-| GET | `/api/devices` | `devices.view` | List all agents → `{ "devices": [...] }`. Each device has `logged_in_user` (the interactive user its agent last reported, `""` when no one is logged in) and `logged_in_user_since`, plus `last_logged_in_user` (the last user seen, kept after they log off) and `last_logged_in_user_at` |
+| GET | `/api/devices` | `devices.view` | List all agents → `{ "devices": [...] }`. Each device has `logged_in_user` (the interactive user its agent last reported, `""` when no one is logged in) and `logged_in_user_since`, plus `last_logged_in_user` (the last user seen, kept after they log off) and `last_logged_in_user_at`, and `last_boot_at` (when the device last booted, from the uptime in its latest inventory; absent until the first one) |
 | GET | `/api/devices/{id}` | `devices.view` | One agent |
 | GET | `/api/devices/{id}/inventory` | `devices.view` | Latest inventory snapshot |
 | GET | `/api/devices/{id}/remote-capabilities` | `devices.view` | On-demand conservative native-desktop capability preflight |

@@ -1310,3 +1310,8 @@ CREATE INDEX IF NOT EXISTS idx_agents_logged_in_user ON agents (lower(logged_in_
 ALTER TABLE agents
     ADD COLUMN IF NOT EXISTS last_logged_in_user TEXT NOT NULL DEFAULT '',
     ADD COLUMN IF NOT EXISTS last_logged_in_user_at TIMESTAMPTZ;
+
+-- When a device last booted (Devices ▸ Last boot): the time the server stored
+-- an inventory snapshot minus the uptime the agent reported in it. NULL until
+-- the first inventory.
+ALTER TABLE agents ADD COLUMN IF NOT EXISTS last_boot_at TIMESTAMPTZ;
