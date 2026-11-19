@@ -6,6 +6,15 @@ tag.
 
 ## [Unreleased]
 
+### Security
+
+- **pgx 5.13.0** (`github.com/jackc/pgx/v5`, #278). It fixes GHSA-w9rp-vfrh-q8vv:
+  a malformed server response could panic `Rows.Values`. OpenRMM does not
+  call `Rows.Values`; it reads rows with `Scan`, which already checked the
+  count. The release also stops retrying a query after the connection closed
+  mid-response. Its change to client certificates does not apply: OpenRMM
+  configures none (`sslcert`, `sslkey` or `TLSConfig`).
+
 ## [0.11.4] - 2026-11-17
 
 ### Fixed
