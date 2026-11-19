@@ -178,7 +178,7 @@ test('the job card names the variables a job receives, and says from the server 
   assert.match(chatSrc, /<window\.JobVariables names=\{j\.variables\} oneOff=\{!j\.script_id\} \/>/);
 });
 
-test('a bulk deployment says that only its text is sent', () => {
-  const bulk = devices.slice(devices.indexOf('function BulkDeployModal('), devices.indexOf('function RunScriptForm('));
-  assert.match(bulk, /<Field label=\{t\('deploy\.script'\)\} hint=\{t\('deploy\.noVariablesHint'\)\}>/);
+test('a bulk deployment of typed text says that only its text is sent', () => {
+  const bulk = devices.slice(devices.indexOf('function BulkDeployModal('), devices.indexOf('/* ----------------------------- Device detail'));
+  assert.match(bulk, /<Field label=\{t\('deploy\.script'\)\} hint=\{t\(canLibrary \? 'deploy\.noVariablesHint' : 'deploy\.noVariablesHintNoLibrary'\)\}>/);
 });

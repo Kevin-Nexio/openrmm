@@ -24,6 +24,7 @@ import (
 
 	"github.com/p1ngu/rmm/internal/ai"
 	"github.com/p1ngu/rmm/internal/auth"
+	"github.com/p1ngu/rmm/internal/autonomy"
 	"github.com/p1ngu/rmm/internal/config"
 	"github.com/p1ngu/rmm/internal/hub"
 	"github.com/p1ngu/rmm/internal/jobs"
@@ -1614,21 +1615,55 @@ func (s *Server) mayRunUnapproved(r *http.Request) bool {
 // Targets are the union of explicit agent_ids + a device group + a site,
 // intersected with the caller's access scope. Every job lands in
 // awaiting_approval sharing a batch_id; nothing runs until the batch is approved.
+//
+// The script is either text (shell + script) or a saved library script
+// (script_id, with params for its declared parameters). A library script runs
+// by id on every device, so its script variables go with it, as they do when
+// it runs from one device's page.
 func (s *Server) createBulkJob(w http.ResponseWriter, r *http.Request) {
 	var in struct {
-		AgentIDs    []string `json:"agent_ids"`
-		GroupID     string   `json:"group_id"`
-		SiteID      string   `json:"site_id"`
-		Shell       string   `json:"shell"`
-		Script      string   `json:"script"`
-		Description string   `json:"description"`
+		AgentIDs    []string       `json:"agent_ids"`
+		GroupID     string         `json:"group_id"`
+		SiteID      string         `json:"site_id"`
+		Shell       string         `json:"shell"`
+		Script      string         `json:"script"`
+		ScriptID    string         `json:"script_id"`
+		Params      map[string]any `json:"params"`
+		Description string         `json:"description"`
 	}
 	if err := decode(r, &in); err != nil {
 		writeErr(w, http.StatusBadRequest, "invalid body")
 		return
 	}
-	if in.Script == "" {
+	var library *models.Script
+	var params map[string]string
+	switch {
+	case in.ScriptID != "" && in.Script != "":
+		writeErr(w, http.StatusBadRequest, "send script or script_id, not both")
+		return
+	case in.ScriptID != "":
+		sc, err := s.store.GetScript(r.Context(), in.ScriptID)
+		if err != nil {
+			writeErr(w, httpStatusFor(err), err.Error())
+			return
+		}
+		if sc.Pending {
+			writeErr(w, http.StatusConflict, store.ErrScriptPending.Error())
+			return
+		}
+		if params, err = autonomy.ValidateParamValues(sc.Params, in.Params); err != nil {
+			writeErr(w, http.StatusBadRequest, err.Error())
+			return
+		}
+		library = sc
+		if in.Description == "" {
+			in.Description = "library: " + sc.Name
+		}
+	case in.Script == "":
 		writeErr(w, http.StatusBadRequest, "script is required")
+		return
+	case len(in.Params) > 0:
+		writeErr(w, http.StatusBadRequest, "params need a script_id")
 		return
 	}
 	if in.Shell == "" {
@@ -1691,7 +1726,13 @@ func (s *Server) createBulkJob(w http.ResponseWriter, r *http.Request) {
 	// A deployment never spans companies: ProposeBulk splits the targets by
 	// company and creates ONE batch per company (so a "deploy to all companies"
 	// request fans out into one batch per company). Same engine as the AI tool.
-	batches, err := s.jobs.ProposeBulk(r.Context(), ids, in.Shell, in.Script, in.Description, actorOf(r))
+	var batches []jobs.BatchInfo
+	var err error
+	if library != nil {
+		batches, err = s.jobs.ProposeBulkScript(r.Context(), ids, library, params, in.Description, actorOf(r))
+	} else {
+		batches, err = s.jobs.ProposeBulk(r.Context(), ids, in.Shell, in.Script, in.Description, actorOf(r))
+	}
 	if err != nil {
 		writeErr(w, httpStatusFor(err), err.Error())
 		return

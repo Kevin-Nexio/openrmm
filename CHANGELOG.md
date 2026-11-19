@@ -14,6 +14,15 @@ tag.
   it out from the uptime the agent already reports in its inventory, so agents
   do not need an update. Devices that reported an inventory before the upgrade
   get it at once (migration 036).
+- **Deploy to many runs saved library scripts.** Devices ▸ Deploy to many has
+  a **From the library** option: pick a saved script, fill in its parameters,
+  and it runs by id on every selected device, with its script variables. Each
+  device gets the value set for it, its department, site or client, resolved
+  when its company's batch is approved. Before, a deployment sent typed text
+  only, without variables or parameters. Every device is checked first; if
+  any could not run the script (no value for a variable, an agent too old),
+  the deployment is refused and names them. `POST /api/jobs/bulk` takes
+  `script_id` and `params`.
 - **A device's Jobs tab shows each job's output.** A row expands in place to
   show the output and exit code, or why there is none yet; **Open in Jobs** still
   leads to the full job.
