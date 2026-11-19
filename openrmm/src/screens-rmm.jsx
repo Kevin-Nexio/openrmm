@@ -1012,7 +1012,7 @@ function TasksScreen() {
                   <td className="px-3 py-3 text-[12.5px] text-muted flex items-center gap-1.5"><Icon name="clock" size={13} className="text-faint" />{taskSchedule(task)}</td>
                   <td className="px-3 py-3 hidden lg:table-cell text-[12px] text-faint">{sc?.name || t('tasks.inline')}</td>
                   <td className="px-3 py-3"><Toggle checked={task.enabled} onChange={() => (!task.enabled && awaitingReview(task) ? setReviewTask(task) : setConfirmToggleTask(task))} disabled={!can('tasks.manage')} /></td>
-                  <td className="px-4 py-3 text-right">{can('tasks.manage') && <div className="flex items-center justify-end gap-1"><Button size="sm" variant="ghost" icon="play" onClick={() => askRun(task)}>{t('action.runNow')}</Button><Button size="sm" variant="ghost" icon="edit" onClick={() => setEditing(task)}>{t('action.edit')}</Button></div>}</td>
+                  <td className="px-4 py-3 text-right">{can('tasks.manage') && <div className="flex items-center justify-end gap-1">{!awaitingReview(task) && <Button size="sm" variant="ghost" icon="play" onClick={() => askRun(task)}>{t('action.runNow')}</Button>}<Button size="sm" variant="ghost" icon="edit" onClick={() => setEditing(task)}>{t('action.edit')}</Button></div>}</td>
                 </tr>
               );
             })}

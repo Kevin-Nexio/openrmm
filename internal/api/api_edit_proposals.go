@@ -11,6 +11,7 @@ import (
 	"strings"
 
 	"github.com/go-chi/chi/v5"
+	"github.com/google/uuid"
 
 	"github.com/p1ngu/rmm/internal/models"
 	"github.com/p1ngu/rmm/internal/store"
@@ -20,8 +21,9 @@ import (
 // checks, tasks, policies and patch policies. A proposal changes nothing. A
 // person who could make the same edit by hand reviews it and applies it, and
 // applying it runs the console's own handlers as that person, step by step:
-// the same validation, scope rules, side effects and audit as an edit by hand,
-// with no second write path to keep in step. The AI never applies its own
+// the same validation, scope rules and side effects as an edit by hand.
+// Every step and the decision are recorded in one database transaction.
+// The AI never applies its own
 // proposals, and autonomy does not cover them.
 
 // editPermissions are what seeing and deciding a proposal of each kind take.
@@ -35,7 +37,7 @@ var editPermissions = map[string]struct{ view, manage string }{
 
 // editTargetVisible reports whether the caller may see the object a proposal
 // is about, as its own screen would show it.
-func (s *Server) editTargetVisible(r *http.Request, kind string, t *store.EditTarget, targetID string) (bool, error) {
+func (s *Server) editTargetVisible(r *http.Request, kind string, t *store.EditTarget) (bool, error) {
 	uid := s.scopeUserID(r)
 	if uid == "" {
 		return true, nil
@@ -95,6 +97,15 @@ func attachmentsOf(t *store.EditTarget) []models.Attachment {
 	return out
 }
 
+// Scope filtering for proposal reads must also cover outcome text. A finished
+// step can contain the ID of a target outside the reader's scope.
+func (s *Server) redactEditProposal(r *http.Request, p *models.EditProposal) {
+	if s.scopeUserID(r) != "" {
+		p.Changes = nil
+		p.Outcome = ""
+	}
+}
+
 func (s *Server) listEditProposals(w http.ResponseWriter, r *http.Request) {
 	kind, status := r.URL.Query().Get("kind"), r.URL.Query().Get("status")
 	if kind != "" && !models.ValidEditKind(kind) {
@@ -123,16 +134,14 @@ func (s *Server) listEditProposals(w http.ResponseWriter, r *http.Request) {
 			writeErr(w, http.StatusInternalServerError, err.Error())
 			return
 		}
-		visible, err := s.editTargetVisible(r, p.Kind, target, p.TargetID)
+		visible, err := s.editTargetVisible(r, p.Kind, target)
 		if err != nil {
 			writeErr(w, http.StatusInternalServerError, err.Error())
 			return
 		}
 		if visible {
 			p.TargetName = target.Name
-			if s.scopeUserID(r) != "" {
-				p.Changes = nil // its raw content may name targets outside the caller's scope
-			}
+			s.redactEditProposal(r, &p)
 			out = append(out, p)
 		}
 	}
@@ -140,36 +149,31 @@ func (s *Server) listEditProposals(w http.ResponseWriter, r *http.Request) {
 }
 
 // loadEditProposal reads a proposal the caller may see, with its object.
-func (s *Server) loadEditProposal(w http.ResponseWriter, r *http.Request, manage bool) (*models.EditProposal, *store.EditTarget, bool) {
+func (s *Server) loadEditProposal(w http.ResponseWriter, r *http.Request) (*models.EditProposal, *store.EditTarget, bool) {
 	p, err := s.store.GetEditProposal(r.Context(), chi.URLParam(r, "id"))
 	if err != nil {
 		writeErr(w, httpStatusFor(err), err.Error())
 		return nil, nil, false
 	}
-	perm := editPermissions[p.Kind]
-	need := perm.view
-	if manage {
-		need = perm.manage
-	}
-	if !hasPermission(r, need) {
+	if need := editPermissions[p.Kind].view; !hasPermission(r, need) {
 		writeErr(w, http.StatusForbidden, "missing permission: "+need)
 		return nil, nil, false
 	}
 	target, err := s.store.EditTarget(r.Context(), p.Kind, p.TargetID)
 	if errors.Is(err, store.ErrNotFound) {
-		if s.scopeUserID(r) != "" {
-			writeErr(w, http.StatusNotFound, "not found")
-			return nil, nil, false
+		if s.scopeUserID(r) == "" {
+			return p, nil, true
 		}
-		return p, nil, true
-	}
-	if err != nil {
-		writeErr(w, http.StatusInternalServerError, err.Error())
+		writeErr(w, http.StatusNotFound, "not found")
 		return nil, nil, false
 	}
-	visible, err := s.editTargetVisible(r, p.Kind, target, p.TargetID)
 	if err != nil {
-		writeErr(w, http.StatusInternalServerError, err.Error())
+		writeErr(w, httpStatusFor(err), err.Error())
+		return nil, nil, false
+	}
+	visible, err := s.editTargetVisible(r, p.Kind, target)
+	if err != nil {
+		writeErr(w, httpStatusFor(err), err.Error())
 		return nil, nil, false
 	}
 	if !visible {
@@ -197,7 +201,7 @@ func decodeEditChanges(p *models.EditProposal) (*models.EditChanges, error) {
 // would leave it, whether it went stale, and the names of the policies,
 // devices and scopes it mentions that the caller may see.
 func (s *Server) getEditProposal(w http.ResponseWriter, r *http.Request) {
-	p, target, ok := s.loadEditProposal(w, r, false)
+	p, target, ok := s.loadEditProposal(w, r)
 	if !ok {
 		return
 	}
@@ -217,9 +221,7 @@ func (s *Server) getEditProposal(w http.ResponseWriter, r *http.Request) {
 	current := target.View
 	s.redactEditView(r, &current)
 	s.redactEditView(r, &proposed)
-	if s.scopeUserID(r) != "" {
-		p.Changes = nil
-	}
+	s.redactEditProposal(r, p)
 	out["current"] = current
 	out["proposed"] = proposed
 	out["stale"] = stale
@@ -290,83 +292,193 @@ func (s *Server) editNames(r *http.Request, views ...models.EditView) map[string
 	return names
 }
 
-// applyEditProposal applies a pending proposal as the caller.
-func (s *Server) applyEditProposal(w http.ResponseWriter, r *http.Request) {
-	p, target, ok := s.loadEditProposal(w, r, true)
-	if !ok {
-		return
+// lockEditDecision authorizes the whole target under its write lock before
+// acquiring the proposal lock. An unauthorized request cannot close or claim it.
+func (s *Server) lockEditDecision(w http.ResponseWriter, r *http.Request) (*models.EditProposal, *store.EditTarget, error) {
+	ctx := r.Context()
+	id := chi.URLParam(r, "id")
+	if _, err := uuid.Parse(id); err != nil {
+		writeErr(w, http.StatusBadRequest, "invalid proposal id")
+		return nil, nil, errConfigResponse
 	}
-	actor := actorOf(r)
-	if p.Status != models.EditPending {
-		writeErr(w, http.StatusConflict, "the proposal is "+p.Status)
-		return
+	p, err := s.store.GetEditProposal(ctx, id)
+	if err != nil {
+		return nil, nil, err
 	}
-	if target == nil {
-		_ = s.store.FinishEditProposal(r.Context(), p.ID, models.EditFailed, actor, "the object no longer exists")
-		writeErr(w, http.StatusGone, "the object no longer exists")
-		return
+	perm, valid := editPermissions[p.Kind]
+	if !valid || !hasPermission(r, perm.manage) {
+		writeErr(w, http.StatusForbidden, "missing permission: "+perm.manage)
+		return nil, nil, errConfigResponse
 	}
-	if _, err := s.store.ClaimEditProposal(r.Context(), p.ID, actor); err != nil {
-		writeErr(w, httpStatusFor(err), "the proposal is being decided by someone else")
-		return
+	scoped := s.scopeUserID(r) != ""
+	if scoped && p.Kind != models.EditCheck && p.Kind != models.EditTask {
+		// Match the hidden policy proposals and the global script write rule.
+		if p.Kind == models.EditScript {
+			writeErr(w, http.StatusForbidden, "restricted principals cannot mutate the global script library")
+		} else {
+			writeErr(w, http.StatusNotFound, "not found")
+		}
+		return nil, nil, errConfigResponse
 	}
-	finish := func(status, outcome string) {
-		if err := s.store.FinishEditProposal(context.WithoutCancel(r.Context()), p.ID, status, actor, outcome); err != nil {
-			_ = s.store.ReleaseEditProposal(context.WithoutCancel(r.Context()), p.ID)
+	var target *store.EditTarget
+	err = s.store.LockConfigTarget(ctx, p.Kind, p.TargetID, scoped)
+	if errors.Is(err, store.ErrNotFound) && !scoped {
+		// An unrestricted reviewer can still close the proposal of a deleted
+		// object. Target ids are assigned by the server and are never reused.
+	} else if err != nil {
+		return nil, nil, err
+	} else {
+		target, err = s.store.EditTarget(ctx, p.Kind, p.TargetID)
+		if err != nil {
+			return nil, nil, err
+		}
+		if scoped && !s.requireAttachments(w, r, attachmentsOf(target), true) {
+			return nil, nil, errConfigResponse
 		}
 	}
-	if target.Pending {
-		finish(models.EditFailed, "the object is a proposal awaiting review; review it on its own screen")
-		writeJSON(w, http.StatusConflict, map[string]any{"error": "the object is a proposal awaiting review; review it on its own screen", "status": models.EditFailed})
-		return
+	if target != nil && !s.requireEditDestinations(w, r, p, target) {
+		return nil, nil, errConfigResponse
 	}
-	if target.View.Hash() != p.BaseHash {
-		finish(models.EditStale, "the object changed after the proposal was made")
-		writeJSON(w, http.StatusConflict, map[string]any{"error": "the object changed after the proposal was made; ask for a new one", "status": models.EditStale})
-		return
+	p, err = s.store.LockEditProposal(ctx, p.ID)
+	return p, target, err
+}
+
+// requireEditDestinations covers privileges required by the proposed edit,
+// before even a failed apply or rejection can consume the proposal.
+func (s *Server) requireEditDestinations(w http.ResponseWriter, r *http.Request, p *models.EditProposal, target *store.EditTarget) bool {
+	if p.Kind == models.EditScript && !hasPermission(r, models.PermScriptsVariables) {
+		current, _ := target.View.Fields["variables"].([]any)
+		var proposed []string
+		if c, err := decodeEditChanges(p); err == nil {
+			_ = json.Unmarshal(c.Fields["variables"], &proposed)
+		}
+		if len(current) > 0 || len(proposed) > 0 {
+			writeErr(w, http.StatusForbidden, "scripts.variables required")
+			return false
+		}
+	}
+	if s.scopeUserID(r) == "" {
+		return true
 	}
 	c, err := decodeEditChanges(p)
 	if err != nil {
-		finish(models.EditFailed, err.Error())
-		writeErr(w, http.StatusUnprocessableEntity, err.Error())
-		return
+		writeErr(w, http.StatusUnprocessableEntity, "invalid proposal changes")
+		return false
 	}
-	steps := s.editSteps(p, target, c)
-	var done []string
-	for _, st := range steps {
-		code, body := s.replay(r, st.handler, st.params, st.body)
-		if code >= 300 {
-			msg := replayError(body)
-			outcome := st.name + ": " + msg
-			if len(done) > 0 {
-				outcome += " (applied before it: " + strings.Join(done, ", ") + ")"
+	for _, targets := range [][]models.Attachment{c.Attach, c.Detach} {
+		for _, a := range targets {
+			if a.PolicyID != nil {
+				return s.requireUnrestricted(w, r, "global policies")
 			}
-			finish(models.EditFailed, outcome)
-			_ = s.store.AddAudit(r.Context(), actor, p.Kind+".edit.fail", p.TargetID, alertAuditDetail(map[string]any{
-				"proposal_id": p.ID, "proposed_by": p.ProposedBy, "step": st.name, "error": msg, "applied": done}))
-			writeJSON(w, http.StatusConflict, map[string]any{"error": outcome, "status": models.EditFailed})
-			return
+			if !s.lockAttachmentAgent(w, r, a) || !s.requireAttachmentTarget(w, r, a) {
+				return false
+			}
 		}
-		done = append(done, st.name)
 	}
-	finish(models.EditApplied, strings.Join(done, ", "))
-	_ = s.store.AddAudit(r.Context(), actor, p.Kind+".edit.apply", p.TargetID, alertAuditDetail(map[string]any{
-		"proposal_id": p.ID, "proposed_by": p.ProposedBy, "steps": done}))
+	return true
+}
+
+func (s *Server) applyEditProposal(w http.ResponseWriter, r *http.Request) {
+	s.configWrite(w, r, (*Server).applyLockedEditProposal)
+}
+
+// applyLockedEditProposal uses a savepoint for the edit. If a step fails, the
+// edit and every side effect are rolled back before marking the proposal failed.
+func (s *Server) applyLockedEditProposal(w *stepRecorder, r *http.Request) error {
+	p, target, err := s.lockEditDecision(w, r)
+	if err != nil {
+		return err
+	}
+	ctx, actor := r.Context(), actorOf(r)
+	finish := func(status, outcome string, code int) error {
+		if err := s.store.FinishEditProposal(ctx, p.ID, status, actor, outcome); err != nil {
+			return err
+		}
+		writeJSON(w, code, map[string]any{"error": outcome, "status": status})
+		return nil
+	}
+	if target == nil {
+		return finish(models.EditFailed, "the object no longer exists", http.StatusGone)
+	}
+	if target.Pending {
+		return finish(models.EditFailed, "the object is a proposal awaiting review; review it on its own screen", http.StatusConflict)
+	}
+	if target.View.Hash() != p.BaseHash {
+		return finish(models.EditStale, "the object changed after the proposal was made; ask for a new one", http.StatusConflict)
+	}
+	c, err := decodeEditChanges(p)
+	if err != nil {
+		return finish(models.EditFailed, err.Error(), http.StatusUnprocessableEntity)
+	}
+	var done []string
+	var failedStep, failure string
+	err = s.store.InConfigTransaction(ctx, func(tx *store.Store) error {
+		writer := &Server{cfg: s.cfg, store: tx}
+		// The base hash and these unchanged fields were read under the target
+		// and link locks. The normal handlers still validate the proposed fields.
+		for _, st := range writer.editSteps(p, target, c) {
+			code, body := writer.replay(r, st.handler, st.params, st.body)
+			if code >= 500 {
+				return errors.New("an edit step could not be saved")
+			}
+			if code >= 300 {
+				failedStep, failure = st.name, replayError(body)
+				return errConfigResponse
+			}
+			done = append(done, st.name)
+		}
+		return nil
+	})
+	if errors.Is(err, errConfigResponse) {
+		if err := s.store.AddAudit(ctx, actor, p.Kind+".edit.fail", p.TargetID, alertAuditDetail(map[string]any{
+			"proposal_id": p.ID, "proposed_by": p.ProposedBy, "step": failedStep, "error": failure,
+		})); err != nil {
+			return err
+		}
+		return finish(models.EditFailed, failedStep+": "+failure, http.StatusConflict)
+	}
+	if err != nil {
+		return err
+	}
+	if err := s.store.FinishEditProposal(ctx, p.ID, models.EditApplied, actor, strings.Join(done, ", ")); err != nil {
+		return err
+	}
+	if err := s.store.AddAudit(ctx, actor, p.Kind+".edit.apply", p.TargetID, alertAuditDetail(map[string]any{
+		"proposal_id": p.ID, "proposed_by": p.ProposedBy, "steps": done,
+	})); err != nil {
+		return err
+	}
+	if p.Kind == models.EditScript && len(c.Fields) > 0 {
+		script, err := s.store.GetScript(ctx, p.TargetID)
+		if err != nil {
+			return err
+		}
+		w.afterCommit = func(root *Server) { root.store.RegisterScriptCategory(ctx, script.Category) }
+	}
 	writeJSON(w, http.StatusOK, map[string]any{"status": models.EditApplied, "steps": done})
+	return nil
 }
 
 func (s *Server) rejectEditProposal(w http.ResponseWriter, r *http.Request) {
-	p, _, ok := s.loadEditProposal(w, r, true)
-	if !ok {
-		return
+	s.configWrite(w, r, (*Server).rejectLockedEditProposal)
+}
+
+func (s *Server) rejectLockedEditProposal(w *stepRecorder, r *http.Request) error {
+	p, _, err := s.lockEditDecision(w, r)
+	if err != nil {
+		return err
 	}
-	if err := s.store.FinishEditProposal(r.Context(), p.ID, models.EditRejected, actorOf(r), ""); err != nil {
-		writeErr(w, httpStatusFor(err), "the proposal is no longer pending")
-		return
+	ctx, actor := r.Context(), actorOf(r)
+	if err := s.store.FinishEditProposal(ctx, p.ID, models.EditRejected, actor, ""); err != nil {
+		return err
 	}
-	_ = s.store.AddAudit(r.Context(), actorOf(r), p.Kind+".edit.reject", p.TargetID, alertAuditDetail(map[string]any{
-		"proposal_id": p.ID, "proposed_by": p.ProposedBy}))
+	if err := s.store.AddAudit(ctx, actor, p.Kind+".edit.reject", p.TargetID, alertAuditDetail(map[string]any{
+		"proposal_id": p.ID, "proposed_by": p.ProposedBy,
+	})); err != nil {
+		return err
+	}
 	writeJSON(w, http.StatusOK, map[string]any{"status": models.EditRejected})
+	return nil
 }
 
 // editStep is one handler call applying part of a proposal.
@@ -412,7 +524,7 @@ func (s *Server) editSteps(p *models.EditProposal, t *store.EditTarget, c *model
 	switch p.Kind {
 	case models.EditScript:
 		if len(c.Fields) > 0 {
-			steps = append(steps, editStep{"update", s.updateScript, map[string]string{"id": id}, withFields(t.Object, c.Fields)})
+			steps = append(steps, editStep{"update", s.updateScriptFromProposal, map[string]string{"id": id}, withFields(t.Object, c.Fields)})
 		}
 	case models.EditCheck, models.EditTask:
 		update, detach, attach := s.updateCheck, s.detachCheck, s.attachCheck
@@ -511,10 +623,11 @@ func (s *Server) replay(r *http.Request, h http.HandlerFunc, params map[string]s
 
 // stepRecorder captures a replayed handler's answer.
 type stepRecorder struct {
-	header http.Header
-	code   int
-	body   bytes.Buffer
-	wrote  bool
+	header      http.Header
+	code        int
+	body        bytes.Buffer
+	wrote       bool
+	afterCommit func(*Server)
 }
 
 func (r *stepRecorder) Header() http.Header { return r.header }

@@ -341,7 +341,11 @@ task, policy, patch_policy), `target_id`, `base_hash` (the object's editable vie
 as the proposal saw it), `changes` (JSONB: fields, attachments, assignments,
 exclusions), `reason`, `proposed_by`, `status` (pending, applied, rejected,
 stale, superseded, failed), `decided_by`, `outcome`, `created_at`,
-`decided_at`. One pending row per object (partial unique index).
+`decided_at`. One pending row per object (partial unique index). A decision
+locks both the proposal and its target. The edit, outcome and audit commit in
+one transaction. The `claimed_at` column is retained for compatibility with
+existing rows. Migration 039 orders default human audit timestamps under the
+chain lock so records from one transaction have consistent predecessors.
 
 ### `alert_suppression_agents`
 What a check-scoped silence covered when it was made (migration 037): one row per

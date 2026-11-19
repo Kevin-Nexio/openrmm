@@ -16,8 +16,9 @@ tag.
     review shows each changed field before and after.
   - **Applying makes the edit as that person**, through the same checks as an
     edit by hand.
-  - **A proposal is stale if the object changed since**, and cannot be applied.
-    A newer proposal for the same object replaces the open one.
+  - **A proposal is stale if its reviewed state changed.** A reviewer must
+    have authority over the whole object. The edit, decision and audit commit
+    together. A newer proposal can replace an open one before a decision starts.
   - **No autonomy setting applies an edit**, and a policy is switched on only
     through its activation review.
   - **An object still awaiting review cannot be edited this way.** It is

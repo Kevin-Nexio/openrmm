@@ -172,14 +172,19 @@ func TestEditProposalsE2EIntegration(t *testing.T) {
 		t.Fatalf("apply after reject = %d", rec.Code)
 	}
 
-	// A step the server refuses fails the proposal and says which.
+	// A step the server refuses fails the proposal and rolls back earlier
+	// steps, even when the first step was itself a valid edit.
 	ghost := uuid.NewString()
-	failing := propose("propose_check_edit", map[string]any{"id": check.ID, "reason": "d", "attach": []map[string]any{{"agent_id": ghost}}})["proposal_id"].(string)
+	failing := propose("propose_check_edit", map[string]any{"id": check.ID, "reason": "d",
+		"fields": map[string]any{"name": "should roll back"}, "attach": []map[string]any{{"agent_id": ghost}}})["proposal_id"].(string)
 	if rec := f.do("POST", "/api/edit-proposals/"+failing+"/apply", ""); rec.Code != 409 || !strings.Contains(rec.Body.String(), "attach agent:"+ghost) {
 		t.Fatalf("failing step = %d %s", rec.Code, rec.Body)
 	}
 	if status(failing) != models.EditFailed {
 		t.Fatalf("failing proposal = %s", status(failing))
+	}
+	if got, err := f.store.GetCheck(ctx, check.ID); err != nil || got.Name != "by hand" {
+		t.Fatalf("a failed proposal kept an earlier edit: %+v %v", got, err)
 	}
 
 	// A policy: rename, switch off, assign, exclude, and drop an assignment named by its scope.
@@ -200,6 +205,25 @@ func TestEditProposalsE2EIntegration(t *testing.T) {
 		len(after.View.Assignments) != 1 || after.View.Assignments[0].ScopeType != "client" || after.View.Assignments[0].OS != "linux" ||
 		len(after.View.Exclusions) != 1 || after.View.Exclusions[0] != pc.ID {
 		t.Fatalf("policy after the edit = %+v", after.View)
+	}
+
+	// A failed later step rolls back the update and its audit event. The
+	// transaction still records a single persisted failed decision.
+	badPolicy := propose("propose_policy_edit", map[string]any{"id": policy.ID, "reason": "change assignment",
+		"fields":          map[string]any{"name": "discarded policy name"},
+		"add_assignments": []map[string]any{{"scope_type": "site", "scope_id": ghost}},
+	})["proposal_id"].(string)
+	if rec := f.do("POST", "/api/edit-proposals/"+badPolicy+"/apply", ""); rec.Code != 409 || status(badPolicy) != models.EditFailed {
+		t.Fatalf("failed policy decision = %d %s", rec.Code, rec.Body)
+	}
+	if got, err := f.store.GetPolicy(ctx, policy.ID); err != nil || got.Name != after.Name {
+		t.Fatalf("failed policy decision changed settings: %+v %v", got, err)
+	}
+	if entry := f.audit("policy.update"); entry == nil || strings.Contains(string(entry.Detail), "discarded policy name") {
+		t.Fatalf("earlier step audit was not rolled back: %+v", entry)
+	}
+	if entry := f.audit("policy.edit.fail"); entry == nil || !strings.Contains(string(entry.Detail), badPolicy) {
+		t.Fatalf("missing failed decision audit: %+v", entry)
 	}
 
 	// A library script's body.
@@ -251,8 +275,7 @@ func mustJSON(v any) string { b, _ := json.Marshal(v); return string(b) }
 //     it while the review showed only the changed fields;
 //   - a restricted viewer sees no device or policy outside its scope, no raw
 //     proposal content, and no policy proposals;
-//   - a proposal being applied is not superseded or decided by someone else
-//     (the claim's expiry is in store's TestEditProposalClaimExpiresIntegration).
+//   - deciding an edit requires the authority to change the whole target.
 func TestEditProposalsSafetyE2EIntegration(t *testing.T) {
 	f := newScriptFixture(t)
 	ctx := context.Background()
@@ -279,7 +302,7 @@ func TestEditProposalsSafetyE2EIntegration(t *testing.T) {
 		return c.ID, a.ID
 	}
 	clientA, inScope := mk("A", "A1")
-	_, outside := mk("B", "B1")
+	clientB, outside := mk("B", "B1")
 
 	// An AI-proposed task, unreviewed: no edit can switch it on.
 	out := call("propose_task", map[string]any{"agent_id": inScope, "name": "cleanup", "shell": "bash", "script": "rm -rf /var/tmp/x", "schedule_kind": "interval", "interval_sec": 3600})
@@ -288,6 +311,9 @@ func TestEditProposalsSafetyE2EIntegration(t *testing.T) {
 	}
 	if err := json.Unmarshal([]byte(out), &created); err != nil || created.ID == "" {
 		t.Fatalf("propose_task = %s", out)
+	}
+	if rec := f.do("POST", "/api/tasks/"+created.ID+"/run", ""); rec.Code != 409 || !strings.Contains(rec.Body.String(), "awaiting review") {
+		t.Fatalf("run now accepted a task awaiting review: %d %s", rec.Code, rec.Body)
 	}
 	if out := call("propose_task_edit", map[string]any{"id": created.ID, "reason": "turn it on", "fields": map[string]any{"enabled": true}}); !strings.Contains(out, "awaiting review") {
 		t.Fatalf("an edit to a pending task was accepted: %s", out)
@@ -358,21 +384,109 @@ func TestEditProposalsSafetyE2EIntegration(t *testing.T) {
 	}
 	restore()
 
-	// A claim to apply: another approver waits, the same one may retry, an
-	// old claim is free, and a new proposal does not supersede one being applied.
-	if _, err := f.store.ClaimEditProposal(ctx, prop.ID, "alice"); err != nil {
+	// The same scoped user can read a shared check. Even with checks.manage
+	// they cannot decide for its other targets, or for a global library script.
+	script, err := f.store.CreateScript(ctx, &models.Script{Name: "Library sample", Shell: "bash", Body: "true"})
+	if err != nil {
 		t.Fatal(err)
 	}
-	if _, err := f.store.ClaimEditProposal(ctx, prop.ID, "bob"); err == nil {
-		t.Fatal("a second approver claimed a proposal being applied")
+	var scriptProp struct {
+		ID string `json:"proposal_id"`
 	}
-	if _, err := f.store.ClaimEditProposal(ctx, prop.ID, "alice"); err != nil {
-		t.Fatalf("the same approver cannot retry: %v", err)
+	out = call("propose_script_edit", map[string]any{"id": script.ID, "reason": "rename", "fields": map[string]any{"name": "renamed"}})
+	if err := json.Unmarshal([]byte(out), &scriptProp); err != nil || scriptProp.ID == "" {
+		t.Fatalf("propose_script_edit = %s", out)
 	}
-	if out := call("propose_check_edit", map[string]any{"id": check.ID, "reason": "again", "fields": map[string]any{"interval_sec": 900}}); !strings.Contains(out, "being applied") {
-		t.Fatalf("a proposal being applied was superseded: %s", out)
+	direct, err := f.store.CreateCheck(ctx, &models.Check{Attachments: models.OnAgent(&inScope),
+		Type: models.CheckMemory, Name: "direct", IntervalSec: 300, Enabled: true})
+	if err != nil {
+		t.Fatal(err)
 	}
-	if err := f.store.FinishEditProposal(ctx, prop.ID, models.EditRejected, "bob", ""); err == nil {
-		t.Fatal("another approver rejected a proposal being applied")
+	var expand struct {
+		ID string `json:"proposal_id"`
+	}
+	out = call("propose_check_edit", map[string]any{"id": direct.ID, "reason": "cover another device", "attach": []map[string]any{{"agent_id": outside}}})
+	if err := json.Unmarshal([]byte(out), &expand); err != nil || expand.ID == "" {
+		t.Fatalf("expand proposal = %s", out)
+	}
+	restore = f.asUser(t, "", []string{models.PermChecksView, models.PermChecksManage, models.PermScriptsView, models.PermScriptsManage},
+		[]models.UserScope{{ScopeType: models.ScopeClient, ScopeID: clientA}})
+	for _, id := range []string{prop.ID, scriptProp.ID, expand.ID} {
+		if rec := f.do("GET", "/api/edit-proposals/"+id, ""); rec.Code != 200 {
+			t.Fatalf("scoped review = %d %s", rec.Code, rec.Body)
+		}
+		for _, action := range []string{"apply", "reject"} {
+			if rec := f.do("POST", "/api/edit-proposals/"+id+"/"+action, ""); rec.Code != 403 {
+				t.Fatalf("scoped %s = %d %s", action, rec.Code, rec.Body)
+			}
+		}
+		if got, err := f.store.GetEditProposal(ctx, id); err != nil || got.Status != models.EditPending || got.DecidedBy != "" {
+			t.Fatalf("a refused request changed the proposal: %+v %v", got, err)
+		}
+	}
+	restore()
+	if rec := f.do("POST", "/api/edit-proposals/"+prop.ID+"/reject", ""); rec.Code != 200 {
+		t.Fatalf("unrestricted rejection = %d %s", rec.Code, rec.Body)
+	}
+	if rec := f.do("POST", "/api/edit-proposals/"+expand.ID+"/apply", ""); rec.Code != 200 {
+		t.Fatalf("unrestricted expansion = %d %s", rec.Code, rec.Body)
+	}
+	path := "/api/edit-proposals/" + expand.ID
+	if rec := f.do("GET", path, ""); rec.Code != 200 || !strings.Contains(rec.Body.String(), "attach agent:"+outside) {
+		t.Fatalf("unrestricted outcome = %d %s", rec.Code, rec.Body)
+	}
+	restore = f.asUser(t, "", []string{models.PermChecksView}, []models.UserScope{{ScopeType: models.ScopeClient, ScopeID: clientA}})
+	for _, url := range []string{path, "/api/edit-proposals?kind=check&status=applied"} {
+		if rec := f.do("GET", url, ""); rec.Code != 200 || !strings.Contains(rec.Body.String(), expand.ID) || strings.Contains(rec.Body.String(), outside) {
+			t.Fatalf("scoped outcome = %d %s", rec.Code, rec.Body)
+		}
+	}
+	restore()
+
+	// Scope projections on the read tool must match the policy review. Both
+	// tool transports share Execute so the serialized result is checked here.
+	if _, err := f.store.AssignPolicy(ctx, policy.ID, models.ScopeClient, clientB); err != nil {
+		t.Fatal(err)
+	}
+	patch, err := f.store.CreatePatchPolicy(ctx, &models.PatchPolicy{Name: "Patches", Enabled: true})
+	if err != nil {
+		t.Fatal(err)
+	}
+	for _, clientID := range []string{clientA, clientB} {
+		if err := f.store.AddPatchPolicyAssignment(ctx, patch.ID, models.ScopeClient, clientID); err != nil {
+			t.Fatal(err)
+		}
+	}
+	user, err := f.store.CreateUserWithScopes(ctx, "policy-reader-"+uuid.NewString()[:8], "hash", models.RoleTech,
+		[]models.UserScope{{ScopeType: models.ScopeClient, ScopeID: clientA}})
+	if err != nil {
+		t.Fatal(err)
+	}
+	for _, p := range []struct {
+		kind, id string
+		patch    bool
+	}{{models.EditPolicy, policy.ID, false}, {models.EditPatchPolicy, patch.ID, true}} {
+		for _, id := range []string{inScope, outside} {
+			if err := f.store.AddExclusion(ctx, p.patch, p.id, id, "fixture"); err != nil {
+				t.Fatal(err)
+			}
+		}
+		args := map[string]any{"kind": p.kind, "id": p.id}
+		full := call("get_editable_object", args)
+		b, _ := json.Marshal(args)
+		scoped := ai.ToolContext{Store: f.store, Actor: user.ID, ScopeUserID: user.ID, Permissions: map[string]bool{
+			models.PermPoliciesView: true, models.PermPatchPoliciesManage: true,
+		}}
+		filtered := ai.Execute(ctx, scoped, "get_editable_object", b).Output
+		for _, id := range []string{clientB, outside} {
+			if !strings.Contains(full, id) || strings.Contains(filtered, id) {
+				t.Fatalf("%s did not isolate scope %s: full=%s filtered=%s", p.kind, id, full, filtered)
+			}
+		}
+		for _, id := range []string{clientA, inScope} {
+			if !strings.Contains(filtered, id) {
+				t.Fatalf("%s removed legitimate scope %s: %s", p.kind, id, filtered)
+			}
+		}
 	}
 }

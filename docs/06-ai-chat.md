@@ -140,32 +140,35 @@ check, task, policy or patch policy (`propose_*_edit`). An edit proposal is a
 row in `edit_proposals`; the object does not change.
 
 - **Bound to what it saw.** The proposal records a hash of the object as the
-  assistant read it (`get_editable_object`). If the object changes before
-  anyone applies the proposal, it is **stale** and cannot be applied; the
-  assistant has to propose again. One proposal per object is open at a time: a
-  new one supersedes the previous.
+  assistant read it (`get_editable_object`). Applying locks the current object
+  and its links before comparing the hash. If the current editable state has
+  changed, the proposal is **stale** and the assistant has to propose again.
+  A new proposal supersedes the previous pending one unless a decision is in
+  progress.
 - **Reviewed where the object lives.** Scripts, Checks, Scheduled tasks,
   Policies and Patches ▸ Policies list the edits waiting for them. The review
   shows each changed field before and after, and the attachments, assignments
   and exclusions added or removed, with names.
-- **Applied as the person.** Applying runs the console's own handlers as the
-  person who applies it, one step after another: the fields, then what is
-  removed, then what is added. The same validation, scope rules, side effects
-  and audit apply as for the same edit by hand, so an edit that person could
-  not make is refused. A step the server refuses stops the proposal as
-  **failed**, and the outcome names the step and what was applied before it.
-  Deciding takes the permission an edit by hand takes. Applying is audited as
-  `<kind>.edit.apply` (or `.reject`, `.fail`) with the proposal and its
-  proposer.
+- **Decided as the person.** Applying or rejecting requires management
+  permission over the whole object. The server accepts one decision at a
+  time. Applying uses the same validation as a manual edit. Its changes,
+  status and audit entry commit together. If a step is refused, all changes
+  are rolled back and the failure identifies that step. If the transaction
+  is interrupted, its locks are released on rollback and the proposal stays
+  pending.
 - **Never autonomous.** No autonomy setting applies an edit. A policy can be
   switched off by an edit, but switched on only through its activation review.
 - **Never on a proposal awaiting review.** An object the AI proposed and nobody
   has reviewed yet cannot be edited this way. Switching such a check or task on
   through an edit would approve it while the review showed only the changed
   fields, not the script it runs; it is reviewed on its own screen instead.
+  Run now also requires that a proposed task has been reviewed.
 - **What a restricted user sees.** Only proposals for checks, tasks and scripts,
-  with the devices and policies outside their scope left out. Policy and patch
-  policy proposals are for unrestricted administrators.
+  with the devices and policies outside their scope left out. Detailed
+  decision outcomes are shown to unrestricted readers. Policy and patch
+  policy proposals are for unrestricted administrators. Reading a policy
+  through `get_editable_object` returns only the assignments and device
+  exclusions visible to the caller.
 
 ### Why the write tools only *propose*
 

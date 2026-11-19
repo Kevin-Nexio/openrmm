@@ -256,7 +256,28 @@ func getEditableObject(ctx context.Context, tc ToolContext, args json.RawMessage
 	if err != nil {
 		return nil, err
 	}
-	return map[string]any{"kind": in.Kind, "id": in.ID, "name": t.Name, "current": t.View}, nil
+	view := t.View
+	if tc.ScopeUserID != "" && (in.Kind == models.EditPolicy || in.Kind == models.EditPatchPolicy) {
+		// Keep EditTarget canonical for review hashes. Only project the read
+		// result, using the same scope intersection as the REST reviews.
+		view.Assignments = nil
+		for _, a := range t.View.Assignments {
+			ok, err := tc.Store.ScopeIntersectsUser(ctx, tc.ScopeUserID, a.ScopeType, a.ScopeID)
+			if err != nil {
+				return nil, err
+			}
+			if ok {
+				view.Assignments = append(view.Assignments, a)
+			}
+		}
+		view.Exclusions = nil
+		for _, id := range t.View.Exclusions {
+			if tc.allows(ctx, id) {
+				view.Exclusions = append(view.Exclusions, id)
+			}
+		}
+	}
+	return map[string]any{"kind": in.Kind, "id": in.ID, "name": t.Name, "current": view}, nil
 }
 
 func proposeEdit(ctx context.Context, tc ToolContext, kind string, args json.RawMessage) (any, error) {

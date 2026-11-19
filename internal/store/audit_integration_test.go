@@ -440,6 +440,42 @@ func TestPurgeCannotReachTheHumanRecordIntegration(t *testing.T) {
 	}
 }
 
+// A config transaction can append multiple human records and may open before
+// an unrelated transaction appends its record. The chain must still be ordered
+// by created_at in the order it was linked.
+func TestTransactionalAuditEntriesKeepChainOrderIntegration(t *testing.T) {
+	ctx, st := auditStore(t)
+	target := uuid.NewString()
+	err := st.InConfigTransaction(ctx, func(tx *Store) error {
+		if err := tx.AddAudit(ctx, "reviewer", "policy.assign", target, nil); err != nil {
+			return err
+		}
+		// An unrelated writer must still be able to append while the
+		// configuration edit is open and has recorded its first step.
+		independent, cancel := context.WithTimeout(ctx, 3*time.Second)
+		defer cancel()
+		if err := st.AddAudit(independent, "reviewer", "policy.update", target, nil); err != nil {
+			return err
+		}
+		return tx.AddAudit(ctx, "reviewer", "policy.edit.apply", target, nil)
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	var updateAt, assignAt, applyAt time.Time
+	err = st.pool.QueryRow(ctx, `SELECT
+		max(created_at) FILTER (WHERE action='policy.update'),
+		max(created_at) FILTER (WHERE action='policy.assign'),
+		max(created_at) FILTER (WHERE action='policy.edit.apply')
+		FROM audit_log WHERE target=$1`, target).Scan(&updateAt, &assignAt, &applyAt)
+	if err != nil || !updateAt.Before(assignAt) || !assignAt.Before(applyAt) {
+		t.Fatalf("incorrect audit ordering: %v %v %v (%v)", updateAt, assignAt, applyAt, err)
+	}
+	if broken, err := st.VerifyAuditChain(ctx); err != nil || broken != nil {
+		t.Fatalf("after transactional events: audit break %+v, err %v", broken, err)
+	}
+}
+
 // Layer 3: the chain. Editing a row breaks it, and verification says where.
 func TestAuditChainDetectsTamperingIntegration(t *testing.T) {
 	ctx, st := auditStore(t)

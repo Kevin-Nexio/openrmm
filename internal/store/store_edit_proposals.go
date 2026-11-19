@@ -5,7 +5,6 @@ import (
 	"encoding/json"
 	"errors"
 	"fmt"
-	"time"
 
 	"github.com/jackc/pgx/v5"
 
@@ -155,10 +154,25 @@ func (s *Store) CreateEditProposal(ctx context.Context, p *models.EditProposal) 
 		return nil, err
 	}
 	defer func() { _ = tx.Rollback(ctx) }()
-	// One being applied right now is left alone: the unique index on the open
-	// proposal then refuses the new one, and the caller proposes again later.
-	if _, err := tx.Exec(ctx, `UPDATE edit_proposals SET status='superseded', decided_at=now(), decided_by=$3
-		WHERE kind=$1 AND target_id=$2 AND status='pending' AND `+claimFreeSQL, p.Kind, p.TargetID, p.ProposedBy); err != nil {
+	// A concurrent decision holds this row for its entire transaction. A
+	// proposal should report the conflict instead of waiting to replace it.
+	var previous string
+	err = tx.QueryRow(ctx, `SELECT id FROM edit_proposals
+		WHERE kind=$1 AND target_id=$2 AND status='pending' FOR UPDATE NOWAIT`, p.Kind, p.TargetID).Scan(&previous)
+	switch {
+	case err == nil:
+		tag, err := tx.Exec(ctx, `UPDATE edit_proposals SET status='superseded', decided_at=now(), decided_by=$2, claimed_at=NULL
+			WHERE id=$1 AND `+legacyClaimFreeSQL, previous, p.ProposedBy)
+		if err != nil {
+			return nil, err
+		}
+		if tag.RowsAffected() == 0 {
+			return nil, fmt.Errorf("%w: an edit to this object is being applied; propose again once it is done", ErrConflict)
+		}
+	case !errors.Is(err, pgx.ErrNoRows):
+		if errors.Is(configLockError(err), ErrConflict) {
+			return nil, fmt.Errorf("%w: an edit to this object is being applied; propose again once it is done", ErrConflict)
+		}
 		return nil, err
 	}
 	out, err := scanEditProposal(tx.QueryRow(ctx, `INSERT INTO edit_proposals (id, kind, target_id, base_hash, changes, reason, proposed_by)
@@ -201,12 +215,35 @@ func (s *Store) ListEditProposals(ctx context.Context, kind, status string, limi
 	return out, rows.Err()
 }
 
-// FinishEditProposal closes a pending proposal with status (applied,
-// rejected, stale or failed). ErrConflict when it is no longer pending, or
-// someone else has claimed it to apply it: only the first decision counts.
+// legacyClaimFreeSQL honors claims left by the preceding implementation.
+// Current decisions are guarded by a transaction lock rather than a lease.
+const legacyClaimFreeSQL = `(decided_by='' OR claimed_at IS NULL OR claimed_at < now() - interval '15 minutes')`
+
+// LockEditProposal locks an undecided proposal for this database transaction.
+// The audit actor is attribution only. It does not grant ownership of a lock.
+func (s *Store) LockEditProposal(ctx context.Context, id string) (*models.EditProposal, error) {
+	if err := s.requireConfigTransaction(); err != nil {
+		return nil, err
+	}
+	p, err := scanEditProposal(s.pool.QueryRow(ctx, `SELECT `+editProposalCols+` FROM edit_proposals
+		WHERE id=$1 AND status='pending' AND `+legacyClaimFreeSQL+` FOR UPDATE NOWAIT`, id))
+	if errors.Is(err, ErrNotFound) {
+		if _, err := s.GetEditProposal(ctx, id); err != nil {
+			return nil, err
+		}
+		return nil, ErrConflict
+	}
+	return p, configLockError(err)
+}
+
+// FinishEditProposal records the decision on a locked row in the same
+// transaction as its changes and audit entry.
 func (s *Store) FinishEditProposal(ctx context.Context, id, status, actor, outcome string) error {
-	tag, err := s.pool.Exec(ctx, `UPDATE edit_proposals SET status=$2, decided_by=$3, outcome=$4, decided_at=$5, claimed_at=NULL
-		WHERE id=$1 AND status='pending' AND (`+claimFreeSQL+` OR decided_by=$3)`, id, status, actor, outcome, time.Now())
+	if err := s.requireConfigTransaction(); err != nil {
+		return err
+	}
+	tag, err := s.pool.Exec(ctx, `UPDATE edit_proposals SET status=$2, decided_by=$3, outcome=$4, decided_at=now(), claimed_at=NULL
+		WHERE id=$1 AND status='pending'`, id, status, actor, outcome)
 	if err != nil {
 		return err
 	}
@@ -214,33 +251,6 @@ func (s *Store) FinishEditProposal(ctx context.Context, id, status, actor, outco
 		return ErrConflict
 	}
 	return nil
-}
-
-// claimFreeSQL is true for a proposal nobody is applying: unclaimed, or
-// claimed so long ago that the apply cannot still be running.
-const claimFreeSQL = `(decided_by='' OR claimed_at IS NULL OR claimed_at < now() - interval '15 minutes')`
-
-// ClaimEditProposal marks a pending proposal as being applied by actor, so a
-// second approver cannot apply or reject it at the same time. The same actor
-// may claim it again (a retry), and a stale claim is free. It returns the
-// proposal as claimed; ErrConflict when it is no longer pending or someone
-// else is applying it.
-func (s *Store) ClaimEditProposal(ctx context.Context, id, actor string) (*models.EditProposal, error) {
-	p, err := scanEditProposal(s.pool.QueryRow(ctx, `UPDATE edit_proposals SET decided_by=$2, claimed_at=now()
-		WHERE id=$1 AND status='pending' AND (`+claimFreeSQL+` OR decided_by=$2) RETURNING `+editProposalCols, id, actor))
-	if errors.Is(err, ErrNotFound) {
-		if _, getErr := s.GetEditProposal(ctx, id); getErr != nil {
-			return nil, getErr
-		}
-		return nil, ErrConflict
-	}
-	return p, err
-}
-
-// ReleaseEditProposal hands back a claim when applying did not start.
-func (s *Store) ReleaseEditProposal(ctx context.Context, id string) error {
-	_, err := s.pool.Exec(ctx, `UPDATE edit_proposals SET decided_by='', claimed_at=NULL WHERE id=$1 AND status='pending'`, id)
-	return err
 }
 
 // ScopeName names a client, site or department (group) for a review.

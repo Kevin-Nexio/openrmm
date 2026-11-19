@@ -87,6 +87,23 @@ func (s *Server) requireAttachmentTarget(w http.ResponseWriter, r *http.Request,
 	return s.requirePolicy(w, r, *a.PolicyID, true)
 }
 
+// lockAttachmentAgent is used by the transactional attach handlers before
+// authorizing a new direct target.
+func (s *Server) lockAttachmentAgent(w http.ResponseWriter, r *http.Request, a models.Attachment) bool {
+	if s.scopeUserID(r) == "" || a.AgentID == nil {
+		return true
+	}
+	if err := s.store.LockConfigAgent(r.Context(), *a.AgentID); err != nil {
+		if errors.Is(err, store.ErrNotFound) {
+			writeErr(w, http.StatusForbidden, "device is outside your access scope")
+		} else {
+			writeErr(w, httpStatusFor(err), err.Error())
+		}
+		return false
+	}
+	return true
+}
+
 // visibleAttachments is what a restricted caller is shown of an item's
 // attachments: the devices in their scope and the policies visible to them.
 func (s *Server) visibleAttachments(r *http.Request, atts []models.Attachment) ([]models.Attachment, error) {
@@ -241,7 +258,7 @@ func (s *Server) attachCheck(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	a, ok := decodeAttachment(w, r)
-	if !ok || !s.requireAttachmentTarget(w, r, a) {
+	if !ok || !s.lockAttachmentAgent(w, r, a) || !s.requireAttachmentTarget(w, r, a) {
 		return
 	}
 	a.AddedBy = actorOf(r)
@@ -330,7 +347,7 @@ func (s *Server) attachTask(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	a, ok := decodeAttachment(w, r)
-	if !ok || !s.requireAttachmentTarget(w, r, a) {
+	if !ok || !s.lockAttachmentAgent(w, r, a) || !s.requireAttachmentTarget(w, r, a) {
 		return
 	}
 	a.AddedBy = actorOf(r)

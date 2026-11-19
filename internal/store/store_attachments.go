@@ -160,7 +160,7 @@ func (k attachmentKind) attach(ctx context.Context, pool dbBeginner, itemTable, 
 	}
 	defer func() { _ = tx.Rollback(ctx) }()
 	var pending bool
-	if err := tx.QueryRow(ctx, `SELECT `+pendingSQL+` FROM `+itemTable+` WHERE id=$1 FOR UPDATE`, id).Scan(&pending); err != nil {
+	if err := tx.QueryRow(ctx, `SELECT `+pendingSQL+` FROM `+itemTable+` WHERE id=$1 FOR NO KEY UPDATE`, id).Scan(&pending); err != nil {
 		if errors.Is(err, pgx.ErrNoRows) {
 			return ErrNotFound
 		}
@@ -236,7 +236,7 @@ func (s *Store) CopyCheckFor(ctx context.Context, checkID string, target models.
 		return nil, err
 	}
 	defer func() { _ = tx.Rollback(ctx) }()
-	orig, err := scanCheck(tx.QueryRow(ctx, `SELECT `+checkCols+` FROM checks c WHERE c.id=$1 FOR UPDATE`, checkID))
+	orig, err := scanCheck(tx.QueryRow(ctx, `SELECT `+checkCols+` FROM checks c WHERE c.id=$1 FOR NO KEY UPDATE`, checkID))
 	if err != nil {
 		return nil, err
 	}
@@ -264,7 +264,7 @@ func (s *Store) CopyTaskFor(ctx context.Context, taskID string, target models.At
 		return nil, err
 	}
 	defer func() { _ = tx.Rollback(ctx) }()
-	orig, err := scanTask(tx.QueryRow(ctx, `SELECT `+taskCols+` FROM tasks t WHERE t.id=$1 FOR UPDATE`, taskID))
+	orig, err := scanTask(tx.QueryRow(ctx, `SELECT `+taskCols+` FROM tasks t WHERE t.id=$1 FOR NO KEY UPDATE`, taskID))
 	if err != nil {
 		return nil, err
 	}

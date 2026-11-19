@@ -255,7 +255,10 @@ func (s *Server) updateCheck(w http.ResponseWriter, r *http.Request) {
 		_ = s.store.AddAudit(r.Context(), actorOf(r), "check.approve", id, auditLabel("name", c.Name))
 	}
 	if (existing.Enabled && !c.Enabled) || existing.Type != c.Type {
-		s.cleanupCheckTargets(r, existing, "disabled", "Check disabled by an operator.")
+		if err := s.cleanupCheckTargets(r, existing, "disabled", "Check disabled by an operator."); err != nil {
+			writeErr(w, http.StatusInternalServerError, "check targets could not be cleaned up")
+			return
+		}
 	}
 	out, err := s.store.GetCheck(r.Context(), c.ID)
 	if err != nil {
@@ -267,6 +270,10 @@ func (s *Server) updateCheck(w http.ResponseWriter, r *http.Request) {
 	} else {
 		s.auditServerRule(r, out, "update")
 	}
+	if err := s.redactCheck(r, out); err != nil {
+		writeErr(w, http.StatusInternalServerError, err.Error())
+		return
+	}
 	writeJSON(w, http.StatusOK, out)
 }
 
@@ -276,7 +283,10 @@ func (s *Server) deleteCheck(w http.ResponseWriter, r *http.Request) {
 	if !ok {
 		return
 	}
-	s.cleanupCheckTargets(r, check, "removed", "Check removed by an operator.")
+	if err := s.cleanupCheckTargets(r, check, "removed", "Check removed by an operator."); err != nil {
+		writeErr(w, http.StatusInternalServerError, "check targets could not be cleaned up")
+		return
+	}
 	if err := s.store.DeleteCheck(r.Context(), id); err != nil {
 		writeErr(w, http.StatusInternalServerError, err.Error())
 		return
@@ -285,26 +295,27 @@ func (s *Server) deleteCheck(w http.ResponseWriter, r *http.Request) {
 	writeJSON(w, http.StatusOK, map[string]string{"status": "deleted"})
 }
 
-func (s *Server) cleanupCheckTargets(r *http.Request, check *models.Check, kind, note string) {
+func (s *Server) cleanupCheckTargets(r *http.Request, check *models.Check, kind, note string) error {
 	if models.IsServerRule(check.Type) {
-		return // the next evaluation applies the replacement rule or fleet default
+		return nil // the next evaluation applies the replacement rule or fleet default
 	}
-	instances, err := s.store.CheckInstances(r.Context(), check.ID, "", false)
+	uid := s.scopeUserID(r)
+	instances, err := s.store.CheckInstances(r.Context(), check.ID, uid, uid != "")
 	if err != nil {
-		log.Printf("cleanup check %s targets: %v", check.ID, err)
-		return
+		return err
 	}
 	checkID := check.ID
-	for i := range instances {
-		agentID := instances[i].AgentID
-		if _, err := s.store.CancelPendingCheckExecutions(r.Context(), check.ID, &agentID); err != nil {
-			log.Printf("cancel check %s execution for %s: %v", check.ID, agentID, err)
+	for _, instance := range instances {
+		agentID := instance.AgentID
+		if _, err := s.store.CancelPendingCheckExecutions(r.Context(), checkID, &agentID); err != nil {
+			return err
 		}
 		if _, err := s.store.ResolveAlertSource(r.Context(), models.AlertSourceCheck,
 			&checkID, &agentID, actorOf(r), kind, note, time.Now()); err != nil {
-			log.Printf("resolve check %s alert for %s: %v", check.ID, agentID, err)
+			return err
 		}
 	}
+	return nil
 }
 
 func (s *Server) listCheckResults(w http.ResponseWriter, r *http.Request) {
@@ -461,12 +472,7 @@ func (s *Server) updateTask(w http.ResponseWriter, r *http.Request) {
 	if existing.ProposedBy != "" && existing.ApprovedBy == "" && t.ApprovedBy != "" {
 		_ = s.store.AddAudit(r.Context(), actorOf(r), "task.approve", id, auditLabel("name", t.Name))
 	}
-	out, err := s.store.GetTask(r.Context(), t.ID)
-	if err != nil {
-		writeErr(w, http.StatusInternalServerError, err.Error())
-		return
-	}
-	writeJSON(w, http.StatusOK, out)
+	s.writeTask(w, r, t.ID, http.StatusOK)
 }
 
 func (s *Server) deleteTask(w http.ResponseWriter, r *http.Request) {
@@ -525,6 +531,10 @@ func (s *Server) taskTargets(w http.ResponseWriter, r *http.Request) {
 func (s *Server) runTask(w http.ResponseWriter, r *http.Request) {
 	t, ok := s.requireTask(w, r, chi.URLParam(r, "id"), false)
 	if !ok {
+		return
+	}
+	if t.ProposedBy != "" && t.ApprovedBy == "" {
+		writeErr(w, http.StatusConflict, "this task is a proposal awaiting review; approve it first")
 		return
 	}
 	ids, err := s.taskTargetAgents(r, t)
