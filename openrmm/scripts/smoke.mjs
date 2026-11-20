@@ -345,14 +345,28 @@ async function runMobileChrome(chrome, url, { width = 375, flow } = {}) {
     });
     await command('Page.enable');
     await command('Runtime.enable');
-    await command('Emulation.setDeviceMetricsOverride', { width, height: 812, deviceScaleFactor: 1, mobile: width === 375 });
+    const metrics = (requested) => command('Emulation.setDeviceMetricsOverride', { width: requested, height: 812, deviceScaleFactor: 1, mobile: width === 375 });
+    await metrics(width);
     await command('Page.navigate', { url });
     await delay(250);
-    const initialWidth = await command('Runtime.evaluate', { expression: 'innerWidth', returnByValue: true });
-    if (initialWidth.result.value !== width) {
-      await command('Emulation.setDeviceMetricsOverride', { width: 2 * width - initialWidth.result.value, height: 812, deviceScaleFactor: 1, mobile: width === 375 });
+    // Headless Chrome can report a width a couple of pixels off, and an early
+    // sample is not the settled page. Correct until innerWidth matches, then
+    // record that width ourselves: the page's own timer can run first.
+    let requested = width;
+    for (let attempt = 0; attempt < 3; attempt++) {
+      const reading = await command('Runtime.evaluate', { expression: 'innerWidth', returnByValue: true });
+      const actual = reading.result.value;
+      if (actual === width) break;
+      if (!Number.isFinite(actual)) break;
+      requested += width - actual;
+      await metrics(requested);
+      await delay(100);
     }
     await delay(1750);
+    await command('Runtime.evaluate', {
+      expression: 'document.documentElement.dataset.smokeWidth=innerWidth+":"+document.documentElement.scrollWidth',
+      returnByValue: true,
+    });
     if (flow) {
       const result = await command('Runtime.evaluate', { expression: `(${flow.toString()})()`, returnByValue: true, awaitPromise: true });
       assert.equal(result.exceptionDetails, undefined, JSON.stringify(result.exceptionDetails));

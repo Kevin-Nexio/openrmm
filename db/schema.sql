@@ -357,10 +357,11 @@ CREATE TABLE IF NOT EXISTS checks (
                         CONSTRAINT checks_cooldown_valid CHECK (cooldown_sec BETWEEN 0 AND 604800),
     timeout_sec     INTEGER NOT NULL DEFAULT 180
                         CONSTRAINT checks_timeout_valid CHECK (timeout_sec BETWEEN 5 AND 86400),
-    timeout_policy  TEXT NOT NULL DEFAULT 'count'
-                        CONSTRAINT checks_timeout_policy_valid CHECK (timeout_policy IN ('count', 'ignore')),
     proposed_by     TEXT NOT NULL DEFAULT '',
     approved_by     TEXT NOT NULL DEFAULT '',
+    -- Added by migration 036, so it stays last: ADD COLUMN appends.
+    timeout_policy  TEXT NOT NULL DEFAULT 'count'
+                        CONSTRAINT checks_timeout_policy_valid CHECK (timeout_policy IN ('count', 'ignore')),
     -- An AI proposal nobody has reviewed must not be enabled: the scheduler
     -- selects WHERE enabled, so this keeps it from ever running unseen.
     CONSTRAINT checks_unreviewed_proposal_disabled

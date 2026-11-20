@@ -219,26 +219,28 @@ func TestAlertRuleMigrationFromPreviousSchemaIntegration(t *testing.T) {
 	if err := st.migrate(ctx, migrations[:27]); err != nil {
 		t.Fatal(err)
 	}
-	// Seeded with SQL: the store code targets the latest schema (migration 032
-	// added the policy switch it reads and writes).
-	policy := &models.Policy{ID: newID()}
-	if _, err := st.pool.Exec(ctx, `INSERT INTO policies (id, name) VALUES ($1, 'old policy')`, policy.ID); err != nil {
+	// Seeded with SQL for the schema at migration 27. The store writes the
+	// latest columns, including timeout_policy from migration 036, which this
+	// database does not have yet.
+	policyID := newID()
+	if _, err := st.pool.Exec(ctx, `INSERT INTO policies (id, name) VALUES ($1, 'old policy')`, policyID); err != nil {
 		t.Fatal(err)
 	}
-	check, err := st.CreateCheck(ctx, &models.Check{PolicyID: &policy.ID, Name: "legacy", Type: models.CheckMemory,
-		Config: json.RawMessage(`{}`), IntervalSec: 300, TimeoutSec: 30, FailureCount: 2, RecoveryCount: 2, Enabled: true})
-	if err != nil {
+	checkID := newID()
+	if _, err := st.pool.Exec(ctx, `INSERT INTO checks (
+		id, policy_id, type, name, config, interval_sec, failure_count, recovery_count, timeout_sec, enabled)
+		VALUES ($1,$2,'memory','legacy','{}',300,2,2,30,true)`, checkID, policyID); err != nil {
 		t.Fatal(err)
 	}
 	if _, err := st.pool.Exec(ctx, `INSERT INTO alerts (id,source_type,source_id,condition_key,severity,message,first_seen_at,last_seen_at,updated_at)
-		VALUES (gen_random_uuid(),'check',$1,'health','warning','legacy',now(),now(),now())`, check.ID); err != nil {
+		VALUES (gen_random_uuid(),'check',$1,'health','warning','legacy',now(),now(),now())`, checkID); err != nil {
 		t.Fatal(err)
 	}
 	if err := st.Migrate(ctx); err != nil {
 		t.Fatal(err)
 	}
 	var ruleID string
-	if err := st.pool.QueryRow(ctx, `SELECT rule_id FROM alerts WHERE source_id=$1`, check.ID).Scan(&ruleID); err != nil || ruleID != check.ID {
+	if err := st.pool.QueryRow(ctx, `SELECT rule_id FROM alerts WHERE source_id=$1`, checkID).Scan(&ruleID); err != nil || ruleID != checkID {
 		t.Fatalf("legacy backfill: %s %v", ruleID, err)
 	}
 	if err := st.Migrate(ctx); err != nil {
