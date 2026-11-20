@@ -304,6 +304,29 @@ func (s *Store) RecordCheckResult(ctx context.Context, r *models.CheckResult) (*
 		}
 	}
 
+	// The agent stopped this run at the check's timeout. That is the timeout the
+	// server records when no result arrives, so the check's policy applies to
+	// it too: ignore leaves the streak alone, count makes it the run's one
+	// failure. A timeout the server already recorded decides on its own below.
+	if r.TimedOut && r.Status != models.CheckPassing && timeoutEffect == models.TimeoutEffectNone {
+		var policy string
+		if err := tx.QueryRow(ctx, `SELECT timeout_policy FROM checks WHERE id=$1`, r.CheckID).Scan(&policy); errors.Is(err, pgx.ErrNoRows) {
+			return nil, "", ErrNotFound
+		} else if err != nil {
+			return nil, "", err
+		}
+		effect := models.TimeoutEffectCounted
+		if policy == models.TimeoutPolicyIgnore {
+			effect, timeoutEffect = models.TimeoutEffectIgnored, models.TimeoutEffectIgnored
+		}
+		if r.ExecutionID != nil {
+			if _, err := tx.Exec(ctx, `UPDATE check_executions SET timeout_effect=$2 WHERE id=$1`,
+				*r.ExecutionID, effect); err != nil {
+				return nil, "", err
+			}
+		}
+	}
+
 	// An ignored timeout is not a failure. A late failure for that same run is
 	// the timeout arriving from the agent, so it does not start a streak either.
 	// A late success still counts: the check did pass.

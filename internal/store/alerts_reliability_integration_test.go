@@ -598,3 +598,55 @@ func TestAlertPaginationUsesStableTupleCursor(t *testing.T) {
 		t.Fatalf("second page with sentinel = %#v, err=%v", second, err)
 	}
 }
+
+// An agent that stopped a run at the check's timeout says so (agent 0.12.0).
+// The check's timeout policy applies to that run as to a timeout the server
+// records: count makes it one failure, ignore leaves the streak alone. A
+// failure the agent does not mark as a timeout always counts.
+func TestAgentReportedTimeoutFollowsThePolicy(t *testing.T) {
+	f := newAlertReliabilityFixture(t, "agent-timeout")
+	ctx := context.Background()
+	base := time.Now().UTC().Add(-time.Hour)
+	run := func(at time.Time, timedOut bool, status string) (*models.CheckState, CheckResultDisposition, string) {
+		t.Helper()
+		execution, created, err := f.store.CreateCheckExecution(ctx, f.check.ID, f.agent.ID, at, 10*time.Second)
+		if err != nil || !created {
+			t.Fatalf("execution created=%v err=%v", created, err)
+		}
+		state, disposition, err := f.store.RecordCheckResult(ctx, &models.CheckResult{
+			CheckID: f.check.ID, AgentID: f.agent.ID, ExecutionID: &execution.ID,
+			Status: status, Output: "Stopped at the check's 10s timeout.", TimedOut: timedOut,
+		})
+		if err != nil {
+			t.Fatal(err)
+		}
+		var effect string
+		if err := f.store.pool.QueryRow(ctx, `SELECT timeout_effect FROM check_executions WHERE id=$1`, execution.ID).Scan(&effect); err != nil {
+			t.Fatal(err)
+		}
+		return state, disposition, effect
+	}
+
+	state, disposition, effect := run(base, true, models.CheckFailing)
+	if disposition != CheckResultApplied || state.ConsecutiveFailures != 1 || effect != models.TimeoutEffectCounted {
+		t.Fatalf("counted agent timeout state=%#v disposition=%q effect=%q", state, disposition, effect)
+	}
+
+	check, err := f.store.GetCheck(ctx, f.check.ID)
+	if err != nil {
+		t.Fatal(err)
+	}
+	check.TimeoutPolicy = models.TimeoutPolicyIgnore
+	if err := f.store.UpdateCheck(ctx, check); err != nil {
+		t.Fatal(err)
+	}
+	state, disposition, effect = run(base.Add(time.Minute), true, models.CheckWarning)
+	if disposition != CheckResultUncounted || state.ConsecutiveFailures != 1 || effect != models.TimeoutEffectIgnored {
+		t.Fatalf("ignored agent timeout state=%#v disposition=%q effect=%q", state, disposition, effect)
+	}
+	// Control: an ordinary failure still counts under ignore.
+	state, disposition, effect = run(base.Add(2*time.Minute), false, models.CheckFailing)
+	if disposition != CheckResultApplied || state.ConsecutiveFailures != 2 || effect != models.TimeoutEffectNone {
+		t.Fatalf("plain failure under ignore state=%#v disposition=%q effect=%q", state, disposition, effect)
+	}
+}

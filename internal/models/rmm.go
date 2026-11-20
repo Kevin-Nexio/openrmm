@@ -340,6 +340,9 @@ type CheckResult struct {
 	Value       *float64  `json:"value,omitempty"`
 	Output      string    `json:"output"`
 	RanAt       time.Time `json:"ran_at"`
+	// TimedOut is the agent's word that it stopped this run at the check's
+	// timeout. It decides how the run counts and is not stored.
+	TimedOut bool `json:"-"`
 }
 
 // CheckExecution is one durably tracked dispatch. The execution id correlates

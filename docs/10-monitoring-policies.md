@@ -134,7 +134,7 @@ streak and the check declares its own flap policy:
 | `recovery_count` | 2 | consecutive successes before it clears |
 | `hysteresis` | 2 | band a recovering value must clear the threshold by |
 | `cooldown_sec` | 300 | quiet period before the same condition may raise again |
-| `timeout_policy` | `count` | `count` records one failure when a run times out; `ignore` leaves the streak unchanged. A late result never adds a second failure for the same run |
+| `timeout_policy` | `count` | `count` records one failure when a run times out; `ignore` leaves the streak unchanged. A late result never adds a second failure for the same run. It covers both timeouts: the server's, when no result arrives, and a run the agent stopped at `timeout_sec` (agent 0.12.0 marks it `timed_out`; an older agent reports an ordinary failure) |
 
 A value oscillating on its threshold therefore produces **one** alert instead of
 one per reading. `GET /api/checks/{id}/instances` shows this state per agent.

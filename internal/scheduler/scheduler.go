@@ -599,7 +599,7 @@ func (s *Scheduler) OnCheckResult(ctx context.Context, agentID string, res proto
 	}
 	state, disposition, err := s.store.RecordCheckResult(ctx, &models.CheckResult{
 		CheckID: res.CheckID, AgentID: agentID, ExecutionID: executionID,
-		Status: status, Value: res.Value, Output: res.Output,
+		Status: status, Value: res.Value, Output: res.Output, TimedOut: res.TimedOut && !res.Success,
 	})
 	if err != nil {
 		if errors.Is(err, store.ErrNotFound) || errors.Is(err, store.ErrConflict) {
