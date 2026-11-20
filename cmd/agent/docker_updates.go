@@ -160,11 +160,15 @@ func initialImageUpdate(c protocol.DockerContainer, disabled bool) (*protocol.Do
 	}
 	if r.pinned {
 		u.Status = "pinned"
-		u.VersionStatus = "unsupported"
-		return u, false
+		if _, stable := parseStableImageVersion(r.tag); !stable {
+			u.VersionStatus = "unsupported"
+			return u, false
+		}
 	}
 	if !imageDigestPattern.MatchString(c.ImageID) {
-		u.ErrorCode = "image_id_missing"
+		if !r.pinned {
+			u.ErrorCode = "image_id_missing"
+		}
 		u.VersionErrorCode = "image_id_missing"
 		return u, false
 	}
@@ -225,11 +229,15 @@ func (m *imageUpdateManager) attach(ctx context.Context, s *protocol.DockerSnaps
 			seen[base] = true
 			jobCtx, cancel := context.WithTimeout(ctx, 45*time.Second)
 			p, code := m.inspect(jobCtx, c.ImageID, c.Image)
+			r, _ := parseImageReference(c.Image)
 			var u protocol.DockerImageUpdate
 			if code != "" {
 				u = protocol.DockerImageUpdate{Status: "unknown", ErrorCode: code, VersionStatus: "unknown", VersionErrorCode: code}
+				if r.pinned {
+					u.Status = "pinned"
+					u.ErrorCode = ""
+				}
 			} else {
-				r, _ := parseImageReference(c.Image)
 				u = m.check(jobCtx, r, c.ImageID, p)
 			}
 			cancel()
@@ -684,6 +692,13 @@ func checkImageUpdate(ctx context.Context, r imageReference, id string, p imageP
 }
 func (s *registrySession) check(ctx context.Context, id string, p imagePlatform) protocol.DockerImageUpdate {
 	u := protocol.DockerImageUpdate{Status: "unknown", VersionStatus: "unknown"}
+	if s.ref.pinned {
+		// The pinned digest remains intentional. Only discover other version tags;
+		// a moved mutable tag is not a replacement recommendation for this image.
+		u.Status = "pinned"
+		s.versions(ctx, p, &u)
+		return u
+	}
 	digest, code := s.manifest(ctx, s.ref.tag, p)
 	if code != "" {
 		u.ErrorCode = code

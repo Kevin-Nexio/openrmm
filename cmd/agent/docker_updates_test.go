@@ -606,3 +606,105 @@ func TestRegistryHubRequiresExplicitPageCompletion(t *testing.T) {
 		t.Fatalf("%+v", u)
 	}
 }
+
+func TestImagePinnedNumericReferenceEligibility(t *testing.T) {
+	for _, tc := range []struct {
+		reference string
+		eligible  bool
+	}{
+		{"postgres:15.20-trixie@" + imageTestDigest, true},
+		{"henrygd/beszel:0.21.2@" + imageTestDigest, true},
+		{"postgres@" + imageTestDigest, false},
+		{"postgres:latest@" + imageTestDigest, false},
+		{"postgres:16-rc1@" + imageTestDigest, false},
+	} {
+		u, eligible := initialImageUpdate(protocol.DockerContainer{Image: tc.reference, ImageID: imageTestDigest}, false)
+		if eligible != tc.eligible || u.Status != "pinned" {
+			t.Fatalf("%s: %+v eligible %t", tc.reference, u, eligible)
+		}
+		want := "unsupported"
+		if eligible {
+			want = "unknown"
+		}
+		if u.VersionStatus != want {
+			t.Fatalf("%s: %+v", tc.reference, u)
+		}
+	}
+	u, eligible := initialImageUpdate(protocol.DockerContainer{Image: "postgres:16@" + imageTestDigest}, false)
+	if eligible || u.Status != "pinned" || u.VersionStatus != "unknown" || u.VersionErrorCode != "image_id_missing" || u.ErrorCode != "" {
+		t.Fatalf("missing local identity: %+v eligible %t", u, eligible)
+	}
+}
+func TestRegistryPinnedNumericOnlySearchesNewVersions(t *testing.T) {
+	for _, unavailable := range []bool{false, true} {
+		requests := 0
+		s := testRegistrySession("15.20-trixie", func(r *http.Request) (*http.Response, error) {
+			requests++
+			switch r.URL.Path {
+			case "/v2/library/demo/tags/list":
+				if unavailable {
+					return registryResponse(429, "CANARY_SECRET", nil), nil
+				}
+				return registryResponse(200, `{"tags":["15.20-trixie","16.1-trixie","16.1-bookworm"]}`, nil), nil
+			case "/v2/library/demo/manifests/16.1-trixie":
+				return registryResponse(200, registryIndex(imageChildDigest), nil), nil
+			case "/v2/library/demo/manifests/" + imageChildDigest:
+				return registryResponse(200, registryImage(imageNextDigest), nil), nil
+			default:
+				t.Fatalf("pinned check requested mutable current tag or unexpected endpoint: %s", r.URL)
+				return nil, nil
+			}
+		})
+		s.ref.host = "ghcr.io"
+		s.ref.pinned = true
+		u := s.check(context.Background(), imageTestDigest, imageTestPlatform)
+		if u.Status != "pinned" || u.ErrorCode != "" {
+			t.Fatalf("pin lost: %+v", u)
+		}
+		if unavailable {
+			if u.VersionStatus != "unknown" || u.VersionErrorCode != "registry_rate_limited" || requests != 1 {
+				t.Fatalf("failure: %+v requests %d", u, requests)
+			}
+		} else if u.VersionStatus != "available" || u.LatestTag != "16.1-trixie" || u.VersionKind != "major" || requests != 3 {
+			t.Fatalf("candidate: %+v requests %d", u, requests)
+		}
+	}
+}
+func TestRegistryUnversionedPinNeverRequestsNetwork(t *testing.T) {
+	for _, tag := range []string{"latest", "stable", "16-rc1"} {
+		s := testRegistrySession(tag, func(*http.Request) (*http.Response, error) {
+			t.Error("non-numeric pin requested network")
+			return nil, errors.New("unexpected")
+		})
+		s.ref.pinned = true
+		u := s.check(context.Background(), imageTestDigest, imageTestPlatform)
+		if u.Status != "pinned" || u.VersionStatus != "unsupported" {
+			t.Fatalf("%s: %+v", tag, u)
+		}
+	}
+}
+func TestImagePinnedStatusSurvivesMetadataFailureAndCache(t *testing.T) {
+	for _, code := range []string{"platform_unavailable", "local_image"} {
+		m := newImageUpdateManager()
+		inspections := 0
+		m.inspect = func(context.Context, string, string) (imagePlatform, string) {
+			inspections++
+			return imagePlatform{}, code
+		}
+		m.check = func(context.Context, imageReference, string, imagePlatform) protocol.DockerImageUpdate {
+			t.Error("metadata failure requested registry")
+			return protocol.DockerImageUpdate{}
+		}
+		s := protocol.DockerSnapshot{Status: protocol.DockerAvailable, Containers: []protocol.DockerContainer{{Image: "demo:1.2.3@" + imageTestDigest, ImageID: imageTestDigest}}}
+		m.attach(context.Background(), &s)
+		waitImageWorker(t, m)
+		m.attach(context.Background(), &s)
+		u := s.Containers[0].Update
+		if u.Status != "pinned" || u.VersionStatus != "unknown" || u.VersionErrorCode != code || u.ErrorCode != "" || u.CheckedAt == nil || inspections != 1 {
+			t.Fatalf("%s: %+v inspections %d", code, u, inspections)
+		}
+		if err := u.Validate(); err != nil {
+			t.Fatal(err)
+		}
+	}
+}

@@ -32,6 +32,7 @@ func TestDockerUpdateFilterPartitionsAndFreshness(t *testing.T) {
 		{Status: "up_to_date", CheckedAt: &now, VersionStatus: "not_found"},
 		{Status: "update_available", CheckedAt: &now, VersionStatus: "unsupported"},
 		{Status: "up_to_date", CheckedAt: &now, VersionStatus: "available", LatestTag: "17", VersionKind: "major"},
+		{Status: "pinned", CheckedAt: &now, VersionStatus: "available", LatestTag: "17", VersionKind: "major"},
 		nil,
 		{Status: "update_available", CheckedAt: &old, VersionStatus: "unsupported"},
 		{Status: "up_to_date", CheckedAt: &now, VersionStatus: "unknown", VersionErrorCode: "tag_search_incomplete"},
@@ -56,7 +57,7 @@ func TestDockerUpdateFilterPartitionsAndFreshness(t *testing.T) {
 			t.Fatal("pagination ignored")
 		}
 	}
-	check("available", 2)
+	check("available", 3)
 	check("current", 2)
 	check("unknown", 5)
 	inv, err := s.DockerInventory(ctx, a.ID)
@@ -73,7 +74,7 @@ func TestDockerUpdateFilterPartitionsAndFreshness(t *testing.T) {
 		if strings.Contains(sql, "offline") {
 			check("available", 0)
 			check("current", 0)
-			check("unknown", 9)
+			check("unknown", 10)
 		}
 	}
 	if _, err = s.pool.Exec(ctx, `UPDATE docker_inventory SET last_success_at=now()-interval '2 minutes' WHERE agent_id=$1`, a.ID); err != nil {
@@ -81,7 +82,7 @@ func TestDockerUpdateFilterPartitionsAndFreshness(t *testing.T) {
 	}
 	check("available", 0)
 	check("current", 0)
-	check("unknown", 9)
+	check("unknown", 10)
 	if err = s.RecordDockerSnapshot(ctx, a.ID, report); err != nil {
 		t.Fatal(err)
 	}
@@ -89,5 +90,5 @@ func TestDockerUpdateFilterPartitionsAndFreshness(t *testing.T) {
 		t.Fatal(err)
 	}
 	check("available", 0)
-	check("unknown", 9)
+	check("unknown", 10)
 }

@@ -75,6 +75,8 @@ test('Docker update filtering distinguishes same-tag images and numbered version
   assert.equal(sandbox.dockerMatches(newer,'web','running','healthy','current',false,now),false);
   for (const version_status of ['not_found','unsupported']) assert.equal(sandbox.dockerUpdateInfo(report({version_status}),false,now).filter,'current');
   assert.equal(sandbox.dockerUpdateInfo(report({status:'unknown',version_status:'available',latest_tag:'1.2.3',version_error_code:'tag_search_incomplete'}),false,now).filter,'available');
+  const pinned = sandbox.dockerUpdateInfo(report({status:'pinned',version_status:'available',latest_tag:'17',version_kind:'major'}),false,now);
+  assert.equal(pinned.filter,'available'); assert.equal(pinned.sameTag,false); assert.equal(pinned.newerVersion,true); assert.equal(pinned.major,true);
 });
 
 test('Missing, incomplete, pinned and unsupported update observations never imply current', () => {
