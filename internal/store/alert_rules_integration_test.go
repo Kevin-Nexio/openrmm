@@ -15,9 +15,9 @@ func TestServerRulePrecedenceAndAgentBoundaryIntegration(t *testing.T) {
 	ctx := context.Background()
 	create := func(policyID *string, cfg string, proposal bool) *models.Check {
 		t.Helper()
-		c := &models.Check{PolicyID: policyID, Type: models.CheckConnectivity, Name: "connectivity", Config: json.RawMessage(cfg), Enabled: !proposal}
+		c := &models.Check{Attachments: models.OnPolicy(policyID), Type: models.CheckConnectivity, Name: "connectivity", Config: json.RawMessage(cfg), Enabled: !proposal}
 		if policyID == nil {
-			c.AgentID = &f.agent.ID
+			c.Attachments = models.OnAgent(&f.agent.ID)
 		}
 		if proposal {
 			c.ProposedBy = "ai:test"
@@ -219,28 +219,27 @@ func TestAlertRuleMigrationFromPreviousSchemaIntegration(t *testing.T) {
 	if err := st.migrate(ctx, migrations[:27]); err != nil {
 		t.Fatal(err)
 	}
-	// Seeded with SQL for the schema at migration 27. The store writes the
-	// latest columns, including timeout_policy from migration 036, which this
-	// database does not have yet.
-	policyID := newID()
-	if _, err := st.pool.Exec(ctx, `INSERT INTO policies (id, name) VALUES ($1, 'old policy')`, policyID); err != nil {
+	// Seeded with SQL: the store code targets the latest schema (migration 032
+	// added the policy switch it reads and writes, 040 the timeout policy).
+	policy := &models.Policy{ID: newID()}
+	if _, err := st.pool.Exec(ctx, `INSERT INTO policies (id, name) VALUES ($1, 'old policy')`, policy.ID); err != nil {
 		t.Fatal(err)
 	}
-	checkID := newID()
-	if _, err := st.pool.Exec(ctx, `INSERT INTO checks (
-		id, policy_id, type, name, config, interval_sec, failure_count, recovery_count, timeout_sec, enabled)
-		VALUES ($1,$2,'memory','legacy','{}',300,2,2,30,true)`, checkID, policyID); err != nil {
+	// The check too: before migration 037 a check had one owner column.
+	check := &models.Check{ID: newID()}
+	if _, err := st.pool.Exec(ctx, `INSERT INTO checks (id, policy_id, type, name, config, interval_sec, timeout_sec, failure_count, recovery_count, enabled)
+		VALUES ($1,$2,'memory','legacy','{}',300,30,2,2,true)`, check.ID, policy.ID); err != nil {
 		t.Fatal(err)
 	}
 	if _, err := st.pool.Exec(ctx, `INSERT INTO alerts (id,source_type,source_id,condition_key,severity,message,first_seen_at,last_seen_at,updated_at)
-		VALUES (gen_random_uuid(),'check',$1,'health','warning','legacy',now(),now(),now())`, checkID); err != nil {
+		VALUES (gen_random_uuid(),'check',$1,'health','warning','legacy',now(),now(),now())`, check.ID); err != nil {
 		t.Fatal(err)
 	}
 	if err := st.Migrate(ctx); err != nil {
 		t.Fatal(err)
 	}
 	var ruleID string
-	if err := st.pool.QueryRow(ctx, `SELECT rule_id FROM alerts WHERE source_id=$1`, checkID).Scan(&ruleID); err != nil || ruleID != checkID {
+	if err := st.pool.QueryRow(ctx, `SELECT rule_id FROM alerts WHERE source_id=$1`, check.ID).Scan(&ruleID); err != nil || ruleID != check.ID {
 		t.Fatalf("legacy backfill: %s %v", ruleID, err)
 	}
 	if err := st.Migrate(ctx); err != nil {

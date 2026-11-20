@@ -6,6 +6,7 @@ import (
 	"reflect"
 	"strings"
 	"testing"
+	"time"
 )
 
 func TestPrepareInventory(t *testing.T) {
@@ -122,4 +123,30 @@ func FuzzPrepareInventory(f *testing.F) {
 			t.Fatalf("normalization was not idempotent: %v", err)
 		}
 	})
+}
+
+func TestReportedUptime(t *testing.T) {
+	for _, tc := range []struct {
+		in   string
+		want time.Duration
+		ok   bool
+	}{
+		{`{"uptime_sec":3600}`, time.Hour, true},
+		{`{"uptime_sec":0}`, 0, true},
+		{`{"uptime_sec":90.5}`, 90*time.Second + 500*time.Millisecond, true},
+		{`{"uptime_sec":1e3}`, 1000 * time.Second, true},
+		{`{"hostname":"pc"}`, 0, false},
+		{`{"uptime_sec":null}`, 0, false},
+		{`{"uptime_sec":"3600"}`, 0, false},
+		{`{"uptime_sec":-1}`, 0, false},
+		{`{"uptime_sec":631152001}`, 0, false},
+		{`{"uptime_sec":1e400}`, 0, false},
+		{`{"uptime_sec":[1]}`, 0, false},
+		{`not json`, 0, false},
+	} {
+		got, ok := reportedUptime([]byte(tc.in))
+		if got != tc.want || ok != tc.ok {
+			t.Errorf("reportedUptime(%s) = %v, %v; want %v, %v", tc.in, got, ok, tc.want, tc.ok)
+		}
+	}
 }

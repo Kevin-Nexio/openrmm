@@ -276,7 +276,7 @@ func newMigrationTestStore(t *testing.T, databaseURL string) *Store {
 		admin.Close()
 		t.Fatalf("open test schema: %v", err)
 	}
-	st := &Store{pool: pool}
+	st := &Store{pool: pool, connections: pool}
 	t.Cleanup(func() {
 		st.Close()
 		_, _ = admin.Exec(context.Background(), "DROP SCHEMA "+quotedSchema+" CASCADE")

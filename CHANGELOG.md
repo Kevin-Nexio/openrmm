@@ -6,6 +6,69 @@ tag.
 
 ## [Unreleased]
 
+### Added
+
+- **The AI can propose edits to existing objects.** AI Chat and MCP can propose
+  an edit to a library script, check, scheduled task, policy or patch policy:
+  its fields, where a check or task applies, and a policy's assignments and
+  excluded devices.
+  - **Nothing changes until a person applies it** in the object's screen. The
+    review shows each changed field before and after.
+  - **Applying makes the edit as that person**, through the same checks as an
+    edit by hand. Those checks also run when the edit is proposed, so an
+    invalid value is refused at once and the assistant can correct it.
+  - **A proposal is stale if its reviewed state changed.** A reviewer must
+    have authority over the whole object. The edit, decision and audit commit
+    together. A newer proposal can replace an open one before a decision starts.
+  - **No autonomy setting applies an edit**, and a policy is switched on only
+    through its activation review.
+  - **An object still awaiting review cannot be edited this way.** It is
+    reviewed whole on its own screen.
+  - New tools: `list_scripts`, `get_editable_object` and `propose_*_edit`.
+    New endpoints: `/api/edit-proposals`. Migration 038.
+- **Checks and scheduled tasks in any number of policies and devices.** A check
+  or task is no longer owned by one policy or device: it is attached to as many
+  as needed, and a device gets it once whichever of them reach it. Policies
+  organised by function ("File server", "Backup server") can share a check and
+  edit it once.
+  - The editors take several policies and devices as chips.
+  - A policy's drawer has **Add an existing check** and **Add an existing task**.
+  - Inside a policy, a shared item offers **Make a copy for this policy** and
+    **Remove from this policy**.
+  - The lists show where each item applies, or **Not in use**, and the device
+    page lists every source.
+  - Migration 037 attaches every existing check and task to its policy or device.
+  - A restricted user changes a shared item only when every attachment is a
+    device in their scope, and sees only those attachments.
+  - An AI proposal awaiting review stays on its one attachment, and a check
+    silence never widens to where the check is attached later.
+  - API: `attachments` on checks and tasks, and `/attachments` and `/copy`
+    endpoints. `agent_id` and `policy_id` keep working for one target.
+- **Devices ▸ Last boot.** An optional column shows when each device last
+  booted, with the exact time on hover, and sorts the devices that have run
+  longest first. It starts hidden: turn it on from **Columns**. The server works
+  it out from the uptime the agent already reports in its inventory, so agents
+  do not need an update. Devices that reported an inventory before the upgrade
+  get it at once (migration 036).
+- **Deploy to many runs saved library scripts.** Devices ▸ Deploy to many has
+  a **From the library** option: pick a saved script, fill in its parameters,
+  and it runs by id on every selected device, with its script variables. Each
+  device gets the value set for it, its department, site or client, resolved
+  when its company's batch is approved. Before, a deployment sent typed text
+  only, without variables or parameters. Every device is checked first; if
+  any could not run the script (no value for a variable, an agent too old),
+  the deployment is refused and names them. `POST /api/jobs/bulk` takes
+  `script_id` and `params`.
+- **A device's Jobs tab shows each job's output.** A row expands in place to
+  show the output and exit code, or why there is none yet; **Open in Jobs** still
+  leads to the full job.
+
+### Changed
+
+- **Run script ▸ From library is searchable.** The picker on a device's Run
+  script tab filters as you type and groups scripts by category, instead of one
+  long list.
+
 ### Fixed
 
 - **A check timeout counts as one failure.** The server deadline was exactly
@@ -16,7 +79,7 @@ tag.
   result replaces that timeout instead of adding another failure, and a late
   success still clears the streak. A check can set Timeouts to "Count as a
   failure" (the default) or "Ignore". The review that approves a check, including
-  a policy activation, shows that choice.
+  a policy activation, shows that choice (migration 040).
 
 ## [0.11.4] - 2026-11-17
 

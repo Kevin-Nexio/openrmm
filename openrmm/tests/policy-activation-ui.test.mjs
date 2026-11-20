@@ -13,7 +13,7 @@ const patches = await readFile(new URL('../src/screens-patches.jsx', import.meta
 const slice = (src, from, to) => src.slice(src.indexOf(from), src.indexOf(to));
 const COMPONENTS = ['Card', 'Modal', 'Drawer', 'Field', 'Input', 'Button', 'Select', 'Toggle', 'ConfirmDialog', 'Icon', 'CodeBlock', 'Skeleton',
   'EmptyState', 'Page', 'PageHeader', 'OsIcon', 'TaskEditor', 'ReviewModal', 'ReviewSection', 'ReviewRow', 'TaskReview', 'CheckReview', 'ProposalBadge',
-  'TargetChips', 'TargetSelects'];
+  'TargetChips', 'TargetSelects', 'AppliesTo', 'EditProposalsPanel'];
 
 function harness(code, component, props, responses, data = {}) {
   const states = []; const calls = []; const toasts = []; let cursor = 0; let effectCursor = 0; let tree;

@@ -570,27 +570,32 @@ func (s *Service) ProposeBatch(ctx context.Context, agentIDs []string, shell, sc
 	if !models.SupportedShell(shell) {
 		return nil, "", fmt.Errorf("unsupported shell %q", shell)
 	}
+	return s.proposeBatchJobs(ctx, agentIDs, models.Job{Type: models.JobRunScript, Description: description, Shell: shell, Script: script}, createdBy)
+}
+
+// proposeBatchJobs creates one approval-gated copy of tmpl per agent, all
+// sharing a fresh batch_id.
+func (s *Service) proposeBatchJobs(ctx context.Context, agentIDs []string, tmpl models.Job, createdBy string) ([]models.Job, string, error) {
 	batchID := uuid.NewString()
 	out := make([]models.Job, 0, len(agentIDs))
 	for _, agentID := range agentIDs {
-		j := &models.Job{
-			AgentID:          agentID,
-			Type:             models.JobRunScript,
-			Description:      description,
-			Shell:            shell,
-			Script:           script,
-			Status:           models.JobAwaitingApproval,
-			RequiresApproval: true,
-			CreatedBy:        createdBy,
-			BatchID:          &batchID,
-		}
-		created, err := s.store.CreateJob(ctx, j)
+		j := tmpl
+		j.AgentID = agentID
+		j.Status = models.JobAwaitingApproval
+		j.RequiresApproval = true
+		j.CreatedBy = createdBy
+		j.BatchID = &batchID
+		created, err := s.store.CreateJob(ctx, &j)
 		if err != nil {
 			return nil, "", err
 		}
 		out = append(out, *created)
 	}
-	s.audit(ctx, createdBy, "job.batch.propose", batchID, map[string]any{"agents": len(out), "shell": shell})
+	detail := map[string]any{"agents": len(out), "shell": tmpl.Shell}
+	if tmpl.ScriptID != nil {
+		detail["script_id"] = *tmpl.ScriptID
+	}
+	s.audit(ctx, createdBy, "job.batch.propose", batchID, detail)
 	return out, batchID, nil
 }
 
@@ -616,6 +621,88 @@ func (s *Service) ProposeBulk(ctx context.Context, agentIDs []string, shell, scr
 	if err := s.checkFleetCanRunShell(ctx, agentIDs, shell); err != nil {
 		return nil, err
 	}
+	if !models.SupportedShell(shell) {
+		return nil, fmt.Errorf("unsupported shell %q", shell)
+	}
+	return s.proposeByCompany(ctx, agentIDs, models.Job{Type: models.JobRunScript, Description: description, Shell: shell, Script: script}, createdBy)
+}
+
+// ProposeBulkScript is ProposeBulk for a saved library script. Each job runs
+// the script by id, as a run from a device's page does: with the parameter
+// values given, and with the script's variables, whose values are looked up
+// for each device (its own, its department's, site's or client's, or the
+// global one) when the batch is approved and sent.
+//
+// Every device is checked before anything is created, and the whole deployment
+// is refused if any of them could not run the script, naming them: a device too
+// old for the shell, the parameters or the variables, or a variable with no
+// value for that device. The same reasoning as ProposeBulk: a partial
+// deployment would not be the one the approver is shown.
+func (s *Service) ProposeBulkScript(ctx context.Context, agentIDs []string, sc *models.Script, params map[string]string, description, createdBy string) ([]BatchInfo, error) {
+	if sc == nil {
+		return nil, fmt.Errorf("script required")
+	}
+	if sc.Pending {
+		return nil, ErrScriptPending
+	}
+	if !models.SupportedShell(sc.Shell) {
+		return nil, fmt.Errorf("unsupported shell %q", sc.Shell)
+	}
+	if err := s.checkFleetCanRunShell(ctx, agentIDs, sc.Shell); err != nil {
+		return nil, err
+	}
+	var problems []string
+	for _, id := range agentIDs {
+		if err := s.checkLibraryRun(ctx, id, sc, params); err != nil {
+			problems = append(problems, err.Error())
+		}
+	}
+	if len(problems) > 0 {
+		shown, suffix := problems, ""
+		if len(shown) > 10 {
+			shown, suffix = shown[:10], fmt.Sprintf("; and %d more", len(problems)-10)
+		}
+		return nil, fmt.Errorf("%w: %s%s", ErrFleetCannotRun, strings.Join(shown, "; "), suffix)
+	}
+	scriptID := sc.ID
+	return s.proposeByCompany(ctx, agentIDs, models.Job{
+		Type: models.JobRunScript, Description: description, Shell: sc.Shell, Script: sc.Body,
+		ScriptID: &scriptID, Params: params, Variables: sc.Variables,
+	}, createdBy)
+}
+
+// ErrFleetCannotRun refuses a deployment some of its devices could not run.
+var ErrFleetCannotRun = errors.New("some devices cannot run this script")
+
+// checkLibraryRun is what running a saved script needs from one device: the
+// checks RunScriptWithParams makes, with the device named in every message.
+func (s *Service) checkLibraryRun(ctx context.Context, agentID string, sc *models.Script, params map[string]string) error {
+	a, err := s.usableAgent(ctx, agentID)
+	if err != nil {
+		return fmt.Errorf("%s: %w", agentID, err)
+	}
+	if err := agentCanRunShell(a, sc.Shell); err != nil {
+		return err
+	}
+	if len(params) > 0 {
+		if err := agentAcceptsAutonomy(a); err != nil {
+			return err
+		}
+	}
+	if err := s.checkScriptVars(a, sc); err != nil {
+		return err
+	}
+	if len(sc.Variables) > 0 {
+		if _, _, err := s.resolveScriptVars(ctx, a.ID, sc.Variables); err != nil {
+			return fmt.Errorf("%s: %w", a.Hostname, err)
+		}
+	}
+	return nil
+}
+
+// proposeByCompany splits the target agents by company and creates one batch
+// of tmpl per company. Agents with no company form their own batch.
+func (s *Service) proposeByCompany(ctx context.Context, agentIDs []string, tmpl models.Job, createdBy string) ([]BatchInfo, error) {
 	clientOf, err := s.store.ClientForAgents(ctx, agentIDs)
 	if err != nil {
 		return nil, err
@@ -631,7 +718,7 @@ func (s *Service) ProposeBulk(ctx context.Context, agentIDs []string, shell, scr
 	}
 	out := make([]BatchInfo, 0, len(order))
 	for _, c := range order {
-		jobsCreated, batchID, err := s.ProposeBatch(ctx, byCompany[c], shell, script, description, createdBy)
+		jobsCreated, batchID, err := s.proposeBatchJobs(ctx, byCompany[c], tmpl, createdBy)
 		if err != nil {
 			return nil, err
 		}

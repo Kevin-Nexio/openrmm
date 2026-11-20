@@ -55,6 +55,11 @@ var toolRiskClass = map[string]string{
 	"propose_move_devices": ClassChange, "propose_delete_devices": ClassChange,
 
 	"cancel_job": ClassStop,
+
+	// Edit proposals change nothing until a person applies them.
+	"list_scripts": ClassConsoleRead, "get_editable_object": ClassConsoleRead,
+	"propose_script_edit": ClassChange, "propose_check_edit": ClassChange, "propose_task_edit": ClassChange,
+	"propose_policy_edit": ClassChange, "propose_patch_policy_edit": ClassChange,
 }
 
 // ToolRiskClass reports a tool's class; ok is false for a tool that has none,

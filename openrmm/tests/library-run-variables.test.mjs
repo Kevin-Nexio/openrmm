@@ -13,7 +13,7 @@ import { transformSync } from 'esbuild';
 // editor runs the saved version only (no unsaved edit is lost silently).
 const devices = await readFile(new URL('../src/screens-devices.jsx', import.meta.url), 'utf8');
 const rmm2 = await readFile(new URL('../src/screens-rmm2.jsx', import.meta.url), 'utf8');
-const form = devices.slice(devices.indexOf('function RunScriptForm('), devices.indexOf('function DevicePatches('));
+const form = devices.slice(devices.indexOf('// libraryScriptOptions lists saved scripts'), devices.indexOf('function DevicePatches('));
 
 const variables = [{ id: 'v1', name: 'HUNTRESS_ACCOUNT_KEY', secret: true }, { id: 'v2', name: 'SITE_CODE', secret: false }, { id: 'v3', name: 'PROPOSED_KEY', pending: true }];
 // Who may run jobs but not bind variables to scripts.
@@ -47,7 +47,9 @@ function harness({ allowUnapproved = false, perms } = {}) {
   render();
   const ui = {
     calls, render, find, text: () => text(tree),
-    pick(id) { find((n) => n.type === 'Select' && n.props.value === '')[0].props.onChange({ target: { value: id } }); render(); },
+    // The library picker is the searchable one that springs back to its placeholder.
+    pick(id) { find((n) => n.type === 'Combobox' && n.props.placeholder === 'run.startFrom')[0].props.onChange(id); render(); },
+    variablePicker() { return find((n) => n.type === 'Combobox' && n.props.placeholder === 'run.addVariable')[0]; },
     type(value) { find((n) => n.type === 'CodeEditor')[0].props.onChange(value); render(); },
     submit() { return find((n) => n.type === 'Button' && n.props.variant === 'primary')[0].props.onClick(); },
     submitDisabled() { return find((n) => n.type === 'Button' && n.props.variant === 'primary')[0].props.disabled; },
@@ -110,7 +112,7 @@ test('someone who may bind variables keeps them on an edited copy, picks more, a
   assert.match(ui.text(), /run\.libraryEditedVars .*Huntress install/);
   assert.ok(ui.notice('variables'), 'the picker is offered');
   assert.match(ui.text(), /HUNTRESS_ACCOUNT_KEY/, "the script's names stay selected");
-  const picker = ui.find((n) => n.type === 'Combobox')[0];
+  const picker = ui.variablePicker();
   assert.deepEqual([...picker.props.options].map((o) => o.value), ['SITE_CODE'], 'selected and proposed names are not offered');
   picker.props.onChange('SITE_CODE'); ui.render();
   await ui.submit();
@@ -134,7 +136,7 @@ test('a one-off script from scratch takes variables only when picked, and CMD ta
   assert.equal(ui.find((n) => n.type === 'input' && n.props.type === 'checkbox').length, 1, '"run immediately" stays for a job without variables');
   await ui.submit();
   assert.equal('variables' in ui.calls.find((c) => c.name === 'createJob').args[0], false);
-  ui.find((n) => n.type === 'Combobox')[0].props.onChange('SITE_CODE'); ui.render();
+  ui.variablePicker().props.onChange('SITE_CODE'); ui.render();
   ui.find((n) => n.type === 'Select' && n.props.value === 'powershell')[0].props.onChange({ target: { value: 'cmd' } }); ui.render();
   assert.equal(ui.notice('variables'), undefined, 'CMD gets no picker');
   assert.match(ui.text(), /vars\.cmdUnsupported/);
@@ -176,7 +178,7 @@ test('the job card names the variables a job receives, and says from the server 
   assert.match(chatSrc, /<window\.JobVariables names=\{j\.variables\} oneOff=\{!j\.script_id\} \/>/);
 });
 
-test('a bulk deployment says that only its text is sent', () => {
-  const bulk = devices.slice(devices.indexOf('function BulkDeployModal('), devices.indexOf('function RunScriptForm('));
-  assert.match(bulk, /<Field label=\{t\('deploy\.script'\)\} hint=\{t\('deploy\.noVariablesHint'\)\}>/);
+test('a bulk deployment of typed text says that only its text is sent', () => {
+  const bulk = devices.slice(devices.indexOf('function BulkDeployModal('), devices.indexOf('/* ----------------------------- Device detail'));
+  assert.match(bulk, /<Field label=\{t\('deploy\.script'\)\} hint=\{t\(canLibrary \? 'deploy\.noVariablesHint' : 'deploy\.noVariablesHintNoLibrary'\)\}>/);
 });

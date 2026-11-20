@@ -33,6 +33,8 @@ const RUNTIME_ACTIONS = [
   'alert.ack', 'alert.resolve', 'alert.suppress', // api_monitoring.go: "alert." + action
   'alert.bulk.ack', 'alert.bulk.resolve', 'alert.bulk.suppress', // "alert.bulk." + in.Action
   'alert_rule.create', 'alert_rule.update', 'alert_rule.delete', // api_alert_rules.go: "alert_rule." + action
+  // api_edit_proposals.go: p.Kind + ".edit." + decision
+  ...['script', 'check', 'task', 'policy', 'patch_policy'].flatMap((k) => ['apply', 'reject', 'fail'].map((d) => k + '.edit.' + d)),
 ];
 
 test('every audit action the server records has a label in every language', async () => {

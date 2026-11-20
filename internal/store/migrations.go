@@ -135,8 +135,20 @@ var migrationV34SQL string
 //go:embed migrations/035_last_logged_in_user.sql
 var migrationV35SQL string
 
-//go:embed migrations/036_check_timeout_policy.sql
+//go:embed migrations/036_last_boot.sql
 var migrationV36SQL string
+
+//go:embed migrations/037_monitoring_attachments.sql
+var migrationV37SQL string
+
+//go:embed migrations/038_edit_proposals.sql
+var migrationV38SQL string
+
+//go:embed migrations/039_audit_chain_transaction_time.sql
+var migrationV39SQL string
+
+//go:embed migrations/040_check_timeout_policy.sql
+var migrationV40SQL string
 
 var migrations = []migration{
 	{version: 1, name: "baseline", sql: migrationV1SQL},
@@ -174,7 +186,11 @@ var migrations = []migration{
 	{version: 33, name: "policy_targeting", sql: migrationV33SQL},
 	{version: 34, name: "logged_in_user", sql: migrationV34SQL},
 	{version: 35, name: "last_logged_in_user", sql: migrationV35SQL},
-	{version: 36, name: "check_timeout_policy", sql: migrationV36SQL},
+	{version: 36, name: "last_boot", sql: migrationV36SQL},
+	{version: 37, name: "monitoring_attachments", sql: migrationV37SQL},
+	{version: 38, name: "edit_proposals", sql: migrationV38SQL},
+	{version: 39, name: "audit_chain_transaction_time", sql: migrationV39SQL},
+	{version: 40, name: "check_timeout_policy", sql: migrationV40SQL},
 }
 
 // Migrate applies pending migrations atomically. The transaction-scoped lock
