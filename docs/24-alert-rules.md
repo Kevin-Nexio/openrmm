@@ -176,6 +176,69 @@ Agent-owned and directly owned check silences are bound to the same scope revisi
 
 Migration 028 ships in 0.10.0. A test database that applied an earlier pre-release draft of it must be recreated: an applied migration is never edited, so a changed checksum is refused.
 
+## Client and Site email recipients
+
+In **Clients & Sites**, open a Client or Site action menu and choose **Alert email
+recipients**. Client and Site are the existing organization levels; no new device
+group hierarchy is added. The default is **Inherit from parent**: a Site inherits
+its Client selection, and a Client without a selection uses the existing automatic
+subscriber behavior. **Choose accounts** replaces the inherited selection at that
+level. A Site selection does not add to its Client's selection. Returning to
+inheritance is an explicit mode change.
+
+Selections contain existing active OpenRMM accounts with an address, `alerts.view`
+and a scope intersecting the target. They never grant access or bypass event
+subscriptions, selected-rule filters or transport-specific email verification.
+A recipient limited to one device can be selected for its Client, but receives
+only incidents it is authorized to read. Structural scopes work before devices
+are enrolled, including empty Sites and departments. External email addresses
+without an OpenRMM account are not accepted.
+
+The editor requires `clients.manage` and control of the complete target Client or
+Site. Its recipient search is scoped and limited to 200 results per query. An
+inherited selection can contain accounts from sibling Sites: their names, email
+addresses and IDs are not returned to a Site-limited editor. Only an unavailable
+count is shown. Unavailable selections are explicitly removed when an editor
+saves the remaining valid accounts. At most 200 unique accounts can be selected;
+a selected mode cannot be saved empty. Removing the last account later leaves an
+empty explicit selection; it does **not** restore automatic delivery. Choose
+inheritance or select another account to resume notifications deliberately.
+
+Changes apply to **new incidents**. Opening an incident captures the effective
+route, origin, version and recipient IDs. Recovery messages keep that original
+route, intersected with current recipient eligibility. Reopening creates a new
+incident with the current route. Moving a device preserves the existing historical
+scope rules and retires old incidents without a recovery email solely for the
+move. Nonincident job/AI notifications capture the effective route when queued.
+
+Writes use `expected_version`, keep a versioned row even when returning to
+inheritance, and commit the route and audit event together. A concurrent change
+returns 409; the editor retains unsaved edits and offers explicit reload. Opening
+another Client/Site creates a separate editor. Access errors clear recipient data.
+
+| Method | Path | Permission |
+|---|---|---|
+| GET/PUT | `/api/clients/{id}/notification-routing` | `clients.manage`, complete Client scope |
+| GET/PUT | `/api/sites/{id}/notification-routing` | `clients.manage`, complete Site scope |
+| GET | Either path plus `/recipients?q=...` | Same target access, scoped account options |
+
+PUT accepts only `expected_version`, `mode` (`inherit` or `selected`) and `user_ids`.
+GET returns local configuration, effective origin and authorized recipient labels.
+Recipient searches accept up to 200 Unicode characters. No route changes are
+available to AI tools in this feature.
+
+Migration 041 adds routing configuration and private incident route snapshots.
+Existing incidents are explicitly marked automatic, so upgrading does not rewrite
+their recipient policy. The migration also preserves audit chain ordering for new
+mixed transactions by normalizing timestamps under the existing chain lock; it
+does not rewrite or repair old audit history. Append-only protections remain.
+
+Upgrade and restart **all server and notification worker instances together before
+configuring routes**. Older binaries do not understand route snapshots; mixed
+version rolling operation is not supported for this change. Back up the database
+and follow the normal deployment procedure. These development tests do not deploy
+the feature or change production recipient settings.
+
 ## Queued email authorization
 
 Each new queued message records a private, versioned delivery context: event type,

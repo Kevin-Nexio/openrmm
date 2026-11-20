@@ -150,6 +150,9 @@ var migrationV39SQL string
 //go:embed migrations/040_notification_delivery_context.sql
 var migrationV40SQL string
 
+//go:embed migrations/041_client_site_notification_routing.sql
+var migrationV41SQL string
+
 var migrations = []migration{
 	{version: 1, name: "baseline", sql: migrationV1SQL},
 	{version: 2, name: "pending_totp_secret", sql: migrationV2SQL},
@@ -191,6 +194,7 @@ var migrations = []migration{
 	{version: 38, name: "patch_scan_state", sql: migrationV38SQL},
 	{version: 39, name: "device_operational_profile", sql: migrationV39SQL},
 	{version: 40, name: "notification_delivery_context", sql: migrationV40SQL},
+	{version: 41, name: "client_site_notification_routing", sql: migrationV41SQL},
 }
 
 // Migrate applies pending migrations atomically. The transaction-scoped lock
