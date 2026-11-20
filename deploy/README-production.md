@@ -323,6 +323,12 @@ BASEBACKUP_KEEP=2
 VERIFY_FULL_RESTORE=true
 ```
 
+The scripts in `deploy/ops/` run Compose with the same files as a plain
+`docker compose` in `deploy/`. They take `COMPOSE_FILE` from the environment or
+from `deploy/.env`, as the published-images layering in
+[QUICKSTART.md](QUICKSTART.md) sets it, and fall back to
+`docker-compose.prod.yml`. A relative path is relative to `deploy/`.
+
 Create a custom-format PostgreSQL backup, validate its archive, encrypt it with
 age, write a SHA-256 sidecar, and copy both files with rclone when configured:
 
