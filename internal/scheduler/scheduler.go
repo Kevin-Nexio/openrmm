@@ -835,14 +835,14 @@ func (s *Scheduler) reconcileCheckStates(ctx context.Context) {
 }
 
 // queueAlertNotification copies one durable transition into the per-recipient
-// outbox and only then clears the alert's pending marker. Its sequence makes a
-// retry idempotent even if the first attempt queued only some recipients.
+// outbox and consumes the pending marker in one transaction. Its captured model
+// rejects stale content and its sequence makes concurrent retries idempotent.
 func (s *Scheduler) queueAlertNotification(ctx context.Context, alert *models.Alert, detail string) error {
 	if alert == nil || !alert.NotificationPending {
 		return nil
 	}
 	if alert.AgentSnapshotID == nil {
-		return s.store.MarkAlertNotificationQueued(ctx, alert.ID, alert.NotificationSeq, time.Now())
+		return s.store.QueueAlertNotifications(ctx, alert, "", "", "", false, true)
 	}
 	agentID := *alert.AgentSnapshotID
 	hostname := alert.AgentHostname
@@ -871,11 +871,10 @@ func (s *Scheduler) queueAlertNotification(ctx context.Context, alert *models.Al
 			event = notify.AlertOpenedEvent(eventType, agentID, hostname, alert.ID, detail, s.consoleURL)
 		}
 		event.DedupeKey = fmt.Sprintf("alert:%s:%d", alert.ID, alert.NotificationSeq)
-		if err := s.notifier.Queue(ctx, event); err != nil {
-			return err
-		}
+		event.AlertSnapshot = alert
+		return s.notifier.Queue(ctx, event)
 	}
-	return s.store.MarkAlertNotificationQueued(ctx, alert.ID, alert.NotificationSeq, time.Now())
+	return s.store.QueueAlertNotifications(ctx, alert, "", "", "", false, true)
 }
 
 func (s *Scheduler) deliverPendingAlertNotifications(ctx context.Context) {

@@ -23,6 +23,17 @@ tag.
   unchanged. Only unrestricted managers can change exception policies; scoped
   viewers can inspect the effective rule. All nine console locales are included.
 
+### Fixed
+
+- Recheck queued alert recipients before every SMTP attempt using immutable
+  device scope and rule provenance. Disabled accounts, changed addresses,
+  revoked permissions and unsubscribed recipients no longer receive stale
+  queued messages. Tenant/operator address-verification defaults are preserved.
+- Queue an incident's recipient fanout and consume its pending transition in
+  one transaction, rejecting stale rendered content and rolling back partial
+  inserts. Migration 040 preserves old outbox rows with conservative delivery
+  checks when their original provenance cannot be proven.
+
 ## [0.11.4] - 2026-11-17
 
 ### Fixed
