@@ -53,6 +53,7 @@ type state struct {
 }
 
 type agent struct {
+	dockerCollectMu sync.Mutex
 	wsURL           string
 	enrollToken     string
 	allowEnrollment bool
@@ -332,6 +333,7 @@ func (a *agent) runOnce() error {
 	done := make(chan struct{})
 	go a.writePump(conn, done)
 	go a.telemetryLoop(done)
+	go a.dockerLoop(done, a.send)
 	go a.updateLoop(done)
 	go confirmHealthyUpdate(done)
 	a.flushCredentialRotationCancellation()
@@ -1344,6 +1346,7 @@ func (a *agent) runCheck(chk protocol.RunCheckMsg) {
 	var value *float64
 	var output string
 	success := false
+	unknown := false
 	timeout := checkExecutionTimeout(chk.TimeoutSec)
 	checkCtx, cancelCheck := context.WithTimeout(context.Background(), timeout)
 	defer cancelCheck()
@@ -1383,6 +1386,8 @@ func (a *agent) runCheck(chk protocol.RunCheckMsg) {
 		}
 		_ = json.Unmarshal(chk.Config, &cfg)
 		success, output = doPing(checkCtx, cfg.Host)
+	case protocol.CheckDockerContainer:
+		success, unknown, output = runDockerCheck(checkCtx, chk.Config)
 	case protocol.CheckLinuxService, protocol.CheckMacService:
 		success, output = runServiceCheck(checkCtx, chk.Type, chk.Config)
 	case "winservice":
@@ -1406,7 +1411,7 @@ func (a *agent) runCheck(chk protocol.RunCheckMsg) {
 
 	a.reportCheckResult(protocol.CheckResultMsg{
 		CheckID: chk.CheckID, ExecutionID: chk.ExecutionID,
-		Value: value, Output: truncateRunes(output, 4000), Success: success,
+		Value: value, Output: truncateRunes(output, 4000), Success: success, Unknown: unknown,
 	})
 }
 
