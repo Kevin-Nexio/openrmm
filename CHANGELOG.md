@@ -6,6 +6,20 @@ tag.
 
 ## [Unreleased]
 
+### Fixed
+
+- **A script that starts something in the background no longer keeps a job
+  or check running.** On Linux and macOS, a job or script check whose script
+  started a process in the background (`service &` without redirecting its
+  output) ran until that process exited, past its timeout. At the timeout the
+  agent killed only the shell, and the process it left kept the output open.
+  - At a timeout or a cancel, the agent now stops the script's whole process
+    group, as it already stopped the process tree on Windows.
+  - A script that exits while something it started still holds its output
+    finishes 5 seconds later, with its own exit status and a note that output
+    after it exited is not included.
+  - Needs the agent update.
+
 ## [0.11.4] - 2026-11-17
 
 ### Fixed
