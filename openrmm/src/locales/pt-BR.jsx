@@ -6,6 +6,14 @@
  * tasks. Translating it would create two Portuguese words for two different
  * English ones, crossed over. */
 (window.LOCALE_STRINGS = window.LOCALE_STRINGS || {})['pt-BR'] = {
+  'fleetTree.view': 'Visualização',
+  'fleetTree.flat': 'Lista',
+  'fleetTree.tree': 'Clientes e locais',
+  'fleetTree.noClient': 'Sem cliente',
+  'fleetTree.noSite': 'Sem local',
+  'fleetTree.unknownClient': 'Cliente indisponível',
+  'fleetTree.unknownSite': 'Local indisponível',
+
   'nav.dashboard': 'Painel',
   'nav.chat': 'Chat com IA',
   'nav.alerts': 'Alertas',

@@ -3,6 +3,14 @@
  * Add a key here first; the tests then require every other locale to carry it.
  * Keys are grouped by screen, in the order the screen shows them. */
 (window.LOCALE_STRINGS = window.LOCALE_STRINGS || {})['en'] = {
+  'fleetTree.view': 'View',
+  'fleetTree.flat': 'List',
+  'fleetTree.tree': 'Clients and sites',
+  'fleetTree.noClient': 'No client',
+  'fleetTree.noSite': 'No site',
+  'fleetTree.unknownClient': 'Client unavailable',
+  'fleetTree.unknownSite': 'Site unavailable',
+
   // ---- navigation
   'nav.dashboard': 'Dashboard',
   'nav.chat': 'AI Chat',

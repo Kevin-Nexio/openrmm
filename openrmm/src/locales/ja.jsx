@@ -1,5 +1,13 @@
 /* Japanese — MACHINE-DRAFTED, NOT REVIEWED. */
 (window.LOCALE_STRINGS = window.LOCALE_STRINGS || {})['ja'] = {
+  'fleetTree.view': '表示',
+  'fleetTree.flat': '一覧',
+  'fleetTree.tree': 'クライアントとサイト',
+  'fleetTree.noClient': 'クライアントなし',
+  'fleetTree.noSite': 'サイトなし',
+  'fleetTree.unknownClient': 'クライアント情報なし',
+  'fleetTree.unknownSite': 'サイト情報なし',
+
   'nav.dashboard': 'ダッシュボード',
   'nav.chat': 'AI チャット',
   'nav.alerts': 'アラート',

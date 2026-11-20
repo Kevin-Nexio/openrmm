@@ -1,5 +1,13 @@
 /* Korean — full key coverage; linguistic review by a native speaker pending. */
 (window.LOCALE_STRINGS = window.LOCALE_STRINGS || {})['ko'] = {
+  'fleetTree.view': '보기',
+  'fleetTree.flat': '목록',
+  'fleetTree.tree': '고객 및 사이트',
+  'fleetTree.noClient': '고객 없음',
+  'fleetTree.noSite': '사이트 없음',
+  'fleetTree.unknownClient': '고객 정보 없음',
+  'fleetTree.unknownSite': '사이트 정보 없음',
+
   'nav.dashboard': "대시보드",
   'nav.chat': "AI 채팅",
   'nav.alerts': "알림",

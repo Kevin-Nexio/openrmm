@@ -1,5 +1,13 @@
 /* Russian — full key coverage; linguistic review by a native speaker pending. */
 (window.LOCALE_STRINGS = window.LOCALE_STRINGS || {})['ru'] = {
+  'fleetTree.view': 'Вид',
+  'fleetTree.flat': 'Список',
+  'fleetTree.tree': 'Клиенты и площадки',
+  'fleetTree.noClient': 'Без клиента',
+  'fleetTree.noSite': 'Без площадки',
+  'fleetTree.unknownClient': 'Клиент недоступен',
+  'fleetTree.unknownSite': 'Площадка недоступна',
+
   'nav.dashboard': "Панель управления",
   'nav.chat': "Чат с ИИ",
   'nav.alerts': "Оповещения",

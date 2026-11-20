@@ -1,5 +1,13 @@
 /* Spanish. Reviewed. */
 (window.LOCALE_STRINGS = window.LOCALE_STRINGS || {})['es'] = {
+  'fleetTree.view': 'Vista',
+  'fleetTree.flat': 'Lista',
+  'fleetTree.tree': 'Clientes y sitios',
+  'fleetTree.noClient': 'Sin cliente',
+  'fleetTree.noSite': 'Sin sitio',
+  'fleetTree.unknownClient': 'Cliente no disponible',
+  'fleetTree.unknownSite': 'Sitio no disponible',
+
   'nav.dashboard': 'Panel',
   'nav.chat': 'Chat con IA',
   'nav.alerts': 'Alertas',

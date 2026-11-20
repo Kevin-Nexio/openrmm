@@ -1,5 +1,13 @@
 /* Malay — full key coverage; linguistic review by a native speaker pending. */
 (window.LOCALE_STRINGS = window.LOCALE_STRINGS || {})['ms'] = {
+  'fleetTree.view': 'Paparan',
+  'fleetTree.flat': 'Senarai',
+  'fleetTree.tree': 'Pelanggan dan tapak',
+  'fleetTree.noClient': 'Tiada pelanggan',
+  'fleetTree.noSite': 'Tiada tapak',
+  'fleetTree.unknownClient': 'Pelanggan tidak tersedia',
+  'fleetTree.unknownSite': 'Tapak tidak tersedia',
+
   'nav.dashboard': "Papan pemuka",
   'nav.chat': "Sembang AI",
   'nav.alerts': "Amaran",

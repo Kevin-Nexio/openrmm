@@ -1,5 +1,13 @@
 /* Simplified Chinese — MACHINE-DRAFTED, NOT REVIEWED. */
 (window.LOCALE_STRINGS = window.LOCALE_STRINGS || {})['zh-CN'] = {
+  'fleetTree.view': '视图',
+  'fleetTree.flat': '列表',
+  'fleetTree.tree': '客户和站点',
+  'fleetTree.noClient': '无客户',
+  'fleetTree.noSite': '无站点',
+  'fleetTree.unknownClient': '客户不可用',
+  'fleetTree.unknownSite': '站点不可用',
+
   'nav.dashboard': '仪表板',
   'nav.chat': 'AI 聊天',
   'nav.alerts': '告警',
