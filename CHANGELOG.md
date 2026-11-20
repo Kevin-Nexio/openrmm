@@ -8,6 +8,11 @@ tag.
 
 ### Added
 
+- Devices and Patches > Compliance offer expandable Client / Site rows and a
+  remembered list/tree choice. Search includes authorized client and site names,
+  temporarily opens matching branches, and keeps bulk scans scoped to all
+  filtered devices even when a branch is collapsed.
+
 - Patches > Compliance shows each device description and searches both hostname
   and description. Every data column sorts in either direction, with numeric
   counts, chronological scan dates, and missing values last.

@@ -30,6 +30,13 @@
   "operations.loadError": "このデバイスのプロファイルを読み込めませんでした。",
   "operations.saveError": "保存できませんでした。編集中の内容は保持されています。",
   "audit.action.device.operational_profile.update": "デバイス運用プロファイルを更新",
+  'fleetTree.view': '表示',
+  'fleetTree.flat': '一覧',
+  'fleetTree.tree': 'クライアントとサイト',
+  'fleetTree.noClient': 'クライアントなし',
+  'fleetTree.noSite': 'サイトなし',
+  'fleetTree.unknownClient': 'クライアント情報なし',
+  'fleetTree.unknownSite': 'サイト情報なし',
 
   'nav.dashboard': 'ダッシュボード',
   'nav.chat': 'AI チャット',

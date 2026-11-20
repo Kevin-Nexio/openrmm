@@ -33,6 +33,13 @@
   "operations.loadError": "Unable to load this device’s profile.",
   "operations.saveError": "Unable to save the profile. Your edits are preserved.",
   "audit.action.device.operational_profile.update": "Device operations profile updated",
+  'fleetTree.view': 'View',
+  'fleetTree.flat': 'List',
+  'fleetTree.tree': 'Clients and sites',
+  'fleetTree.noClient': 'No client',
+  'fleetTree.noSite': 'No site',
+  'fleetTree.unknownClient': 'Client unavailable',
+  'fleetTree.unknownSite': 'Site unavailable',
 
   // ---- navigation
   'nav.dashboard': 'Dashboard',

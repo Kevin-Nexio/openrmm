@@ -36,6 +36,13 @@
   "operations.loadError": "Não foi possível carregar o perfil deste dispositivo.",
   "operations.saveError": "Não foi possível salvar o perfil. Suas edições foram preservadas.",
   "audit.action.device.operational_profile.update": "Perfil operacional do dispositivo atualizado",
+  'fleetTree.view': 'Visualização',
+  'fleetTree.flat': 'Lista',
+  'fleetTree.tree': 'Clientes e locais',
+  'fleetTree.noClient': 'Sem cliente',
+  'fleetTree.noSite': 'Sem local',
+  'fleetTree.unknownClient': 'Cliente indisponível',
+  'fleetTree.unknownSite': 'Local indisponível',
 
   'nav.dashboard': 'Painel',
   'nav.chat': 'Chat com IA',

@@ -30,6 +30,13 @@
   "operations.loadError": "이 장치의 프로필을 불러올 수 없습니다.",
   "operations.saveError": "프로필을 저장할 수 없습니다. 편집 내용은 유지됩니다.",
   "audit.action.device.operational_profile.update": "장치 운영 프로필 업데이트",
+  'fleetTree.view': '보기',
+  'fleetTree.flat': '목록',
+  'fleetTree.tree': '고객 및 사이트',
+  'fleetTree.noClient': '고객 없음',
+  'fleetTree.noSite': '사이트 없음',
+  'fleetTree.unknownClient': '고객 정보 없음',
+  'fleetTree.unknownSite': '사이트 정보 없음',
 
   'nav.dashboard': "대시보드",
   'nav.chat': "AI 채팅",

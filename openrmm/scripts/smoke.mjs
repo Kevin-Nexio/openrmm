@@ -47,9 +47,9 @@ const aiTask = { id: 'task-ai', agent_id: 'dev-1', name: 'AI cleanup task', shel
 // no one is logged in to and one offline with its last report.
 const rebootTime = new Date().toISOString();
 const fleet = [
-  { reboot_pending: true, reboot_status: 'required', reboot_reason: 'Kernel update requires restart', reboot_checked_at: rebootTime, reboot_pending_since: rebootTime, reboot_requested_at: rebootTime, reboot_observed_at: rebootTime, id: 'dev-1', hostname: 'SMOKE-PC', description: 'Smoke device', os: 'Linux', arch: 'amd64', version: '1.0.0', status: 'online', tags: [], last_seen: '2026-01-01T00:00:00Z', logged_in_user: 'ACME\\zoe', logged_in_user_since: '2026-01-01T00:00:00Z' },
-  { reboot_status: 'not_required', reboot_checked_at: rebootTime, id: 'dev-2', hostname: 'ALPHA-WS', description: '', os: 'windows', arch: 'amd64', version: '0.11.0', status: 'online', tags: [], last_seen: '2026-01-01T00:00:00Z', logged_in_user: 'AzureAD\\Ana' },
-  { id: 'dev-3', hostname: 'BETA-SRV', description: '', os: 'windows', arch: 'amd64', version: '0.11.0', status: 'offline', tags: [], last_seen: '2025-12-31T00:00:00Z', logged_in_user: '' },
+  { reboot_pending: true, reboot_status: 'required', reboot_reason: 'Kernel update requires restart', reboot_checked_at: rebootTime, reboot_pending_since: rebootTime, reboot_requested_at: rebootTime, reboot_observed_at: rebootTime, id: 'dev-1', site_id: 'site-main', hostname: 'SMOKE-PC', description: 'Smoke device', os: 'Linux', arch: 'amd64', version: '1.0.0', status: 'online', tags: [], last_seen: '2026-01-01T00:00:00Z', logged_in_user: 'ACME\\zoe', logged_in_user_since: '2026-01-01T00:00:00Z' },
+  { reboot_status: 'not_required', reboot_checked_at: rebootTime, id: 'dev-2', site_id: 'site-main', hostname: 'ALPHA-WS', description: '', os: 'windows', arch: 'amd64', version: '0.11.0', status: 'online', tags: [], last_seen: '2026-01-01T00:00:00Z', logged_in_user: 'AzureAD\\Ana' },
+  { id: 'dev-3', site_id: 'site-remote', hostname: 'BETA-SRV', description: '', os: 'windows', arch: 'amd64', version: '0.11.0', status: 'offline', tags: [], last_seen: '2025-12-31T00:00:00Z', logged_in_user: '' },
 ];
 
 // Docker fixtures use receipt times generated per request, so long browser suites
@@ -62,9 +62,9 @@ let complianceTableMode = false;
 // Patches > Compliance: descriptions belong to devices, counts sort as
 // numbers, and dates with offsets must be compared by their actual instant.
 const complianceRows = [
-  { agent_id: 'dev-1', hostname: 'SMOKE-PC', description: 'Room 10', os: 'linux', status: 'critical', missing_total: 10, missing_security: 10, approved: 2, failed: 0, reboot_pending: false, last_scan: '2026-01-01T00:00:00Z' },
-  { agent_id: 'dev-2', hostname: 'ALPHA-WS', description: 'Room 2', os: 'windows', status: 'at_risk', missing_total: 2, missing_security: 0, approved: 1, failed: 0, reboot_pending: false, last_scan: '2026-01-01T01:00:00+02:00' },
-  { agent_id: 'dev-3', hostname: 'BETA-SRV', description: '', os: 'windows', status: 'unknown', missing_total: 0, missing_security: 0, approved: 0, failed: 0, reboot_pending: false },
+  { agent_id: 'dev-1', client_id: 'client-north', client: 'Acme North', site_id: 'site-main', site: 'Primary', hostname: 'SMOKE-PC', description: 'Room 10', os: 'linux', status: 'critical', missing_total: 10, missing_security: 10, approved: 2, failed: 0, reboot_pending: false, last_scan: '2026-01-01T00:00:00Z' },
+  { agent_id: 'dev-2', client_id: 'client-north', client: 'Acme North', site_id: 'site-main', site: 'Primary', hostname: 'ALPHA-WS', description: 'Room 2', os: 'windows', status: 'at_risk', missing_total: 2, missing_security: 0, approved: 1, failed: 0, reboot_pending: false, last_scan: '2026-01-01T01:00:00+02:00' },
+  { agent_id: 'dev-3', client_id: 'client-south', client: 'Acme South', site_id: 'site-remote', site: 'Remote site', hostname: 'BETA-SRV', description: '', os: 'windows', status: 'unknown', missing_total: 0, missing_security: 0, approved: 0, failed: 0, reboot_pending: false },
 ];
 
 // Reports ▸ Hardware & System: the last logged-in user, kept after logoff; one
@@ -142,7 +142,7 @@ const server = createServer(async (req, res) => {
         setTimeout(() => { patchScanState = { ...patchScanState, status: 'failed', error_code: 'refresh_failed', deadline: null }; }, 500);
         return json(res, 202, { status: 'pending', request_id: 'scan-e2e', dispatched: 1, busy: 0, offline: 0 });
       }
-      if (pathname === '/api/patches/scan' && req.method === 'POST') return json(res, 202, { dispatched: 0, busy: 1, offline: 1, failed: 0 });
+      if (pathname === '/api/patches/scan' && req.method === 'POST') return json(res, 202, complianceTableMode ? { dispatched: 2, busy: 0, offline: 0, failed: 0 } : { dispatched: 0, busy: 1, offline: 1, failed: 0 });
 
       if (pathname === '/api/script-variables') {
         if (req.method === 'POST') {
@@ -304,8 +304,8 @@ const server = createServer(async (req, res) => {
         return json(res, 200, { status: 'canceled' });
       }
       if (pathname === '/api/alerts') return json(res, 200, { alerts: [] });
-      if (pathname === '/api/sites') return json(res, 200, { sites: [] });
-      if (pathname === '/api/clients') return json(res, 200, { clients: [] });
+      if (pathname === '/api/sites') return json(res, 200, { sites: [{ id: 'site-main', client_id: 'client-north', name: 'Primary' }, { id: 'site-remote', client_id: 'client-south', name: 'Remote site' }] });
+      if (pathname === '/api/clients') return json(res, 200, { clients: [{ id: 'client-north', name: 'Acme North' }, { id: 'client-south', name: 'Acme South' }] });
       if (pathname === '/api/chat/sessions') return json(res, 200, { sessions: [] });
       return json(res, 200, {});
     }
@@ -869,11 +869,13 @@ async function patchComplianceBrowserFlow() {
     throw new Error('Patch compliance E2E timed out: ' + fn.toString());
   };
   const button = (label, root = document) => [...root.querySelectorAll('button')].find((el) => el.textContent.trim() === label);
-  const rows = () => [...document.querySelectorAll('tbody tr')];
+  const rows = () => [...document.querySelectorAll('tbody tr[data-agent-id]')];
   const order = () => rows().map((r) => r.cells[0].textContent).join(',');
   const assert = (condition, message) => { if (!condition) throw new Error(message); };
   (await wait(() => button('Patches'))).click();
   await wait(() => rows().length === 3 && button('Description', document.querySelector('thead')));
+  button('List').click();
+  await wait(() => order() === 'ALPHA-WS,BETA-SRV,SMOKE-PC');
   assert(rows()[2].cells[1].title === 'Room 10', 'Description tooltip uses the device description');
   const sort = async (label, expected, direction) => {
     const header = button(label, document.querySelector('thead'));
@@ -894,6 +896,57 @@ async function patchComplianceBrowserFlow() {
   button('Scan', rows()[0]).click();
   await wait(() => document.body.textContent.includes('Scan requested'));
   document.documentElement.dataset.patchComplianceE2e = 'passed';
+  return true;
+}
+
+// Same inline tree in Devices and Compliance, with real clicks and a filtered
+// scan-all request that still includes devices hidden by a collapsed client.
+async function fleetTreeBrowserFlow() {
+  const wait = async (fn) => {
+    for (let i = 0; i < 150; i++) { const value = fn(); if (value) return value; await new Promise((r) => setTimeout(r, 50)); }
+    throw new Error('Fleet tree E2E timed out: ' + fn.toString());
+  };
+  const button = (text, root = document) => [...(root?.querySelectorAll('button') || [])].find((el) => el.textContent.trim() === text);
+  const group = (key) => document.querySelector('[data-fleet-group="' + key + '"] button');
+  const ids = () => [...document.querySelectorAll('tbody tr[data-agent-id]')].map((r) => r.dataset.agentId).join(',');
+  const type = (input, text) => { Object.getOwnPropertyDescriptor(HTMLInputElement.prototype, 'value').set.call(input, text); input.dispatchEvent(new Event('input', { bubbles: true })); };
+  const assert = (condition, message) => { if (!condition) throw new Error(message); };
+  (await wait(() => button('Devices'))).click();
+  await wait(() => group('client:client-north'));
+  assert(ids() === 'dev-2,dev-1,dev-3', 'Initially expanded devices, sorted within their sites');
+  const site = group('site:site-main'); site.focus(); site.click();
+  await wait(() => ids() === 'dev-3');
+  assert(document.activeElement === site, 'Chevron retains focus');
+  assert(!button('Inventory'), 'A group toggle does not open device details');
+  const input = [...document.querySelectorAll('input')].find((el) => /search/i.test(el.placeholder || ''));
+  type(input, 'Smoke device'); await wait(() => ids() === 'dev-1');
+  type(input, ''); await wait(() => ids() === 'dev-3');
+  group('site:site-main').click(); await wait(() => ids() === 'dev-2,dev-1,dev-3');
+  button('Hostname', document.querySelector('thead')).click();
+  await wait(() => ids() === 'dev-1,dev-2,dev-3');
+  document.querySelector('[data-agent-id="dev-1"]').click();
+  await wait(() => button('Inventory'));
+  document.dispatchEvent(new KeyboardEvent('keydown', { key: 'Escape', bubbles: true }));
+  await wait(() => !button('Inventory'));
+  type(input, 'Primary'); await wait(() => ids() === 'dev-1,dev-2');
+  type(input, ''); await wait(() => ids() === 'dev-1,dev-2,dev-3');
+  button('List').click(); await wait(() => !group('client:client-north'));
+  assert(localStorage.getItem('rmm-fleet-view:user-1:devices') === 'flat', 'List choice is saved for this viewer');
+  button('Clients and sites').click(); await wait(() => group('client:client-north'));
+  (await wait(() => button('Patches'))).click();
+  await wait(() => document.querySelector('input[placeholder="Filter devices…"]') && group('site:site-main') && button('Missing', document.querySelector('thead')));
+  button('Missing', document.querySelector('thead')).click(); await wait(() => ids() === 'dev-2,dev-1,dev-3');
+  button('Missing', document.querySelector('thead')).click(); await wait(() => ids() === 'dev-1,dev-2,dev-3');
+  group('site:site-main').click(); await wait(() => ids() === 'dev-3');
+  const patchInput = document.querySelector('input[placeholder="Filter devices…"]');
+  type(patchInput, 'ROOM 2'); await wait(() => ids() === 'dev-2');
+  type(patchInput, ''); await wait(() => ids() === 'dev-3');
+  type(patchInput, 'Acme North'); await wait(() => ids() === 'dev-1,dev-2');
+  group('client:client-north').click(); await wait(() => ids() === '');
+  assert(group('client:client-north').textContent.includes('2 agents'), 'Count is based on filtered devices');
+  button('Scan all').click();
+  await wait(() => /Dispatched: 2/.test(document.body.textContent));
+  document.documentElement.dataset.fleetTreeE2e = 'passed';
   return true;
 }
 
@@ -1009,7 +1062,9 @@ async function devicesUserBrowserFlow() {
   const hosts = () => rows().map((tr) => ['SMOKE-PC', 'ALPHA-WS', 'BETA-SRV'].find((h) => tr.textContent.includes(h))).join(',');
   try { localStorage.removeItem('rmm-devices-hidden-columns'); } catch (e) {}
   (await wait(() => button('Devices'))).click();
-  await wait(() => rows().length === 3);
+  await wait(() => rows().length === 3 && button('List'));
+  button('List').click();
+  await wait(() => !document.querySelector('[data-fleet-group]'));
   const header = await wait(() => [...document.querySelectorAll('th button')].find((el) => el.textContent.trim().startsWith('Logged-in user')));
   const beta = rows().find((tr) => tr.textContent.includes('BETA-SRV'));
   if (!beta.textContent.includes('No user logged in')) throw new Error('A device without a session must say so');
@@ -1337,6 +1392,15 @@ try {
     assertBrowser(complianceFlow, /data-patch-compliance-e2e="passed"/);
     complianceTableMode = false;
     assert.deepEqual(apiRequests.filter((r) => r.method === 'POST' && /\/patches\/scan$/.test(r.pathname)).map((r) => r.pathname), ['/api/devices/dev-2/patches/scan'], 'the sorted and searched row scans only its own device');
+    complianceTableMode = true;
+    const treeScanStart = apiRequests.filter((r) => r.method === 'POST' && /\/patches\/scan$/.test(r.pathname)).length;
+    const treeFlow = await runMobileChrome(chrome, baseURL + '/authenticated/', { width: 1280, flow: fleetTreeBrowserFlow });
+    assertBrowser(treeFlow, /data-fleet-tree-e2e="passed"/);
+    complianceTableMode = false;
+    const treeScans = apiRequests.filter((r) => r.method === 'POST' && /\/patches\/scan$/.test(r.pathname)).slice(treeScanStart);
+    assert.equal(treeScans.length, 1);
+    assert.equal(treeScans[0].pathname, '/api/patches/scan');
+    assert.deepEqual(treeScans[0].payload, { agent_ids: ['dev-1', 'dev-2'], refresh_metadata: false }, 'Scan all includes collapsed matching client, excluding other client');
     const targetingFlow = await runMobileChrome(chrome, baseURL + '/authenticated/', { width: 1280, flow: policyTargetingBrowserFlow });
     assertBrowser(targetingFlow, /data-policy-targeting-e2e="passed"/);
     assert.deepEqual(apiRequests.filter((r) => r.method === 'PUT' && r.pathname === '/api/devices/dev-1/role').map((r) => r.payload), [{ role: 'server' }, { role: '' }]);
@@ -1349,7 +1413,7 @@ try {
     const scanRequests = apiRequests.filter((r) => r.method === 'POST' && r.pathname === '/api/devices/dev-1/patches/scan');
     assert.equal(scanRequests.length, 2);
     assert.ok(scanRequests.every((r) => r.payload?.refresh_metadata === true), 'fresh request option reached the endpoint');
-    assert.equal(apiRequests.filter((r) => r.method === 'POST' && r.pathname === '/api/patches/scan').length, 1);
+    assert.equal(apiRequests.filter((r) => r.method === 'POST' && r.pathname === '/api/patches/scan').length, 2);
     const patchPickersFlow = await runMobileChrome(chrome, baseURL + '/authenticated/', { width: 1280, flow: patchPolicyPickersBrowserFlow });
     assertBrowser(patchPickersFlow, /data-patch-pickers-e2e="passed"/);
     assert.deepEqual(apiRequests.find((r) => r.method === 'POST' && r.pathname === '/api/patch-policies/patch-ai/assignments')?.payload,

@@ -5,12 +5,13 @@ import vm from 'node:vm';
 import { transformSync } from 'esbuild';
 
 const source = await readFile(new URL('../src/screens-patches.jsx', import.meta.url), 'utf8');
+const treeSource = await readFile(new URL('../src/fleet-tree.jsx', import.meta.url), 'utf8');
 const deviceSource = await readFile(new URL('../src/screens-devices.jsx', import.meta.url), 'utf8');
 function harness({ state, patches = [], rows = [], failure = false, outcomes = { dispatched: 1, busy: 0, offline: 0, failed: 0 } } = {}) {
   const states = [], calls = [], notices = []; let cursor = 0;
   const sandbox = {
     React: { createElement(type, props, ...children) { return typeof type === 'function' ? type({ ...props, children }) : { type, props: props || {}, children }; } },
-    useState(initial) { const i = cursor++; if (!(i in states)) states[i] = initial; return [states[i], (v) => { states[i] = v; }]; },
+    useState(initial) { const i = cursor++; if (!(i in states)) states[i] = typeof initial === 'function' ? initial() : initial; return [states[i], (v) => { states[i] = typeof v === 'function' ? v(states[i]) : v; }]; },
     useAuth: () => ({ can: () => true }),
     useToast: () => Object.fromEntries(['error', 'info'].map((kind) => [kind, (...args) => notices.push({ kind, args })])),
     useQuery: (key) => ({ data: key[0] === 'compliance' ? { rows } : { patches, scan_state: state }, loading: false }),
@@ -21,6 +22,7 @@ function harness({ state, patches = [], rows = [], failure = false, outcomes = {
     ...Object.fromEntries(['Card', 'Button', 'Icon', 'Input', 'Skeleton', 'EmptyState', 'OsIcon', 'ConfirmDialog'].map((name) => [name, name])),
   };
   vm.createContext(sandbox);
+  vm.runInContext(transformSync(treeSource, { loader: 'jsx' }).code, sandbox);
   vm.runInContext(transformSync(source.slice(0, source.indexOf('function CatalogTab()')), { loader: 'jsx' }).code, sandbox);
   vm.runInContext(transformSync(deviceSource.slice(deviceSource.indexOf('function DevicePatches('), deviceSource.indexOf('window.DevicesScreen')), { loader: 'jsx' }).code, sandbox);
   let tree;

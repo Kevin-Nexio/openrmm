@@ -30,6 +30,13 @@
   "operations.loadError": "无法加载此设备的档案。",
   "operations.saveError": "无法保存档案。您的编辑已保留。",
   "audit.action.device.operational_profile.update": "设备运维档案已更新",
+  'fleetTree.view': '视图',
+  'fleetTree.flat': '列表',
+  'fleetTree.tree': '客户和站点',
+  'fleetTree.noClient': '无客户',
+  'fleetTree.noSite': '无站点',
+  'fleetTree.unknownClient': '客户不可用',
+  'fleetTree.unknownSite': '站点不可用',
 
   'nav.dashboard': '仪表板',
   'nav.chat': 'AI 聊天',

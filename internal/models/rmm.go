@@ -588,6 +588,8 @@ type PatchPolicyAssignment struct {
 
 // ComplianceRow is a per-device patch-compliance summary.
 type ComplianceRow struct {
+	ClientID           string          `json:"client_id"`
+	SiteID             string          `json:"site_id"`
 	Description        string          `json:"description"`
 	ScanState          *PatchScanState `json:"scan_state,omitempty"`
 	AgentStatus        string          `json:"agent_status"`

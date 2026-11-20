@@ -30,6 +30,13 @@
   "operations.loadError": "Не удалось загрузить профиль этого устройства.",
   "operations.saveError": "Не удалось сохранить профиль. Ваши правки сохранены в форме.",
   "audit.action.device.operational_profile.update": "Профиль эксплуатации устройства обновлён",
+  'fleetTree.view': 'Вид',
+  'fleetTree.flat': 'Список',
+  'fleetTree.tree': 'Клиенты и площадки',
+  'fleetTree.noClient': 'Без клиента',
+  'fleetTree.noSite': 'Без площадки',
+  'fleetTree.unknownClient': 'Клиент недоступен',
+  'fleetTree.unknownSite': 'Площадка недоступна',
 
   'nav.dashboard': "Панель управления",
   'nav.chat': "Чат с ИИ",

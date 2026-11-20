@@ -30,6 +30,13 @@
   "operations.loadError": "Das Profil dieses Geräts konnte nicht geladen werden.",
   "operations.saveError": "Profil konnte nicht gespeichert werden. Deine Eingaben bleiben erhalten.",
   "audit.action.device.operational_profile.update": "Betriebsprofil des Geräts aktualisiert",
+  'fleetTree.view': 'Ansicht',
+  'fleetTree.flat': 'Liste',
+  'fleetTree.tree': 'Kunden und Standorte',
+  'fleetTree.noClient': 'Kein Kunde',
+  'fleetTree.noSite': 'Kein Standort',
+  'fleetTree.unknownClient': 'Kunde nicht verfügbar',
+  'fleetTree.unknownSite': 'Standort nicht verfügbar',
 
   'nav.dashboard': 'Übersicht',
   'nav.chat': 'KI-Chat',

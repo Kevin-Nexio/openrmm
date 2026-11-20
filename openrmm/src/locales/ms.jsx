@@ -30,6 +30,13 @@
   "operations.loadError": "Profil peranti ini tidak dapat dimuatkan.",
   "operations.saveError": "Profil tidak dapat disimpan. Suntingan anda dikekalkan.",
   "audit.action.device.operational_profile.update": "Profil operasi peranti dikemas kini",
+  'fleetTree.view': 'Paparan',
+  'fleetTree.flat': 'Senarai',
+  'fleetTree.tree': 'Pelanggan dan tapak',
+  'fleetTree.noClient': 'Tiada pelanggan',
+  'fleetTree.noSite': 'Tiada tapak',
+  'fleetTree.unknownClient': 'Pelanggan tidak tersedia',
+  'fleetTree.unknownSite': 'Tapak tidak tersedia',
 
   'nav.dashboard': "Papan pemuka",
   'nav.chat': "Sembang AI",
