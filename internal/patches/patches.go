@@ -8,6 +8,7 @@ import (
 	"context"
 	"encoding/json"
 	"errors"
+	"time"
 
 	"github.com/google/uuid"
 
@@ -18,7 +19,8 @@ import (
 
 var (
 	// ErrOffline is returned when a dispatch targets an agent that isn't connected.
-	ErrOffline = errors.New("agent is offline")
+	ErrOffline         = errors.New("agent is offline")
+	ErrRebootRequested = errors.New("a reboot was already requested within the last 15 minutes")
 	// ErrNoApproved is returned when none of the requested patches are currently
 	// approved for the endpoint. This is intentionally not treated as "install all".
 	ErrNoApproved = errors.New("no approved patches available for this device")
@@ -64,12 +66,41 @@ func (s *Service) DispatchInstall(ctx context.Context, agentID string, identifie
 	return nil
 }
 
-// DispatchReboot reboots an online agent and clears its pending-reboot flag.
+// DispatchReboot records a request, not a successful restart. Subsequent
+// OS observations independently clear the pending flag or report a changed boot.
 func (s *Service) DispatchReboot(ctx context.Context, agentID string, delaySeconds int) error {
-	if !s.send(agentID, protocol.MsgReboot, protocol.RebootMsg{DelaySeconds: delaySeconds}) {
+	return s.dispatchReboot(ctx, agentID, delaySeconds, false)
+}
+
+// DispatchAutomaticReboot additionally limits delivery to one per pending episode.
+func (s *Service) DispatchAutomaticReboot(ctx context.Context, agentID string, delaySeconds int) error {
+	return s.dispatchReboot(ctx, agentID, delaySeconds, true)
+}
+
+func (s *Service) dispatchReboot(ctx context.Context, agentID string, delaySeconds int, automatic bool) error {
+	if !s.hub.IsOnline(agentID) {
 		return ErrOffline
 	}
-	return s.store.SetRebootPending(ctx, agentID, false)
+	var token string
+	var err error
+	if automatic {
+		token, err = s.store.ClaimAutomaticRebootRequest(ctx, agentID)
+	} else {
+		token, err = s.store.ClaimRebootRequest(ctx, agentID)
+	}
+	if errors.Is(err, store.ErrConflict) {
+		return ErrRebootRequested
+	}
+	if err != nil {
+		return err
+	}
+	if !s.send(agentID, protocol.MsgReboot, protocol.RebootMsg{DelaySeconds: delaySeconds}) {
+		releaseCtx, cancel := context.WithTimeout(context.WithoutCancel(ctx), 5*time.Second)
+		defer cancel()
+		_ = s.store.ReleaseRebootRequest(releaseCtx, agentID, token)
+		return ErrOffline
+	}
+	return nil
 }
 
 // OnReport persists an agent's missing-patch report.
