@@ -92,8 +92,12 @@ func TestRebootHeartbeatToScopedAPI(t *testing.T) {
 	if !found {
 		t.Fatalf("compliance omitted observation: %s", rr.Body.String())
 	}
+	// Isolate reboot freshness with a verified, correlated patch scan.
+	if err := f.st.ReservePatchScan(f.ctx, f.a1, "reboot-compliance-scan", true); err != nil {
+		t.Fatal(err)
+	}
 	// A fresh negative OS report must not make an offline endpoint compliant.
-	if err := f.st.UpsertPatchReport(f.ctx, f.a1, &protocol.PatchReportMsg{OS: "linux"}); err != nil {
+	if err := f.st.UpsertPatchReport(f.ctx, f.a1, &protocol.PatchReportMsg{OS: "linux", RequestID: "reboot-compliance-scan", ScanMode: protocol.PatchScanRefreshed}); err != nil {
 		t.Fatal(err)
 	}
 	for _, state := range []string{"online", "offline"} {
