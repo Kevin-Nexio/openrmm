@@ -228,7 +228,7 @@ func (s *Server) testSMTPConfig(profile string) http.HandlerFunc {
 				writeErr(w, http.StatusInternalServerError, err.Error())
 				return
 			}
-			message, err = notify.RenderAlertTemplate(templates, in.TemplateEvent, notify.SampleAlertTemplateData(in.TemplateEvent, s.cfg.PublicURL))
+			message, err = notify.RenderAlertTemplate(templates, in.TemplateEvent, notify.SampleAlertTemplateData(in.TemplateEvent, s.cfg.NotificationConsoleURL()))
 			if err != nil {
 				writeErr(w, http.StatusBadRequest, err.Error())
 				return

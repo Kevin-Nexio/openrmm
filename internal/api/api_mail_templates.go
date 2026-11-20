@@ -60,7 +60,7 @@ func (s *Server) previewAlertTemplates(w http.ResponseWriter, r *http.Request) {
 		writeErr(w, http.StatusBadRequest, "invalid body")
 		return
 	}
-	message, err := notify.RenderAlertTemplate(in.Config, in.Event, notify.SampleAlertTemplateData(in.Event, s.cfg.PublicURL))
+	message, err := notify.RenderAlertTemplate(in.Config, in.Event, notify.SampleAlertTemplateData(in.Event, s.cfg.NotificationConsoleURL()))
 	if err != nil {
 		writeErr(w, http.StatusBadRequest, err.Error())
 		return

@@ -19,7 +19,7 @@ Build the customized backend (signed agents remain official):
 ```sh
 docker build --platform linux/amd64 -f deploy/Dockerfile.nexio \
   --build-arg REVISION="$(git rev-parse HEAD)" \
-  -t nexio/openrmm-server:0.11.4-nexio.2 .
+  -t nexio/openrmm-server:0.11.4-nexio.3 .
 ```
 
 Set `OPENRMM_SERVER_IMAGE` in the deployment environment to the built image,
@@ -69,3 +69,8 @@ Set `OPENRMM_FRONTEND_IMAGE` alongside `OPENRMM_SERVER_IMAGE`. Keep the previous
 images for both services to roll back; the earlier backend ignores the new setting.
 API integration tests are in `internal/api/api_mail_templates_test.go` and use the
 same isolated `RMM_TEST_DATABASE_URL` as the notification tests.
+
+Backend 0.11.4-nexio.3 adds `RMM_CONSOLE_PUBLIC_URL` for links in previews,
+examples and queued notifications. Set it to the browser console origin when
+agents and the console use separate hostnames. If unset, the previous
+`RMM_PUBLIC_URL` fallback remains. The frontend stays at 0.11.4-nexio.2.
