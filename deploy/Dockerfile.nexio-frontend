@@ -1,0 +1,7 @@
+# Build the console first: cd openrmm && npm ci && npm run build
+FROM ghcr.io/openrmm-project/openrmm-frontend:0.11.4@sha256:a4bc6435a1b0c25448b3d9fef3543523440ab7ce9a09089030a1ecd926eb8eba
+COPY --chown=101:101 openrmm/dist/ /usr/share/nginx/html/
+ARG REVISION
+LABEL org.opencontainers.image.source="https://github.com/Kevin-Nexio/openrmm" \
+      org.opencontainers.image.revision=$REVISION \
+      org.opencontainers.image.version="0.11.4-nexio.2"

@@ -50,7 +50,7 @@ func TestDrainRechecksEveryRecipientForBothTransportsIntegration(t *testing.T) {
 				}
 				cfg := Config{Host: "127.0.0.1", Port: relay.Port, From: "rmm@example.test", TLSMode: "none", Operator: operator, HourlyLimit: 100}
 				svc := New(st, func(context.Context) (Config, string, error) { return cfg, "https://console.example.test", nil })
-				event := AlertOpenedEvent(store.NotifyCheckFailed, agent.ID, agent.Hostname, transition.Alert.ID, "failed", "https://console.example.test")
+				event := AlertOpenedEvent(store.NotifyCheckFailed, agent.ID, agent.Hostname, "", transition.Alert.ID, "failed", "https://console.example.test")
 				event.AlertSnapshot = &transition.Alert
 				if err = svc.Queue(ctx, event); err != nil {
 					t.Fatal(err)
@@ -135,7 +135,7 @@ func TestQueueTransportOffAndSettingsFailurePreserveTransitionSemanticsIntegrati
 			if err != nil {
 				t.Fatal(err)
 			}
-			event := AlertOpenedEvent(store.NotifyAgentOffline, agent.ID, agent.Hostname, transition.Alert.ID, "offline", "")
+			event := AlertOpenedEvent(store.NotifyAgentOffline, agent.ID, agent.Hostname, "", transition.Alert.ID, "offline", "")
 			event.AlertSnapshot = &transition.Alert
 			if mode == "stale-disabled" {
 				observation.Message = "changed while composing"
@@ -254,9 +254,9 @@ func TestClientSiteRoutingActualSMTPAndNonincidentCompatibilityIntegration(t *te
 				t.Helper()
 				var ev Event
 				if recovered {
-					ev = AlertResolvedEvent(store.NotifyAgentRecovered, agent.ID, agent.Hostname, a.ID, "healthy", "")
+					ev = AlertResolvedEvent(store.NotifyAgentRecovered, agent.ID, agent.Hostname, "", a.ID, "healthy", "")
 				} else {
-					ev = AlertOpenedEvent(store.NotifyAgentOffline, agent.ID, agent.Hostname, a.ID, "offline", "")
+					ev = AlertOpenedEvent(store.NotifyAgentOffline, agent.ID, agent.Hostname, "", a.ID, "offline", "")
 				}
 				ev.AlertSnapshot = a
 				if err := svc.Queue(ctx, ev); err != nil {

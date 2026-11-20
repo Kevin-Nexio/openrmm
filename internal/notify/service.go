@@ -53,6 +53,7 @@ type Event struct {
 	DedupeKey string
 	// AlertSnapshot is the exact durable model used to render this transition.
 	AlertSnapshot *models.Alert
+	TemplateData *AlertTemplateData
 }
 
 // Queue fans an event out to every in-scope subscriber.
@@ -69,6 +70,21 @@ func (s *Service) Queue(ctx context.Context, ev Event) error {
 		// A read failure is not off: preserve the event in the outbox. The
 		// actual transport requirements are checked again before every send.
 		operator, disabled = err == nil && cfg.Operator, err == nil && !cfg.Enabled()
+	}
+	if !disabled && ev.TemplateData != nil {
+		templates, err := LoadAlertTemplates(ctx, s.store)
+		if err != nil {
+			return err
+		}
+		kind := "alert"
+		if ev.Type == store.NotifyCheckRecovered || ev.Type == store.NotifyAgentRecovered {
+			kind = "recovery"
+		}
+		message, err := RenderAlertTemplate(templates, kind, *ev.TemplateData)
+		if err != nil {
+			return err
+		}
+		ev.Subject, ev.Body = message.Subject, message.Body
 	}
 	if ev.AlertID != "" {
 		if ev.AlertSnapshot == nil || ev.AlertSnapshot.ID != ev.AlertID {
@@ -250,8 +266,8 @@ func quietReason(cfg Config, err error) string {
 }
 
 // AlertOpenedEvent renders the mail for a newly opened alert.
-func AlertOpenedEvent(eventType, agentID, hostname, alertID, detail, consoleURL string) Event {
-	subject := fmt.Sprintf("[OpenRMM] %s — %s", labelFor(eventType), hostname)
+func AlertOpenedEvent(eventType, agentID, hostname, description, alertID, detail, consoleURL string) Event {
+	subject := fmt.Sprintf("[OpenRMM] %s — %s", labelFor(eventType), deviceSubjectName(description, hostname, agentID))
 	var b strings.Builder
 	fmt.Fprintf(&b, "%s\n\n", detail)
 	fmt.Fprintf(&b, "Device: %s\n", hostname)
@@ -263,7 +279,8 @@ func AlertOpenedEvent(eventType, agentID, hostname, alertID, detail, consoleURL 
 	b.WriteString("Change what you are notified about in Users & Settings.\n")
 	body := b.String()
 	return Event{Type: eventType, AgentID: agentID, Hostname: hostname, AlertID: alertID,
-		Subject: subject, Body: body, DedupeKey: eventDedupeKey(eventType, alertID, subject, detail)}
+		TemplateData: &AlertTemplateData{Event: labelFor(eventType), AgentID: agentID, AlertID: alertID, Hostname: hostname, Description: description, Details: detail, ConsoleURL: consoleURL, Time: time.Now()},
+		Subject:      subject, Body: body, DedupeKey: eventDedupeKey(eventType, alertID, subject, detail)}
 }
 
 // QueueJobFailed mails a failed job. It satisfies jobs.Notifier.
@@ -361,8 +378,8 @@ func SendPasswordReset(cfg Config, to, username, resetURL string, ttl time.Durat
 
 // AlertResolvedEvent renders the recovery mail, which on-call values more than
 // the original failure notice.
-func AlertResolvedEvent(eventType, agentID, hostname, alertID, detail, consoleURL string) Event {
-	subject := fmt.Sprintf("[OpenRMM] Recovered — %s", hostname)
+func AlertResolvedEvent(eventType, agentID, hostname, description, alertID, detail, consoleURL string) Event {
+	subject := fmt.Sprintf("[OpenRMM] Recovered — %s", deviceSubjectName(description, hostname, agentID))
 	var b strings.Builder
 	fmt.Fprintf(&b, "%s\n\nDevice: %s\nRecovered: %s\n",
 		detail, hostname, time.Now().UTC().Format(time.RFC3339))
@@ -371,7 +388,19 @@ func AlertResolvedEvent(eventType, agentID, hostname, alertID, detail, consoleUR
 	}
 	body := b.String()
 	return Event{Type: eventType, AgentID: agentID, Hostname: hostname, AlertID: alertID,
-		Subject: subject, Body: body, DedupeKey: eventDedupeKey(eventType, alertID, subject, detail)}
+		TemplateData: &AlertTemplateData{Event: labelFor(eventType), AgentID: agentID, AlertID: alertID, Hostname: hostname, Description: description, Details: detail, ConsoleURL: consoleURL, Time: time.Now()},
+		Subject:      subject, Body: body, DedupeKey: eventDedupeKey(eventType, alertID, subject, detail)}
+}
+
+// deviceSubjectName uses the operator's description in subjects while leaving
+// the technical hostname in the message body. Keep headers on a single line.
+func deviceSubjectName(description, hostname, agentID string) string {
+	for _, value := range []string{description, hostname, agentID} {
+		if name := strings.Join(strings.Fields(value), " "); name != "" {
+			return name
+		}
+	}
+	return ""
 }
 
 func labelFor(eventType string) string {
