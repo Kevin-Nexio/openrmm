@@ -1,0 +1,17 @@
+# Reproducible backend-only customization of the official 0.11.4 release.
+FROM --platform=$BUILDPLATFORM golang:1.26.11-alpine@sha256:ae52b5bc6ed045a9ed26ab03dc19327a802a9cc9aa8b27ed57f5c6b60579b0bb AS build
+WORKDIR /src
+COPY go.mod go.sum ./
+RUN go mod download
+COPY . .
+ARG TARGETOS
+ARG TARGETARCH
+ARG VERSION=0.11.4-nexio.1
+RUN CGO_ENABLED=0 GOOS=$TARGETOS GOARCH=$TARGETARCH go build -buildvcs=false -trimpath -ldflags="-s -w -X main.version=${VERSION}" -o /out/rmm-server ./cmd/server
+
+FROM ghcr.io/openrmm-project/openrmm-server:0.11.4@sha256:4414c180926325717607a842280afd8a24e7aa83d3ca7bf3c5b0fc848d4630fc
+COPY --from=build --chown=10001:10001 /out/rmm-server /usr/local/bin/rmm-server
+ARG REVISION
+LABEL org.opencontainers.image.source="https://github.com/Kevin-Nexio/openrmm" \
+      org.opencontainers.image.revision=$REVISION \
+      org.opencontainers.image.version="0.11.4-nexio.1"
