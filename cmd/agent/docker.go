@@ -23,7 +23,7 @@ type dockerCommand func(context.Context, ...string) ([]byte, error)
 
 // The template is a closed projection. In particular, .Config and .State.Health
 // must not be serialized wholesale: they contain secrets and health-check logs.
-const dockerInspectProjection = `{"id":{{json .Id}},"name":{{json .Name}},"image":{{json .Config.Image}},"state":{{json .State.Status}},"health":{{if .State.Health}}{{json .State.Health.Status}}{{else}}"none"{{end}},"restart_count":{{.RestartCount}},"started_at":{{json .State.StartedAt}},"compose_project":{{json (index .Config.Labels "com.docker.compose.project")}},"compose_service":{{json (index .Config.Labels "com.docker.compose.service")}}}`
+const dockerInspectProjection = `{"id":{{json .Id}},"name":{{json .Name}},"image":{{json .Config.Image}},"state":{{json .State.Status}},"health":{{with index .State "Health"}}{{json .Status}}{{else}}"none"{{end}},"restart_count":{{.RestartCount}},"started_at":{{json .State.StartedAt}},"compose_project":{{json (index .Config.Labels "com.docker.compose.project")}},"compose_service":{{json (index .Config.Labels "com.docker.compose.service")}}}`
 
 func dockerFailure(code string) protocol.DockerSnapshot {
 	return protocol.DockerSnapshot{Status: protocol.DockerUnavailable, ErrorCode: code, Containers: []protocol.DockerContainer{}}
