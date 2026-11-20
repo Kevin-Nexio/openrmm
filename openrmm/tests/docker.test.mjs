@@ -46,3 +46,16 @@ test('all nine locales provide Docker keys with identical placeholders', async (
     for(const key of Object.keys(english)) assert.deepEqual(translated[key].match(/\{\w+\}/g),english[key].match(/\{\w+\}/g),locale+': '+key);
   }
 });
+
+
+test('Docker empty view distinguishes missing observations, collection errors and genuinely empty engines', () => {
+  const state = (hosts, filtered=false) => Array.from(sandbox.dockerEmptyState(hosts,filtered));
+  const unknown = {status:'unknown'};
+  assert.deepEqual(state([unknown]),['docker.awaitingData','docker.awaitingDataHint']);
+  assert.equal(state([unknown],true)[0],'docker.empty');
+  assert.equal(state([{status:'unavailable',error_code:'engine_unavailable'}])[0],'docker.collectionUnavailable');
+  assert.equal(state([{status:'not_installed'},unknown])[0],'docker.collectionUnavailable');
+  assert.equal(state([{status:'available',last_success_at:'2026-11-20T14:00:00Z'}])[0],'docker.noContainers');
+  assert.equal(state([unknown,{status:'available'}])[0],'docker.noContainers');
+  assert.equal(state([])[0],'docker.noContainers');
+});

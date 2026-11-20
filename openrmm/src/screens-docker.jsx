@@ -14,6 +14,16 @@ function dockerMatches(container, query, state, health) {
     && (!state || container.state === state) && (!health || container.health === health);
 }
 
+// Missing observations are not evidence of an empty Docker engine.
+function dockerEmptyState(hosts = [], filtered = false) {
+  if (filtered) return ['docker.empty', 'docker.emptyHint'];
+  if (hosts.length && hosts.every((h) => !h.last_success_at && h.status === 'unknown'))
+    return ['docker.awaitingData', 'docker.awaitingDataHint'];
+  if (hosts.length && hosts.every((h) => !h.last_success_at && h.status !== 'available'))
+    return ['docker.collectionUnavailable', 'docker.collectionUnavailableHint'];
+  return ['docker.noContainers', 'docker.noContainersHint'];
+}
+
 // Filter changes and overlapping polls must not let an older response replace
 // the selected view. Failed HTTP access hides prior data; collection errors are
 // normal, authorized 200 responses with last-success metadata from the server.
@@ -49,8 +59,8 @@ function DockerFilters({ query, setQuery, state, setState, health, setHealth }) 
   </div>;
 }
 
-function DockerContainers({ rows, fleet = false, stale = false, navigate }) {
-  if (!rows.length) return <EmptyState icon="devices" title={t('docker.empty')} msg={t('docker.emptyHint')} />;
+function DockerContainers({ rows, fleet = false, stale = false, navigate, hosts = [], filtered = false }) {
+  if (!rows.length) { const [title, hint] = dockerEmptyState(hosts, filtered); return <EmptyState icon="devices" title={t(title)} msg={t(hint)} />; }
   const columns = [...(fleet ? ['host'] : []), 'container', 'image', 'state', 'health', 'cpu', 'memory', 'restarts', 'compose', 'started'];
   return <div className="max-w-full overflow-x-auto rounded-lg border border-line">
     <table className="w-full text-[12px] min-w-[950px]" aria-label={t('docker.containers')}>
@@ -77,7 +87,7 @@ function DeviceDocker({ id }) {
   if (result.loading) return <Spinner />;
   if (result.error) return <EmptyState title={t('docker.loadFailed')} msg={result.error.message} />;
   const host = result.data;
-  return <div className="min-w-0 space-y-3"><DockerCollection host={host} /><p className="text-[12px] text-faint">{t('docker.samplesHint')}</p><DockerFilters {...{ query, setQuery, state, setState, health, setHealth }} /><DockerContainers rows={(host.containers || []).filter((c) => dockerMatches(c, query, state, health))} stale={host.stale} /></div>;
+  return <div className="min-w-0 space-y-3"><DockerCollection host={host} /><p className="text-[12px] text-faint">{t('docker.samplesHint')}</p><DockerFilters {...{ query, setQuery, state, setState, health, setHealth }} /><DockerContainers rows={(host.containers || []).filter((c) => dockerMatches(c, query, state, health))} stale={host.stale} hosts={[host]} filtered={!!(query.trim() || state || health)} /></div>;
 }
 
 function DockerScreen({ navigate }) {
@@ -91,7 +101,7 @@ function DockerScreen({ navigate }) {
     <DockerFilters {...{ query, setQuery, state, setState, health, setHealth }} />
     {result.loading ? <Spinner /> : result.error ? <EmptyState title={t('docker.loadFailed')} msg={result.error.message} /> : <>
       <div className="flex items-center justify-between gap-2 mb-3 text-[12px] text-muted"><span>{t('docker.total', { count: data.total })}</span><div className="flex gap-2"><Button size="sm" disabled={offset === 0} onClick={() => setOffset(Math.max(0, offset - 100))}>{t('docker.previous')}</Button><Button size="sm" disabled={offset + data.containers.length >= data.total} onClick={() => setOffset(offset + 100)}>{t('docker.next')}</Button></div></div>
-      <DockerContainers rows={data.containers} fleet navigate={navigate} />
+      <DockerContainers rows={data.containers} fleet navigate={navigate} hosts={data.hosts} filtered={!!(query.trim() || state || health || offset)} />
       <details className="mt-4 rounded-lg border border-line p-3"><summary className="cursor-pointer text-[13px] font-medium">{t('docker.collectionTitle', { count: data.hosts.length })}</summary><div className="grid sm:grid-cols-2 lg:grid-cols-3 gap-2 mt-3">{data.hosts.map((host) => <DockerCollection key={host.agent_id} host={host} />)}</div></details>
     </>}
   </div>;
