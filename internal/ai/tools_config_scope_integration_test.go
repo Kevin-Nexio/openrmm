@@ -204,3 +204,32 @@ func TestListPoliciesToolIsScopedIntegration(t *testing.T) {
 		t.Errorf("an unscoped admin should see every policy: %s", unscoped.Output)
 	}
 }
+
+func TestScopedAIParentRuleOverridesIntegration(t *testing.T) {
+	f := newProposalFixture(t)
+	policyID := f.policyAssignedTo(t, f.mineClient)
+	args := json.RawMessage(`{"policy_id":"` + policyID + `","type":"connectivity","name":"exception","config":{"override_parent":true,"mode":"ignore"}}`)
+	if res := Execute(f.ctx, f.tc(), "propose_check", args); !strings.Contains(res.Output, "unrestricted manager") {
+		t.Fatalf("scoped override: %s", res.Output)
+	}
+	padded := json.RawMessage(strings.Replace(string(args), `"type":"connectivity"`, `"type":" connectivity "`, 1))
+	if res := Execute(f.ctx, f.tc(), "propose_check", padded); !strings.Contains(res.Output, "unrestricted manager") {
+		t.Fatalf("padded type bypass: %s", res.Output)
+	}
+	tc := f.tc()
+	tc.ScopeUserID = ""
+	if res := Execute(f.ctx, tc, "propose_check", args); strings.Contains(res.Output, `"error"`) {
+		t.Fatal(res.Output)
+	}
+	checks, err := f.st.ListChecks(f.ctx, "", policyID)
+	if err != nil || len(checks) != 1 || checks[0].Enabled || checks[0].ApprovedBy != "" || !checks[0].OverridesParent() {
+		t.Fatalf("proposal %v %v", checks, err)
+	}
+	if res := Execute(f.ctx, f.tc(), "propose_task", policyTaskArgs(policyID)); !strings.Contains(res.Output, "outside your access scope") {
+		t.Fatalf("scoped task mutated exception policy: %s", res.Output)
+	}
+	normal := json.RawMessage(`{"policy_id":"` + policyID + `","type":"connectivity","name":"ordinary","config":{}}`)
+	if res := Execute(f.ctx, f.tc(), "propose_check", normal); !strings.Contains(res.Output, "outside your access scope") {
+		t.Fatalf("scoped check mutated exception policy: %s", res.Output)
+	}
+}

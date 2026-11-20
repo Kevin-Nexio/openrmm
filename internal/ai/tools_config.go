@@ -213,6 +213,9 @@ func (in proposedCheckArgs) check(tc ToolContext, agentID, policyID *string) (*m
 	if err := models.ValidateCheck(c); err != nil {
 		return nil, err
 	}
+	if c.OverridesParent() && tc.ScopeUserID != "" {
+		return nil, fmt.Errorf("parent rule replacements require an unrestricted manager")
+	}
 	return c, nil
 }
 

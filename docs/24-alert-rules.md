@@ -44,15 +44,17 @@ Every server rule also carries:
 
 ## Which server rule is in force
 
-For each device and each server type, exactly one rule decides, chosen in this
-order:
+For each device and each server type, exactly one rule decides. An applicable
+explicit Site replacement wins over an explicit Client replacement. When neither
+exists, the existing order applies:
 
-1. **The broadest scope wins.** A rule from a policy assigned to the device's
+1. **The broadest scope wins by default.** A rule from a policy assigned to the device's
    **client** prevails over one assigned to its **site**, which prevails over its
    **department**, then a policy assigned to the device itself, then a rule owned
    by the device directly. A client-wide rule therefore holds for every device of
    that client; to treat servers and laptops differently, set the rules at the
-   department or site level and leave the client without one.
+   department or site level and leave the client without one, or use an explicit
+   Client/Site replacement as described below.
 2. At the same level, the **more sensitive** rule wins: `alert` over `ignore`, a
    shorter delay, a higher severity, then the lower id (so the result never
    depends on row order).
@@ -177,3 +179,29 @@ Migration 028 ships in 0.10.0. A test database that applied an earlier pre-relea
 ## Validation
 
 Local validation covers config bounds and malformed input, rule version handling, restricted global writes, notification selection validation, all nine locale tables and console interaction flows. PostgreSQL-backed tests exercise migration upgrades/reapplication, scope precedence, agent result rejection, proposal review, incident continuity, notification scope and moved-device isolation. The router E2E test uses real authentication and persistence without an HTTP listener. Browser smoke flows run in CI only; no services are started by the local unit suite.
+
+## Explicit Client/Site replacements
+
+A server rule can opt into `config.override_parent: true`. It is off by default,
+so existing broadest-scope precedence is unchanged. An applicable explicit Site
+rule wins over an explicit Client rule; either wins over ordinary rules. Existing
+OS/role filters, exclusions, enabled policies, AI approval and deterministic
+same-level tie-breaks still apply. The entire rule is replaced, including an
+`ignore` mode. Other rule types, ordinary checks, tasks and cumulative patch
+policies are unaffected. Disabling or removing the exception restores the next
+applicable rule, or the fleet default.
+
+Only an unrestricted principal with the existing management permission can
+create or change an exception. Scoped callers can read it and see the effective
+rule in the device Checks tab. They cannot edit its policy or propose more tasks
+or checks into it through AI tools, including while the exception is disabled.
+Existing permissions on ordinary policies are unchanged.
+
+Replacements must belong to a policy assigned exclusively to Client/Site scopes.
+A policy can be prepared without assignments; assigning it to global, department
+or device scopes is rejected while it contains an exception, even a disabled one.
+Direct device rules and fleet defaults reject this option. Changing the option
+does not switch on a disabled rule or policy. AI proposals stay disabled until
+human review. The activation fingerprint and rule audit include the complete
+configuration, so changing the option invalidates an open activation review.
+The setting uses the existing JSON configuration; no database migration is needed.

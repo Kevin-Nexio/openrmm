@@ -32,6 +32,7 @@ const SERVER_RULE_TYPES = ['connectivity', 'job_failure', 'patch_failure', 'rebo
 
 function serverRuleConfig(type, input = {}) {
   const cfg = { mode: input.mode || 'alert', severity: input.severity || (type === 'connectivity' ? 'error' : 'warning') };
+  if (input.override_parent === true) cfg.override_parent = true;
   if (type === 'connectivity') cfg.after_min = input.after_min ?? 3;
   if (type === 'job_failure') cfg.scope = input.scope || 'tasks';
   if (type === 'reboot_pending') cfg.after_days = input.after_days ?? 3;
@@ -52,6 +53,8 @@ function ServerRuleFields({ type, value, onChange, disabled = false }) {
       {type === 'agent_outdated' && <Field label={t('rules.behind')}><Select value={cfg.behind} disabled={disabled} onChange={(e) => set('behind', e.target.value)}>{['major', 'minor', 'patch'].map((level) => <option key={level} value={level}>{t('rules.' + level)}</option>)}</Select></Field>}
     </>}
     <p className="text-[12px] text-muted">{t('rules.serverHelp')}</p>
+    {cfg.override_parent && <p className="text-[12px] font-medium text-brandhi">{t('rules.overrideActive')}</p>}
+    <p className="text-[11px] text-faint">{t('rules.overrideHelp')}</p>
     <p className="text-[11px] text-faint">{t('rules.priority')}</p>
   </div>;
 }
@@ -439,7 +442,7 @@ function ChecksScreen({ route } = {}) {
                   <td className="px-3 py-3 hidden md:table-cell text-[12.5px] text-muted"><AppliesTo item={c} devMap={devMap} policies={policiesQ.data?.policies || []} /></td>
                   <td className="px-3 py-3 hidden lg:table-cell text-[11.5px] text-faint mono">{c.warn_threshold != null ? t('checks.thresholds', { warn: c.warn_threshold, err: c.err_threshold }) : '—'}</td>
                   <td className="px-3 py-3 text-[12px] text-muted">{ct.server ? t(c.config?.mode === 'ignore' ? 'rules.ignore' : 'rules.alert') : fmtInterval(c.interval_sec)}</td>
-                  <td className="px-3 py-3" onClick={(e) => e.stopPropagation()}><Toggle checked={c.enabled} onChange={() => (!c.enabled && awaitingReview(c) ? setReviewCheck(c) : setConfirmToggle(c))} disabled={!can('checks.manage')} /></td>
+                  <td className="px-3 py-3" onClick={(e) => e.stopPropagation()}><Toggle checked={c.enabled} onChange={() => (!c.enabled && awaitingReview(c) ? setReviewCheck(c) : setConfirmToggle(c))} disabled={!can('checks.manage') || (c.config?.override_parent && !defaultsQ.data?.can_manage)} /></td>
                   <td className="px-4 py-3 text-right text-[12px] text-muted">{c.summary?.total ? t('checks.latest', { ok: c.summary.passing || 0, warn: c.summary.warning || 0, fail: c.summary.failing || 0 }) + (c.summary.unknown ? ' ' + t('checks.latestUnknown', { n: c.summary.unknown }) : '') : t('checks.noState')}</td>
                 </tr>
               );
@@ -484,7 +487,7 @@ function CheckDetail({ check, onClose, devMap, onEdit, canViewOverrides }) {
           <div className="flex items-center gap-2 min-w-0"><h2 className="text-[16px] font-semibold text-ink truncate">{check.name}</h2><span className="shrink-0"><StatusPill status={checkAggregateStatus(check)} size="sm" /></span></div>
           <div className="text-[12px] text-muted mt-0.5 truncate">{ct.label} · {dev?.hostname || t('checks.policyTarget')} · {ct.server ? t('rules.server') : t('checks.every', { interval: fmtInterval(check.interval_sec) })}</div>
         </div>
-        {can('checks.manage') && <Button size="sm" variant="secondary" icon="edit" onClick={() => onEdit(check)}>{t('action.edit')}</Button>}
+        {can('checks.manage') && (!check.config?.override_parent || canViewOverrides) && <Button size="sm" variant="secondary" icon="edit" onClick={() => onEdit(check)}>{t('action.edit')}</Button>}
         <button onClick={onClose} className="text-faint hover:text-ink p-1"><Icon name="close" size={18} /></button>
       </div>
       <div className="flex-1 overflow-y-auto scroll-area p-5 space-y-4">
@@ -535,6 +538,16 @@ function CheckEditor({ check, onClose, devMap, policies, defaultPolicyId }) {
   // Where it applies: kept as the editor opened, so saving sends only the change.
   const [initialAtts] = useState(() => (check ? attachmentTargets(check.attachments) : defaultPolicyId ? [{ policy_id: defaultPolicyId }] : []));
   const [atts, setAtts] = useState(initialAtts);
+  const overrideAccessQ = useQuery(['rule-override-access'], () => api.getAlertDefaults());
+  const overridePolicyIds = atts.map((a) => a.policy_id).filter(Boolean).sort();
+  const overridePolicyKey = overridePolicyIds.join(',');
+  const overrideTargetsQ = useQuery([overridePolicyKey, 'rule-override-targets'], async () => {
+    const results = await Promise.all(overridePolicyIds.map((id) => api.listAssignments(id)));
+    return { policy_key: overridePolicyKey, assignments: results.flatMap((result) => result.assignments || []) };
+  }, { invalidateOn: ['policies'] });
+  const overrideAssignments = overrideTargetsQ.data?.assignments;
+  const canOverride = !!overrideAccessQ.data?.can_manage && atts.length > 0 && atts.every((a) => !!a.policy_id) && overrideTargetsQ.data?.policy_key === overridePolicyKey && !!overrideAssignments && overrideAssignments.every((a) => a.scope_type === 'client' || a.scope_type === 'site');
+  const overrideLocked = !!check?.config?.override_parent && !overrideAccessQ.data?.can_manage;
   const initialType = check?.type || 'diskspace';
   const [ruleCfg, setRuleCfg] = useState(() => serverRuleConfig(initialType, check?.config));
   const [cfgVal, setCfgVal] = useState(check?.config?.[checkType(initialType).cfg] || '');
@@ -554,6 +567,7 @@ function CheckEditor({ check, onClose, devMap, policies, defaultPolicyId }) {
   const ct = checkType(type);
 
   const save = async () => {
+    if (overrideLocked || (ct.server && ruleCfg.override_parent && !canOverride)) return;
     setBusy(true);
     const config = ct.server ? serverRuleConfig(type, ruleCfg) : {}; if (ct.cfg) config[ct.cfg] = cfgVal; if (type === 'script') config.shell = shell; if (type === 'macservice') config.state = serviceState;
     const body = { type, name: name || ct.label, config, interval_sec: Number(interval), enabled,
@@ -575,14 +589,16 @@ function CheckEditor({ check, onClose, devMap, policies, defaultPolicyId }) {
     <>
     <Modal open onClose={onClose} width="max-w-lg">
       <div className="px-5 py-4 border-b border-line flex items-center justify-between"><div className="text-[15px] font-semibold text-ink">{check ? t('checks.editTitle') : t('checks.new')}</div><button onClick={onClose} className="text-faint hover:text-ink"><Icon name="close" size={18} /></button></div>
-      <div className="p-5 space-y-4 max-h-[70vh] overflow-y-auto scroll-area">
+      <fieldset disabled={overrideLocked} className="p-5 space-y-4 max-h-[70vh] overflow-y-auto scroll-area">
         <div className="grid grid-cols-2 gap-3">
           <Field label={t('checks.type')}><Select value={type} onChange={(e) => { const next = e.target.value; setType(next); setServiceState(check?.type === next ? check?.config?.state || 'running' : 'running'); setRuleCfg(serverRuleConfig(next, check?.type === next ? check.config : undefined)); setCfgVal(check?.type === next ? check?.config?.[checkType(next).cfg] || '' : ''); if (next === 'cpuload' && Number(err) <= Number(warn)) { setWarn(80); setErr(90); } if ((next === 'diskspace' || next === 'memory') && Number(err) >= Number(warn)) { setWarn(20); setErr(10); } }}>{Object.keys(CHECK_TYPES).map((k) => <option key={k} value={k}>{checkType(k).label}</option>)}</Select></Field>
           <Field label={t('checks.name')}><Input value={name} onChange={(e) => setName(e.target.value)} placeholder={ct.label} /></Field>
         </div>
         <PolicyAttachmentActions kind="check" item={check} policyId={defaultPolicyId} onDone={onClose} />
         <Field label={t('checks.applyTo')}><AttachmentsField value={atts} onChange={setAtts} devMap={devMap} policies={policies} /></Field>
-        {ct.server && <ServerRuleFields type={type} value={ruleCfg} onChange={setRuleCfg} />}
+        {ct.server && <ServerRuleFields type={type} value={ruleCfg} onChange={setRuleCfg} disabled={overrideLocked} />}
+        {ct.server && canOverride && <label className="flex items-start gap-2.5"><Toggle checked={!!ruleCfg.override_parent} onChange={(next) => setRuleCfg((prev) => ({ ...prev, override_parent: next }))} /><span className="text-[13px] text-ink">{t('rules.overrideParent')}</span></label>}
+        {overrideLocked && <p className="text-[12px] text-muted">{t('rules.overrideRestricted')}</p>}
         {type === 'script' && <Field label={t('deploy.shell')}><Select value={shell} onChange={(e) => setShell(e.target.value)}><option value="bash">bash</option><option value="sh">sh</option><option value="powershell">powershell</option><option value="cmd">cmd</option><option value="python">python</option></Select></Field>}
         {ct.cfg && <Field label={ct.cfgLabel}>{ct.cfg === 'script' ? <CodeEditor value={cfgVal} onChange={setCfgVal} shell={shell} minHeight={120} /> : <Input value={cfgVal} onChange={(e) => setCfgVal(e.target.value)} placeholder={ct.cfgPh} className="mono" />}</Field>}
         {type === 'macservice' && <Field label={t('check.service.state')}><Select value={serviceState} onChange={(e) => setServiceState(e.target.value)}><option value="running">{t('check.service.running')}</option><option value="loaded">{t('check.service.loaded')}</option></Select></Field>}
@@ -599,8 +615,8 @@ function CheckEditor({ check, onClose, devMap, policies, defaultPolicyId }) {
         </div>}
         <label className="flex items-center gap-2.5"><Toggle checked={enabled} onChange={(next) => { setEnabled(next); toast.info(next ? t('checks.willEnable') : t('checks.willDisable')); }} /><span className="text-[13px] text-ink">{t('checks.enabledLabel')}</span></label>
         <div className="flex items-start gap-2 rounded-lg border border-line bg-elevated/40 px-3 py-2 text-[11.5px] text-muted"><Icon name="info" size={14} className="mt-0.5 shrink-0 text-faint" />{ct.server ? t('rules.serverHelp') : type === 'linuxservice' ? t('check.service.linuxHint') : type === 'macservice' ? t('check.service.macHint') : ct.dir === 'low' ? t('checks.help.low') : ct.dir === 'high' ? t('checks.help.high') : type === 'ping' ? t('checks.help.ping') : ct.dir === 'state' ? t('checks.help.state') : t('checks.help.script')}</div>
-      </div>
-      <div className="px-5 py-3.5 border-t border-line flex items-center gap-2">{check && can('checks.manage') && <Button variant="danger" icon="trash" onClick={del}>{t('action.delete')}</Button>}<div className="flex-1" /><Button variant="ghost" onClick={onClose}>{t('action.cancel')}</Button><Button variant="primary" loading={busy} onClick={save}>{check ? t('checks.save') : t('checks.create')}</Button></div>
+      </fieldset>
+      <div className="px-5 py-3.5 border-t border-line flex items-center gap-2">{check && can('checks.manage') && !overrideLocked && <Button variant="danger" icon="trash" onClick={del}>{t('action.delete')}</Button>}<div className="flex-1" /><Button variant="ghost" onClick={onClose}>{t('action.cancel')}</Button><Button variant="primary" loading={busy} onClick={save} disabled={overrideLocked || (ct.server && ruleCfg.override_parent && !canOverride)}>{check ? t('checks.save') : t('checks.create')}</Button></div>
     </Modal>
     <ConfirmDialog open={confirmDel} onClose={() => setConfirmDel(false)} onConfirm={doDelete} danger title={t('checks.deletePrompt')} body="" confirmLabel={t('action.delete')} />
     </>
@@ -952,6 +968,7 @@ function CheckReview({ check, target }) {
       {check.proposed_by && <ReviewRow label={t('review.proposedByLabel')}>{check.proposed_by}</ReviewRow>}
       {check.warn_threshold != null && <ReviewRow label={t('review.thresholds')}>{t('checks.thresholds', { warn: check.warn_threshold, err: check.err_threshold })}</ReviewRow>}
       {!ct.server && <ReviewRow label={t('review.interval')}>{fmtInterval(check.interval_sec)}</ReviewRow>}
+      {ct.server && check.config?.override_parent && <ReviewRow label={t('rules.overrideParent')}>{t('rules.overrideHelp')}</ReviewRow>}
       {!ct.server && <ReviewRow label={t('checks.timeouts')}>{t(check.timeout_policy === 'ignore' ? 'checks.timeoutIgnore' : 'checks.timeoutCount')}</ReviewRow>}
       {config && <CodeBlock code={config} shell="json" maxHeight={200} label={t('review.config')} />}
     </div>

@@ -175,6 +175,20 @@ func (k attachmentKind) attach(ctx context.Context, pool dbBeginner, itemTable, 
 			return ErrPendingSingleAttachment
 		}
 	}
+	if k == checkAttachmentKind {
+		check, err := scanCheck(tx.QueryRow(ctx, `SELECT `+checkCols+` FROM checks c WHERE c.id=$1`, id))
+		if err != nil {
+			return err
+		}
+		attached, err := withCheckAttachments(ctx, tx, []models.Check{*check}, true)
+		if err != nil {
+			return err
+		}
+		check.Attachments = append(attached[0].Attachments, a)
+		if err := validateRuleOverrideTarget(ctx, tx, check); err != nil {
+			return err
+		}
+	}
 	if err := k.insert(ctx, tx, id, []models.Attachment{a}); err != nil {
 		return err
 	}

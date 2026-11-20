@@ -1221,6 +1221,9 @@ func (s *Store) PolicyAllowedForUser(ctx context.Context, userID, policyID strin
 // PolicyManageAllowedForUser requires every assignment to be wholly controlled
 // by the user. Unassigned global policies are not manageable by scoped users.
 func (s *Store) PolicyManageAllowedForUser(ctx context.Context, userID, policyID string) (bool, error) {
+	if override, err := s.PolicyHasRuleOverrides(ctx, policyID); err != nil || override {
+		return false, err
+	}
 	assignments, err := s.ListPolicyAssignments(ctx, policyID)
 	if err != nil {
 		return false, err
@@ -1262,11 +1265,31 @@ func (s *Store) AssignPolicy(ctx context.Context, policyID, scopeType, scopeID s
 	if err := validateAssignmentTarget(scopeType, scopeID, os, role); err != nil {
 		return nil, err
 	}
+	tx, err := s.pool.Begin(ctx)
+	if err != nil {
+		return nil, err
+	}
+	defer func() { _ = tx.Rollback(ctx) }()
+	if err := lockRulePolicy(ctx, tx, policyID); err != nil {
+		return nil, err
+	}
+	if scopeType != models.ScopeClient && scopeType != models.ScopeSite {
+		override, err := policyHasRuleOverrides(ctx, tx, policyID)
+		if err != nil {
+			return nil, err
+		}
+		if override {
+			return nil, fmt.Errorf("override_parent policies may only be assigned to Client or Site")
+		}
+	}
 	id := newID()
-	_, err := s.pool.Exec(ctx,
+	_, err = tx.Exec(ctx,
 		`INSERT INTO policy_assignments (id, policy_id, scope_type, scope_id, os, role) VALUES ($1,$2,$3,$4,$5,$6)`,
 		id, policyID, scopeType, scopeID, os, role)
 	if err != nil {
+		return nil, err
+	}
+	if err := tx.Commit(ctx); err != nil {
 		return nil, err
 	}
 	return &models.PolicyAssignment{ID: id, PolicyID: policyID, ScopeType: scopeType, ScopeID: scopeID, OS: os, Role: role, CreatedAt: time.Now()}, nil
@@ -1421,6 +1444,9 @@ func insertCheck(ctx context.Context, q dbQuerier, c *models.Check) error {
 	if c.ProposedBy != "" && c.ApprovedBy == "" && len(c.Attachments) > 1 {
 		return ErrPendingSingleAttachment
 	}
+	if err := validateRuleOverrideTarget(ctx, q, c); err != nil {
+		return err
+	}
 	c.ID = newID()
 	if len(c.Config) == 0 {
 		c.Config = []byte("{}")
@@ -1528,10 +1554,31 @@ func (s *Store) ChecksForAgent(ctx context.Context, agentID string, _, _ *string
 
 // UpdateCheck edits a check.
 func (s *Store) UpdateCheck(ctx context.Context, c *models.Check) error {
+	tx, err := s.pool.Begin(ctx)
+	if err != nil {
+		return err
+	}
+	defer func() { _ = tx.Rollback(ctx) }()
+	existing, err := scanCheck(tx.QueryRow(ctx, `SELECT `+checkCols+` FROM checks c WHERE c.id=$1 FOR NO KEY UPDATE`, c.ID))
+	if err != nil {
+		return err
+	}
+	attached, err := withCheckAttachments(ctx, tx, []models.Check{*existing}, true)
+	if err != nil {
+		return err
+	}
+	target := *c
+	target.Attachments = attached[0].Attachments
+	if err := validateRuleOverrideTarget(ctx, tx, &target); err != nil {
+		return err
+	}
 	if len(c.Config) == 0 {
 		c.Config = []byte("{}")
 	}
-	_, err := s.pool.Exec(ctx,
+	if c.TimeoutPolicy == "" {
+		c.TimeoutPolicy = models.TimeoutPolicyCount
+	}
+	_, err = tx.Exec(ctx,
 		`UPDATE checks SET type=$2, name=$3, config=$4, warn_threshold=$5, err_threshold=$6,
 		                   interval_sec=$7, enabled=$8, failure_count=$9, recovery_count=$10,
 		                   hysteresis=$11, cooldown_sec=$12, timeout_sec=$13, timeout_policy=$14, approved_by=$15
@@ -1539,7 +1586,10 @@ func (s *Store) UpdateCheck(ctx context.Context, c *models.Check) error {
 		c.ID, c.Type, c.Name, []byte(c.Config), c.WarnThreshold, c.ErrThreshold,
 		c.IntervalSec, c.Enabled, c.FailureCount, c.RecoveryCount, c.Hysteresis,
 		c.CooldownSec, c.TimeoutSec, c.TimeoutPolicy, c.ApprovedBy)
-	return err
+	if err != nil {
+		return err
+	}
+	return tx.Commit(ctx)
 }
 
 // DeleteCheck removes a check.
