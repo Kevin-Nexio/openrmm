@@ -278,6 +278,8 @@ const api = {
   listDocker(params) { return GET('/api/docker' + qs(params || {})); },
   getDeviceDocker(id) { return GET('/api/devices/' + id + '/docker'); },
   getDevice(id) { return GET('/api/devices/' + id); },
+  getDeviceOperationsProfile(id) { return GET('/api/devices/' + id + '/operations-profile'); },
+  putDeviceOperationsProfile(id, fields) { return PUT('/api/devices/' + id + '/operations-profile', fields); },
   async getInventory(id) { return adaptInventory(await GET('/api/devices/' + id + '/inventory')); },
   startRemote(id, provider, opts) { return POST('/api/devices/' + id + '/remote', { provider, ...(opts || {}) }); },
   // Guest invitations: issued for a device, decided from the technician's own

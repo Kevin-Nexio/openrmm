@@ -108,7 +108,8 @@ func TestAuditFilterTreatsWildcardsLiterallyIntegration(t *testing.T) {
 func TestAuditPagingReportsTheTotalIntegration(t *testing.T) {
 	ctx, st := auditStore(t)
 
-	// Written with an IDENTICAL created_at, on purpose. Separate AddAudit calls
+	// Machine entries retain an IDENTICAL created_at, on purpose.
+	// Human entries now advance monotonically under the chain lock. Separate AddAudit calls
 	// get distinct microsecond timestamps, which hides the bug this is here to
 	// catch: with `ORDER BY created_at DESC` alone, tied rows have no defined
 	// order and Postgres is free to return the same row on two pages — or skip
@@ -118,7 +119,7 @@ func TestAuditPagingReportsTheTotalIntegration(t *testing.T) {
 	for i := 0; i < 25; i++ {
 		if _, err := st.pool.Exec(ctx,
 			`INSERT INTO audit_log (id, actor, action, target, detail, created_at)
-			 VALUES ($1, 'alice', 'job.approve', $2, '{}', $3)`,
+			 VALUES ($1, 'alice', 'job.automated', $2, '{}', $3)`,
 			uuid.NewString(), uuid.NewString(), stamp); err != nil {
 			t.Fatal(err)
 		}
@@ -687,7 +688,7 @@ func TestAuditCursorHandlesIdenticalTimestampsIntegration(t *testing.T) {
 	ctx, st := auditStore(t)
 	stamp := time.Now().UTC().Truncate(time.Second)
 	for i := 0; i < 6; i++ {
-		if err := st.AddAuditAt(ctx, "alice", "job.approve", uuid.NewString(), nil, stamp); err != nil {
+		if err := st.AddAuditAt(ctx, "alice", "job.automated", uuid.NewString(), nil, stamp); err != nil {
 			t.Fatal(err)
 		}
 	}

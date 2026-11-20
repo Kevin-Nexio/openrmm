@@ -144,6 +144,9 @@ var migrationV37SQL string
 //go:embed migrations/038_patch_scan_state.sql
 var migrationV38SQL string
 
+//go:embed migrations/039_device_operational_profile.sql
+var migrationV39SQL string
+
 var migrations = []migration{
 	{version: 1, name: "baseline", sql: migrationV1SQL},
 	{version: 2, name: "pending_totp_secret", sql: migrationV2SQL},
@@ -183,6 +186,7 @@ var migrations = []migration{
 	{version: 36, name: "reboot_status", sql: migrationV36SQL},
 	{version: 37, name: "docker_inventory", sql: migrationV37SQL},
 	{version: 38, name: "patch_scan_state", sql: migrationV38SQL},
+	{version: 39, name: "device_operational_profile", sql: migrationV39SQL},
 }
 
 // Migrate applies pending migrations atomically. The transaction-scoped lock
