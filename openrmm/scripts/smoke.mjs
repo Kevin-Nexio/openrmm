@@ -43,9 +43,15 @@ const aiTask = { id: 'task-ai', agent_id: 'dev-1', name: 'AI cleanup task', shel
 // The fleet: who is logged in where (Devices ▸ Logged-in user), with a device
 // no one is logged in to and one offline with its last report.
 const fleet = [
-  { id: 'dev-1', hostname: 'SMOKE-PC', description: 'Smoke device', os: 'Linux', arch: 'amd64', version: '1.0.0', status: 'online', tags: [], last_seen: '2026-01-01T00:00:00Z', logged_in_user: 'ACME\\zoe', logged_in_user_since: '2026-01-01T00:00:00Z' },
-  { id: 'dev-2', hostname: 'ALPHA-WS', description: '', os: 'windows', arch: 'amd64', version: '0.11.0', status: 'online', tags: [], last_seen: '2026-01-01T00:00:00Z', logged_in_user: 'AzureAD\\Ana' },
+  { id: 'dev-1', hostname: 'SMOKE-PC', description: 'Smoke device', os: 'Linux', arch: 'amd64', version: '1.0.0', status: 'online', tags: [], last_seen: '2026-01-01T00:00:00Z', logged_in_user: 'ACME\\zoe', logged_in_user_since: '2026-01-01T00:00:00Z', last_boot_at: '2026-01-01T00:00:00Z' },
+  { id: 'dev-2', hostname: 'ALPHA-WS', description: '', os: 'windows', arch: 'amd64', version: '0.11.0', status: 'online', tags: [], last_seen: '2026-01-01T00:00:00Z', logged_in_user: 'AzureAD\\Ana', last_boot_at: '2025-12-01T00:00:00Z' },
   { id: 'dev-3', hostname: 'BETA-SRV', description: '', os: 'windows', arch: 'amd64', version: '0.11.0', status: 'offline', tags: [], last_seen: '2025-12-31T00:00:00Z', logged_in_user: '' },
+];
+
+// Devices ▸ a device ▸ Jobs: one finished with output, one waiting for approval.
+const deviceJobs = [
+  { id: 'djob-done', agent_id: 'dev-1', status: 'completed', description: 'Disk report', created_by: 'smoke-admin', created_at: '2026-01-01T00:00:00Z', exit_code: 0, stdout: 'olá from SMOKE-PC\n', stderr: '' },
+  { id: 'djob-wait', agent_id: 'dev-1', status: 'awaiting_approval', description: 'Reboot', created_by: 'smoke-admin', created_at: '2026-01-01T00:00:00Z', exit_code: null, stdout: '', stderr: '' },
 ];
 
 // Reports ▸ Hardware & System: the last logged-in user, kept after logoff; one
@@ -221,7 +227,7 @@ const server = createServer(async (req, res) => {
       }
       if (pathname === '/api/devices') return json(res, 200, { devices: fleet });
       if (pathname === '/api/reports/hardware') return json(res, 200, { rows: hardwareRows });
-      if (pathname === '/api/jobs') return json(res, 200, { jobs: [] });
+      if (pathname === '/api/jobs') return json(res, 200, { jobs: url.searchParams.get('agent_id') === 'dev-1' ? deviceJobs : [] });
       if (pathname === '/api/audit') {
         const entries = Number(url.searchParams.get('limit')) >= 50 ? [
           { id: 'audit-snapshot', actor: user.id, action: 'alert.ack', target: 'alert-target-1', detail: { hostname: '=1+1' }, created_at: '2026-11-10T12:00:00Z' },
@@ -771,6 +777,48 @@ async function policyActivationBrowserFlow() {
   return true;
 }
 
+async function deviceJobsAndBootBrowserFlow() {
+  const wait = async (fn) => {
+    for (let i = 0; i < 150; i++) { const value = fn(); if (value) return value; await new Promise((r) => setTimeout(r, 50)); }
+    throw new Error('Device jobs and last boot E2E timed out: ' + fn.toString());
+  };
+  const button = (text, root = document) => [...root.querySelectorAll('button')].find((el) => el.textContent.trim() === text);
+  const rows = () => [...document.querySelectorAll('tbody tr')].filter((tr) => tr.querySelector('td') && !tr.querySelector('[colspan]'));
+  const hosts = () => rows().map((tr) => ['SMOKE-PC', 'ALPHA-WS', 'BETA-SRV'].find((h) => tr.textContent.includes(h))).join(',');
+  const lastBootHeader = () => [...document.querySelectorAll('th button')].find((el) => el.textContent.trim().startsWith('Last boot'));
+  try { localStorage.removeItem('rmm-devices-hidden-columns'); localStorage.removeItem('rmm-devices-shown-columns'); } catch (e) {}
+  (await wait(() => button('Devices'))).click();
+  await wait(() => rows().length === 3);
+  // Last boot starts hidden; the Columns menu shows it.
+  if (lastBootHeader()) throw new Error('Last boot is shown before anyone asked for it');
+  (await wait(() => [...document.querySelectorAll('button')].find((el) => el.textContent.trim().startsWith('Columns')))).click();
+  (await wait(() => [...document.querySelectorAll('button')].find((el) => el.textContent.trim() === 'Last boot' && !el.closest('th')))).click();
+  const header = await wait(lastBootHeader);
+  const column = header.closest('th').cellIndex;
+  const bootCell = (host) => rows().find((tr) => tr.textContent.includes(host))?.cells[column];
+  if (bootCell('BETA-SRV')?.textContent.trim() !== '—') throw new Error('A device without a boot time must show a dash');
+  if (!bootCell('SMOKE-PC')?.querySelector('[title]')?.title) throw new Error('The boot time is not on hover');
+  header.click();
+  await wait(() => hosts() === 'ALPHA-WS,SMOKE-PC,BETA-SRV'); // longest running first, no boot time last
+  // A device's Jobs tab: a finished job opens in place with its output.
+  rows().find((tr) => tr.textContent.includes('SMOKE-PC')).click();
+  // The drawer's tab bar, next to its Inventory tab (the sidebar has a Jobs entry too).
+  const inventoryTab = await wait(() => button('Inventory'));
+  button('Jobs', inventoryTab.parentElement).click();
+  const done = await wait(() => document.querySelector('[data-job="djob-done"]'));
+  const toggle = done.querySelector('button[aria-expanded]');
+  if (toggle.getAttribute('aria-expanded') !== 'false') throw new Error('A job starts collapsed');
+  toggle.click();
+  await wait(() => done.textContent.includes('olá from SMOKE-PC') && toggle.getAttribute('aria-expanded') === 'true');
+  if (!button('Open in Jobs', done)) throw new Error('The expanded job offers no way to the full job');
+  const waiting = document.querySelector('[data-job="djob-wait"]');
+  waiting.querySelector('button[aria-expanded]').click();
+  await wait(() => waiting.textContent.includes('Waiting for approval: nothing has run yet.'));
+  if (done.textContent.includes('olá from SMOKE-PC')) throw new Error('Opening another job leaves the first one open');
+  document.documentElement.dataset.deviceJobsE2e = 'passed';
+  return true;
+}
+
 // Devices ▸ Logged-in user: the column, sorting by it (no user last either
 // way), the user filter, search by user, and hiding the column (remembered).
 async function devicesUserBrowserFlow() {
@@ -1098,6 +1146,8 @@ try {
     const approvedTask = apiRequests.find((r) => r.method === 'PUT' && r.pathname === '/api/tasks/task-ai')?.payload;
     assert.equal(approvedTask?.enabled, true, 'the AI task was switched on through its review');
     assert.equal(approvedTask?.script, 'find /var/tmp -mtime +30 -delete');
+    const deviceJobsFlow = await runMobileChrome(chrome, baseURL + '/authenticated/', { width: 1280, flow: deviceJobsAndBootBrowserFlow });
+    assertBrowser(deviceJobsFlow, /data-device-jobs-e2e="passed"/);
     const usersFlow = await runMobileChrome(chrome, baseURL + '/authenticated/', { width: 1280, flow: devicesUserBrowserFlow });
     assertBrowser(usersFlow, /data-devices-user-e2e="passed"/);
     const hardwareFlow = await runMobileChrome(chrome, baseURL + '/authenticated/', { width: 1280, flow: hardwareLastUserBrowserFlow });
