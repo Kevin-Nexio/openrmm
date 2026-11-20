@@ -17,7 +17,7 @@ function harness({ state, patches = [], rows = [], failure = false, outcomes = {
     api: Object.fromEntries(['scanDevicePatches', 'scanFleetPatches'].map((name) => [name, async (...args) => { calls.push({ name, args: JSON.parse(JSON.stringify(args)) }); if (failure) throw new Error('conflict'); return outcomes; }])),
     t: (key, values) => key + (values ? JSON.stringify(values) : ''), tn: (key) => key, tEnum: (key, value) => key + '.' + value,
     cx: (...args) => args.filter(Boolean).join(' '), timeAgo: (v) => v, Date,
-    window: { dataBus: { emit() {} } },
+    window: { RebootStatusBadge: 'RebootStatusBadge', dataBus: { emit() {} } },
     ...Object.fromEntries(['Card', 'Button', 'Icon', 'Input', 'Skeleton', 'EmptyState', 'OsIcon', 'ConfirmDialog'].map((name) => [name, name])),
   };
   vm.createContext(sandbox);
@@ -36,6 +36,7 @@ test('only the current verified/native scan can support clean compliance', () =>
   const { sandbox: ui } = harness();
   assert.equal(ui.patchComplianceStatus({ status: 'compliant' }), 'unknown');
   assert.equal(ui.patchComplianceStatus({ scan_state: verified }), 'compliant');
+  assert.equal(ui.patchComplianceStatus({ status: 'unknown', scan_state: verified }), 'unknown');
   for (const scan_state of [
     { ...verified, scan_mode: 'cached' }, { ...verified, scan_mode: 'legacy' },
     { ...verified, status: 'failed' }, { ...verified, status: 'pending' },

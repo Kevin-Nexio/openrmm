@@ -147,7 +147,7 @@ what each update mechanism reports.
 - `patch_policy_assignments`: policy to client/site/agent.
 - `agents.last_patch_scan` and `agents.reboot_pending`.
 - `agent_patch_scan_state`: the current attempt and separate successful scan /
-  verified catalog timestamps (migration 036).
+  verified catalog timestamps (migration 038).
 
 ## API and permissions
 

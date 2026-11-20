@@ -58,6 +58,13 @@ func newScanFixture(t *testing.T) scanFixture {
 	if err != nil {
 		t.Fatal(err)
 	}
+	// This fixture isolates patch freshness from the independent reboot feature.
+	if err := st.SetAgentStatus(ctx, a.ID, "online"); err != nil {
+		t.Fatal(err)
+	}
+	if err := st.ObserveReboot(ctx, a.ID, &protocol.RebootStatus{Status: protocol.RebootNotRequired}); err != nil {
+		t.Fatal(err)
+	}
 	return scanFixture{st, db, ctx, a.ID}
 }
 func (f scanFixture) reserve(t *testing.T, refresh bool) string {
