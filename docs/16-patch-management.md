@@ -168,3 +168,12 @@ window minute outside 0–1439 or an empty exclusion.
   local user activity or third-party remote sessions.
 - Compliance is based on the latest reported data and can be stale; platform
   health/alert delivery remains an operator responsibility.
+
+## Compliance table
+
+Patches > Compliance includes the device description from Devices. The search
+filters hostnames and descriptions. Click any data column heading to sort, then
+click it again to reverse the order. Counts sort numerically and last scans
+chronologically; empty values stay last in either direction. Row actions stay
+attached to the displayed device. The report API adds `description` to each
+row without changing existing fields or the caller’s access scope.

@@ -589,6 +589,7 @@ type PatchPolicyAssignment struct {
 type ComplianceRow struct {
 	AgentID       string     `json:"agent_id"`
 	Hostname      string     `json:"hostname"`
+	Description   string     `json:"description"`
 	OS            string     `json:"os"`
 	Client        string     `json:"client"`
 	Site          string     `json:"site"`
