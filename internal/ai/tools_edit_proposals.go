@@ -8,6 +8,7 @@ import (
 	"fmt"
 	"strings"
 
+	"github.com/p1ngu/rmm/internal/autonomy"
 	"github.com/p1ngu/rmm/internal/models"
 	"github.com/p1ngu/rmm/internal/store"
 )
@@ -315,6 +316,13 @@ func proposeEdit(ctx context.Context, tc ToolContext, kind string, args json.Raw
 	if t.Pending {
 		return nil, errors.New("it is a proposal awaiting review: a person reviews it as it is on its own screen, and an edit cannot change or approve it")
 	}
+	// Applying runs the object's update handler only when fields change, so
+	// only then is the edited object validated here too.
+	if len(in.Fields) > 0 {
+		if err := validateEditedObject(kind, t.Object, in.Fields); err != nil {
+			return nil, fmt.Errorf("the edit would not be valid, nothing was proposed: %w", err)
+		}
+	}
 	for _, a := range in.Attach {
 		if a.AgentID != nil && !tc.allows(ctx, *a.AgentID) {
 			return nil, errors.New("a device to attach is outside the user's scope")
@@ -330,4 +338,76 @@ func proposeEdit(ctx context.Context, tc ToolContext, kind string, args json.Raw
 		return nil, err
 	}
 	return map[string]any{"proposal_id": p.ID, "kind": kind, "target_id": in.ID, "name": t.Name, "status": models.EditPending, "message": editProposalNotice}, nil
+}
+
+// validateEditedObject runs the validation the object's edit handler runs, on
+// the object as the proposal would leave it. An invalid value is then refused
+// while the model can still correct it, rather than failing when a person
+// applies the edit. What needs the database (a script's variables, a task's
+// library script, permissions) is still checked when the edit is applied.
+func validateEditedObject(kind string, object map[string]any, fields map[string]json.RawMessage) error {
+	merged := make(map[string]any, len(object)+len(fields))
+	for k, v := range object {
+		merged[k] = v
+	}
+	for k, raw := range fields {
+		var v any
+		if err := json.Unmarshal(raw, &v); err != nil {
+			return fmt.Errorf("%s: %w", k, err)
+		}
+		merged[k] = v
+	}
+	body, err := json.Marshal(merged)
+	if err != nil {
+		return err
+	}
+	decode := func(v any) error {
+		if err := json.Unmarshal(body, v); err != nil {
+			return fmt.Errorf("a field has the wrong type: %w", err)
+		}
+		return nil
+	}
+	switch kind {
+	case models.EditCheck:
+		var c models.Check
+		if err := decode(&c); err != nil {
+			return err
+		}
+		return models.ValidateCheck(&c)
+	case models.EditTask:
+		var t models.Task
+		if err := decode(&t); err != nil {
+			return err
+		}
+		if t.ScheduleKind == "" {
+			t.ScheduleKind = models.ScheduleInterval
+		}
+		return models.ValidateSchedule(&t)
+	case models.EditPatchPolicy:
+		var p models.PatchPolicy
+		if err := decode(&p); err != nil {
+			return err
+		}
+		return models.ValidatePatchPolicy(&p)
+	case models.EditScript:
+		var sc models.Script
+		if err := decode(&sc); err != nil {
+			return err
+		}
+		if strings.TrimSpace(sc.Name) == "" {
+			return errors.New("name is required")
+		}
+		return autonomy.ValidateParamSchema(sc.Shell, sc.Params)
+	case models.EditPolicy:
+		var p struct {
+			Name string `json:"name"`
+		}
+		if err := decode(&p); err != nil {
+			return err
+		}
+		if strings.TrimSpace(p.Name) == "" {
+			return errors.New("name is required")
+		}
+	}
+	return nil
 }

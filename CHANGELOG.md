@@ -15,7 +15,8 @@ tag.
   - **Nothing changes until a person applies it** in the object's screen. The
     review shows each changed field before and after.
   - **Applying makes the edit as that person**, through the same checks as an
-    edit by hand.
+    edit by hand. Those checks also run when the edit is proposed, so an
+    invalid value is refused at once and the assistant can correct it.
   - **A proposal is stale if its reviewed state changed.** A reviewer must
     have authority over the whole object. The edit, decision and audit commit
     together. A newer proposal can replace an open one before a decision starts.

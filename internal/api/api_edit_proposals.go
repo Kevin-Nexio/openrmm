@@ -569,6 +569,9 @@ func (s *Server) editSteps(p *models.EditProposal, t *store.EditTarget, c *model
 		}
 		for _, rm := range c.RemoveAssignments {
 			name := "remove assignment " + rm.ScopeType + ":" + rm.ScopeID
+			if rm.ScopeType == "" {
+				name = "remove assignment " + rm.ID // named by its id alone
+			}
 			aid := ""
 			for _, a := range t.View.Assignments {
 				if a.Matches(rm) {

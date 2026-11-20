@@ -145,6 +145,12 @@ row in `edit_proposals`; the object does not change.
   changed, the proposal is **stale** and the assistant has to propose again.
   A new proposal supersedes the previous pending one unless a decision is in
   progress.
+- **Checked when proposed.** An edit that changes fields is validated as the
+  object would be after it, with the same rules as a manual edit (a check's
+  interval and thresholds, a task's schedule, a patch policy's window and
+  reboot, a script's parameters). An invalid value is refused at once and
+  nothing is proposed, so the assistant can correct it. What needs the
+  database, such as a script's variables, is checked again when applied.
 - **Reviewed where the object lives.** Scripts, Checks, Scheduled tasks,
   Policies and Patches ▸ Policies list the edits waiting for them. The review
   shows each changed field before and after, and the attachments, assignments
