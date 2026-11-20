@@ -920,12 +920,18 @@ async function sharedMonitoringBrowserFlow() {
 
   (await wait(() => button('Policies'))).click();
   (await wait(() => [...document.querySelectorAll('button')].find((el) => el.textContent.trim().startsWith('Backup coverage')))).click();
-  (await wait(() => button('Add an existing check…'))).click();
-  (await wait(() => button('Reviewed memory check'))).click();
-  await wait(() => document.body.textContent.includes('Reviewed memory check'));
-  (await wait(() => button('Add an existing check…'))).click();
-  await wait(() => document.activeElement?.tagName === 'INPUT');
-  if (button('Reviewed memory check')) throw new Error('The already attached check is still offered');
+  const checkName = 'Reviewed memory check';
+  const picker = await wait(() => button('Add an existing check…'));
+  const pickerArea = picker.parentElement;
+  picker.click();
+  (await wait(() => button(checkName, pickerArea))).click();
+  await wait(() => [...document.querySelectorAll('span')]
+    .some((span) => span.textContent.trim() === checkName && !pickerArea.contains(span)));
+
+  picker.click();
+  // The policy's rows and the picker refresh independently after the attach.
+  // Require a known remaining option so a closed or empty picker cannot pass.
+  await wait(() => button('Monitor 01', pickerArea) && !button(checkName, pickerArea));
   document.documentElement.dataset.sharedMonitoringE2e = 'passed';
   return true;
 }
