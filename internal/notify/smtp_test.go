@@ -41,6 +41,24 @@ func TestNormalizeBodyStuffsLeadingDots(t *testing.T) {
 	}
 }
 
+// A lone CR is a line break: no CR may reach the relay outside a CRLF, and a
+// dot after one is stuffed like any other line, so "\r.\r\n" in endpoint text
+// cannot end the message early on a server that splits lines on CR.
+func TestNormalizeBodyTreatsBareCRAsLineBreak(t *testing.T) {
+	for _, in := range []string{"host\r.\r\nMAIL FROM:<x@evil>", "a\r.\rb", "a\n.\r\nb", "x\r\r\n.\ry"} {
+		got := normalizeBody(in)
+		if strings.Contains(strings.ReplaceAll(got, "\r\n", ""), "\r") {
+			t.Errorf("normalizeBody(%q) = %q keeps a bare CR", in, got)
+		}
+		if strings.Contains(got, "\r\n.\r\n") {
+			t.Errorf("normalizeBody(%q) = %q has a terminating dot line", in, got)
+		}
+	}
+	if got, want := normalizeBody("host\r.\r\nnext"), "host\r\n..\r\nnext\r\n"; got != want {
+		t.Fatalf("normalizeBody = %q, want %q", got, want)
+	}
+}
+
 func TestValidateRejectsCredentialsWithoutTLS(t *testing.T) {
 	cfg := Config{Host: "mail.example.test", Port: 25, From: "rmm@example.test",
 		TLSMode: "none", Password: "hunter2"}

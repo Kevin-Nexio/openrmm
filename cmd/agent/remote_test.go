@@ -1,6 +1,10 @@
 package main
 
-import "testing"
+import (
+	"testing"
+
+	"github.com/p1ngu/rmm/internal/protocol"
+)
 
 func TestRelayURL(t *testing.T) {
 	cases := []struct{ ws, want string }{
@@ -19,6 +23,34 @@ func TestLegacyRelayURL(t *testing.T) {
 	a := &agent{wsURL: "wss://rmm.example.com/ws/agent"}
 	if got, want := a.legacyRelayURL("ticket"), "wss://rmm.example.com/ws/remote?role=agent&token=ticket"; got != want {
 		t.Fatalf("legacyRelayURL() = %q, want %q", got, want)
+	}
+}
+
+// A pre-ticket server's relay URL is used only on this agent's own server
+// (scheme, host and port). Any other is replaced by the relay derived from the
+// agent's server, so the screen and the elevated shell never go elsewhere.
+func TestRelayForStartKeepsALegacyRelayOnTheAgentsServer(t *testing.T) {
+	a := &agent{wsURL: "wss://rmm.example.com/ws/agent"}
+	legacy := a.legacyRelayURL("ticket")
+	for _, c := range []struct{ relay, want string }{
+		{"wss://rmm.example.com/ws/remote?role=agent&token=ticket", "wss://rmm.example.com/ws/remote?role=agent&token=ticket"},
+		{"wss://RMM.example.com/ws/remote?token=ticket", "wss://RMM.example.com/ws/remote?token=ticket"},
+		{"wss://evil.example.net/ws/remote", legacy},
+		{"wss://rmm.example.com:8443/ws/remote", legacy},
+		{"ws://rmm.example.com/ws/remote", legacy},
+		{"https://rmm.example.com/ws/remote", legacy},
+		{"wss://user@rmm.example.com/ws/remote", legacy},
+		{"wss://rmm.example.com.evil.example.net/ws/remote", legacy},
+		{"::not a url", legacy},
+	} {
+		relay, ticket := a.relayForStart(protocol.RemoteStartMsg{SessionID: "s", Token: "ticket", RelayURL: c.relay})
+		if relay != c.want || ticket != "" {
+			t.Errorf("relay %q: got (%q, %q), want (%q, \"\")", c.relay, relay, ticket, c.want)
+		}
+	}
+	// The ticketed handshake never takes a URL from the server.
+	if relay, ticket := a.relayForStart(protocol.RemoteStartMsg{SessionID: "s", AgentTicket: "t", RelayURL: "wss://evil.example.net/x"}); relay != a.relayURL("s") || ticket != "t" {
+		t.Fatalf("ticketed start = (%q, %q)", relay, ticket)
 	}
 }
 
