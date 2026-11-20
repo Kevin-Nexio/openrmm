@@ -2,6 +2,7 @@ package scheduler
 
 import (
 	"context"
+	"encoding/json"
 	"os"
 	"strings"
 	"testing"
@@ -61,6 +62,14 @@ func TestAlertDescriptionOutboxIntegration(t *testing.T) {
 	if len(queued) != 1 || queued[0].Subject != "[OpenRMM] Agent offline — Friendly device" || !strings.Contains(queued[0].Body, "Device: technical-host\n") {
 		t.Fatalf("unexpected opening notifications: %+v", queued)
 	}
+	templates := notify.DefaultAlertTemplates()
+	templates.DeviceName = "both"
+	templates.Recovery.Subject = "Retour {{device}}"
+	templates.Recovery.Body = "{{description}}|{{hostname}}|{{details}}"
+	stored, _ := json.Marshal(templates)
+	if err := st.UpsertAppSetting(ctx, notify.AlertTemplatesKey, string(stored), false); err != nil {
+		t.Fatal(err)
+	}
 	resolved, err := st.ResolveAlertCondition(ctx, models.AlertSourceAgent, &a.ID, &a.ID, "offline", "system", "automatic", "Online", time.Now())
 	if err != nil {
 		t.Fatal(err)
@@ -75,7 +84,7 @@ func TestAlertDescriptionOutboxIntegration(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	if len(queued) != 1 || queued[0].Subject != "[OpenRMM] Recovered — Renamed device" {
+	if len(queued) != 1 || queued[0].Subject != "Retour Renamed device (technical-host)" || queued[0].Body != "Renamed device|technical-host|Online" {
 		t.Fatalf("unexpected recovery notifications: %+v", queued)
 	}
 }
