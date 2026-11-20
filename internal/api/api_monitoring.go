@@ -220,6 +220,9 @@ func (s *Server) createCheck(w http.ResponseWriter, r *http.Request) {
 		writeErr(w, http.StatusBadRequest, err.Error())
 		return
 	}
+	if c.OverridesParent() && !s.requireUnrestricted(w, r, "parent rule replacements") {
+		return
+	}
 	out, err := s.store.CreateCheck(r.Context(), &c)
 	if err != nil {
 		writeErr(w, http.StatusBadRequest, err.Error())
@@ -247,9 +250,13 @@ func (s *Server) updateCheck(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	c.ID = id
+	c.AgentID, c.PolicyID = existing.AgentID, existing.PolicyID
 	applyCheckDefaults(body, &c, existing)
 	if err := models.ValidateCheck(&c); err != nil {
 		writeErr(w, http.StatusBadRequest, err.Error())
+		return
+	}
+	if c.OverridesParent() && !s.requireUnrestricted(w, r, "parent rule replacements") {
 		return
 	}
 	c.ApprovedBy = acceptProposal(r, existing.ProposedBy, existing.ApprovedBy, c.Enabled)

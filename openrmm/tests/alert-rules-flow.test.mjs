@@ -31,6 +31,7 @@ function harness(extra = {}) {
       if (!refs[i] || deps.some((d, j) => d !== refs[i][j])) { effects.push(fn); refs[i] = deps; }
     },
     useToast: () => ({ success() {}, error(...args) { throw new Error(args.join(':')); }, info() {} }),
+    useQuery: () => ({ data: {} }),
     useAuth: () => ({ can: () => true }), t: (key) => key,
     cx: (...args) => args.filter(Boolean).join(' '), notifyLabel: (key) => ({ title: key, msg: key }),
     ...Object.fromEntries(['Modal', 'Field', 'Select', 'Input', 'Button', 'Icon', 'Combobox', 'Toggle', 'CodeEditor', 'ConfirmDialog', 'Skeleton', 'Card'].map((k) => [k, k])),
@@ -188,4 +189,39 @@ test('notification rule search handles large lists without dropping hidden selec
   search().props.onChange({ target: { value: 'CHECK.TYPE.CONNECTIVITY' } });
   tree = ui.render('NotificationsCard');
   assert.equal(ui.find(list(), (n) => n.type === 'Toggle').length, 60, 'search uses the translated type label too');
+});
+
+test('explicit Client/Site replacement round-trips without activating a disabled rule', async () => {
+  const calls = [];
+  const ui = harness({ useQuery: (key) => ({ data: key[0] === 'rule-override-access' ? { can_manage: true } : { assignments: [{ scope_type: 'site' }] } }), api: { updateCheck: async (...args) => calls.push(data(args)) } });
+  const props = { check: { id: 'exception', type: 'connectivity', policy_id: 'site-policy', name: 'Offline', enabled: false, config: { mode: 'ignore' } }, onClose() {}, devMap: {}, policies: [] };
+  let tree = ui.render('CheckEditor', props);
+  const label = ui.find(tree, (n) => n.type === 'label' && JSON.stringify(n).includes('rules.overrideParent'))[0];
+  ui.find(label, (n) => n.type === 'Toggle')[0].props.onChange(true);
+  tree = ui.render('CheckEditor', props);
+  await ui.find(tree, (n) => n.type === 'Button' && n.children.includes('checks.save'))[0].props.onClick();
+  assert.equal(calls[0][1].config.override_parent, true);
+  assert.equal(calls[0][1].config.mode, 'ignore');
+  assert.equal(calls[0][1].enabled, false);
+});
+
+test('restricted managers cannot edit, remove or enable an existing exception', async () => {
+  const calls = [];
+  const ui = harness({ useQuery: () => ({ data: { can_manage: false, assignments: [{ scope_type: 'site' }] } }), api: { updateCheck: async (...args) => calls.push(args) } });
+  const tree = ui.render('CheckEditor', { check: { id: 'exception', type: 'connectivity', policy_id: 'p', name: 'Offline', config: { override_parent: true } }, onClose() {}, devMap: {}, policies: [] });
+  assert.equal(ui.find(tree, (n) => n.type === 'label' && JSON.stringify(n).includes('rules.overrideParent')).length, 0);
+  assert.equal(ui.find(tree, (n) => n.type === 'Button' && n.children.includes('action.delete')).length, 0);
+  const save = ui.find(tree, (n) => n.type === 'Button' && n.children.includes('checks.save'))[0];
+  assert.equal(save.props.disabled, true);
+  await save.props.onClick();
+  assert.equal(calls.length, 0);
+  assert.ok(JSON.stringify(tree).includes('rules.overrideActive'));
+});
+
+test('device and non Client/Site targets do not offer parent replacement', () => {
+  for (const scope of ['global', 'group', 'agent']) {
+    const ui = harness({ useQuery: (key) => ({ data: key[0] === 'rule-override-access' ? { can_manage: true } : { assignments: [{ scope_type: scope }] } }) });
+    const tree = ui.render('CheckEditor', { check: { type: 'connectivity', policy_id: 'p' }, onClose() {}, devMap: {}, policies: [] });
+    assert.equal(ui.find(tree, (n) => n.type === 'label' && JSON.stringify(n).includes('rules.overrideParent')).length, 0);
+  }
 });

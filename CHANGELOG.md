@@ -6,6 +6,14 @@ tag.
 
 ## [Unreleased]
 
+### Added
+
+- Explicit per-server-rule replacements for Client/Site policies, default off.
+  Site replacements win over Client replacements while ordinary precedence,
+  targeting filters, exclusions, AI review and cumulative patch policies remain
+  unchanged. Only unrestricted managers can change exception policies; scoped
+  viewers can inspect the effective rule. All nine console locales are included.
+
 ## [0.11.4] - 2026-11-17
 
 ### Fixed

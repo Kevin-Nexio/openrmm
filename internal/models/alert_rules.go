@@ -47,12 +47,13 @@ const (
 // ServerRuleConfig is a server rule's config. Fields a type does not use stay
 // zero and are not stored.
 type ServerRuleConfig struct {
-	Mode      string `json:"mode"`
-	Severity  string `json:"severity,omitempty"`
-	AfterMin  int    `json:"after_min,omitempty"`  // connectivity: minutes without a heartbeat
-	Scope     string `json:"scope,omitempty"`      // job_failure: tasks | all
-	AfterDays int    `json:"after_days,omitempty"` // reboot_pending: days pending
-	Behind    string `json:"behind,omitempty"`     // agent_outdated: major | minor | patch
+	OverrideParent bool   `json:"override_parent,omitempty"` // explicit Client/Site replacement; false retains broadest-first priority
+	Mode           string `json:"mode"`
+	Severity       string `json:"severity,omitempty"`
+	AfterMin       int    `json:"after_min,omitempty"`  // connectivity: minutes without a heartbeat
+	Scope          string `json:"scope,omitempty"`      // job_failure: tasks | all
+	AfterDays      int    `json:"after_days,omitempty"` // reboot_pending: days pending
+	Behind         string `json:"behind,omitempty"`     // agent_outdated: major | minor | patch
 }
 
 // Alerts reports whether the rule raises alerts rather than saying not to.
@@ -166,4 +167,16 @@ type AlertRuleDefault struct {
 	Type      string           `json:"type"`
 	Config    ServerRuleConfig `json:"config"`
 	UpdatedBy string           `json:"updated_by"`
+}
+
+// OverridesParent reports an explicit replacement, independent of enabled state.
+// Disabled proposals still need the same management protection.
+func (c Check) OverridesParent() bool {
+	if !IsServerRule(c.Type) {
+		return false
+	}
+	var cfg struct {
+		OverrideParent bool `json:"override_parent"`
+	}
+	return json.Unmarshal(c.Config, &cfg) == nil && cfg.OverrideParent
 }
