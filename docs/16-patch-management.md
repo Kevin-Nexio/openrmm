@@ -351,3 +351,12 @@ not report a boot identity. A new heartbeat or cleared reboot indicator alone
 is not proof that a boot occurred. An observed boot change can still leave an
 outstanding restart requirement. API access remains device-scoped; boot identity,
 patch source and dispatch reservation metadata are not exposed to console users.
+
+## Compliance table
+
+Patches > Compliance includes the device description from Devices. The search
+filters hostnames and descriptions. Click any data column heading to sort, then
+click it again to reverse the order. Counts sort numerically and last scans
+chronologically; empty values stay last in either direction. Row actions stay
+attached to the displayed device. The report API adds `description` to each
+row without changing existing fields or the caller’s access scope.

@@ -122,14 +122,46 @@ function PatchesScreen({ navigate }) {
   );
 }
 
+// Keep the API order for ties and missing values last in either direction.
+// Sort actual counts and timestamps, never their formatted display strings.
+function complianceRows(data, search, sort) {
+  const needle = search.toLowerCase();
+  const values = {
+    hostname: (r) => r.hostname, description: (r) => r.description, os: (r) => r.os,
+    status: (r) => r.status ? t('comp.' + r.status) : null,
+    missing_total: (r) => r.missing_total, missing_security: (r) => r.missing_security,
+    approved: (r) => r.approved, failed: (r) => r.failed,
+    reboot_pending: (r) => r.reboot_pending == null ? null : Number(r.reboot_pending),
+    last_scan: (r) => r.last_scan ? Date.parse(r.last_scan) : null,
+  };
+  const value = values[sort.key] || values.hostname;
+  const empty = (v) => v == null || (typeof v === 'string' && !v.trim()) || (typeof v === 'number' && !Number.isFinite(v));
+  return data.filter((r) => !needle || [r.hostname, r.description].some((v) => (v || '').toLowerCase().includes(needle)))
+    .sort((a, b) => {
+      const x = value(a), y = value(b);
+      if (empty(x) || empty(y)) return empty(x) === empty(y) ? 0 : empty(x) ? 1 : -1;
+      const compared = typeof x === 'number' && typeof y === 'number' ? x - y : String(x).localeCompare(String(y), undefined, { sensitivity: 'base', numeric: true });
+      return (sort.dir === 'desc' ? -1 : 1) * compared;
+    });
+}
+
 function ComplianceTab() {
   const toast = useToast();
   const { can } = useAuth();
   const q = useQuery(['compliance'], () => api.compliance(), { invalidateOn: ['devices', 'patches'], poll: 15000 });
   const [search, setSearch] = useState('');
+  const [sort, setSort] = useState({ key: 'hostname', dir: 'asc' });
+  const rows = complianceRows(q.data?.rows || [], search, sort);
+  const sortBy = (key) => setSort((s) => ({ key, dir: s.key === key && s.dir === 'asc' ? 'desc' : 'asc' }));
+  const sortTh = (key, label) => (
+    <th key={key} className="font-medium px-4 py-2.5 whitespace-nowrap border-b border-line" aria-sort={sort.key === key ? (sort.dir === 'asc' ? 'ascending' : 'descending') : 'none'}>
+      <button type="button" onClick={() => sortBy(key)} className="inline-flex items-center gap-1 hover:text-ink">
+        {label}{sort.key === key && <Icon name={sort.dir === 'asc' ? 'chevdown' : 'chevright'} size={11} className={sort.dir === 'asc' ? '' : '-rotate-90'} />}
+      </button>
+    </th>
+  );
   const [refreshMetadata, setRefreshMetadata] = useState(false);
   const [dispatching, setDispatching] = useState(false);
-  const rows = (q.data?.rows || []).filter((r) => !search || (r.hostname || '').toLowerCase().includes(search.toLowerCase()));
   const scan = async (id) => { try { await api.scanDevicePatches(id, { refresh_metadata: refreshMetadata }); toast.info(t('dpatch.scanRequested'), t('patches.scanRequestedMsg')); window.dataBus.emit('patches'); } catch (e) { toast.error(t('patches.scanFailed'), e.message); } };
   const scanAll = async () => {
     setDispatching(true);
@@ -164,12 +196,25 @@ function ComplianceTab() {
             <div className="overflow-auto scroll-area max-h-[calc(100vh-260px)]">
               <table className="w-full text-[12.5px] border-collapse">
                 <thead className="sticky top-0 bg-elevated/95 backdrop-blur-sm text-left text-faint">
-                  <tr>{[t('patches.col.host'), t('devices.col.os'), t('patches.col.status'), t('patches.col.missing'), t('patches.col.security'), t('patches.col.approved'), t('patches.col.failed'), t('patches.col.reboot'), t('patches.col.lastScan'), ''].map((h, i) => <th key={i} className="font-medium px-4 py-2.5 whitespace-nowrap border-b border-line">{h}</th>)}</tr>
+                  <tr>
+                    {sortTh('hostname', t('patches.col.host'))}
+                    {sortTh('description', t('common.description'))}
+                    {sortTh('os', t('devices.col.os'))}
+                    {sortTh('status', t('patches.col.status'))}
+                    {sortTh('missing_total', t('patches.col.missing'))}
+                    {sortTh('missing_security', t('patches.col.security'))}
+                    {sortTh('approved', t('patches.col.approved'))}
+                    {sortTh('failed', t('patches.col.failed'))}
+                    {sortTh('reboot_pending', t('patches.col.reboot'))}
+                    {sortTh('last_scan', t('patches.col.lastScan'))}
+                    <th className="border-b border-line" />
+                  </tr>
                 </thead>
                 <tbody>
                   {rows.map((r) => (
                     <tr key={r.agent_id} className="border-b border-line/60 hover:bg-white/[0.02]">
                       <td className="px-4 py-2 text-ink font-medium">{r.hostname}</td>
+                      <td className="px-4 py-2 truncate max-w-[220px]" title={r.description || undefined}>{r.description?.trim() ? <span className="text-ink">{r.description}</span> : <span className="text-faint">—</span>}</td>
                       <td className="px-4 py-2"><span className="inline-flex items-center gap-1.5"><OsIcon os={r.os} />{r.os}</span></td>
                       <td className="px-4 py-2"><ComplianceBadge s={patchComplianceStatus(r)} /></td>
                       <td className="px-4 py-2 tabular">{r.missing_total}</td>

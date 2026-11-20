@@ -871,7 +871,7 @@ func (s *Store) ComplianceReport(ctx context.Context, f ReportFilter) ([]models.
 	}
 	where, args := f.where()
 	q := `
-		SELECT a.id, a.hostname, a.os, COALESCE(cl.name,''), COALESCE(s.name,''), COALESCE(g.name,''),
+		SELECT a.id, a.hostname, a.description, a.os, COALESCE(cl.name,''), COALESCE(s.name,''), COALESCE(g.name,''),
 		       COUNT(ap.patch_id) FILTER (WHERE ap.status IN ('missing','approved','installing')),
 		       COUNT(ap.patch_id) FILTER (WHERE ap.status IN ('missing','approved','installing') AND pt.classification IN ('security','critical')),
 		       COUNT(ap.patch_id) FILTER (WHERE ap.status='approved'),
@@ -892,7 +892,7 @@ func (s *Store) ComplianceReport(ctx context.Context, f ReportFilter) ([]models.
 	for rows.Next() {
 		var r models.ComplianceRow
 		var stateJSON []byte
-		if err := rows.Scan(&r.AgentID, &r.Hostname, &r.OS, &r.Client, &r.Site, &r.Department,
+		if err := rows.Scan(&r.AgentID, &r.Hostname, &r.Description, &r.OS, &r.Client, &r.Site, &r.Department,
 			&r.MissingTotal, &r.MissingSec, &r.Approved, &r.Failed, &r.AgentStatus, &r.RebootPending, &r.LastScan, &r.RebootStatus, &r.RebootReason, &r.RebootCheckedAt, &r.RebootPendingSince, &r.RebootRequestedAt, &r.RebootObservedAt, &stateJSON); err != nil {
 			return nil, err
 		}

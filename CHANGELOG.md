@@ -6,6 +6,12 @@ tag.
 
 ## [Unreleased]
 
+### Added
+
+- Patches > Compliance shows each device description and searches both hostname
+  and description. Every data column sorts in either direction, with numeric
+  counts, chronological scan dates, and missing values last.
+
 ## [0.11.4] - 2026-11-17
 
 ### Fixed
