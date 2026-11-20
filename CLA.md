@@ -126,8 +126,11 @@ Signing is per person, once, and covers every Contribution you make afterwards.
 1. Open a pull request adding one line to [`CONTRIBUTORS.md`](CONTRIBUTORS.md):
 
    ```
-   - Full Name <email@example.com> (GitHub: @handle) — signed <YYYY-MM-DD>
+   - Name (GitHub: @handle) — signed <YYYY-MM-DD>
    ```
+
+   The name is how you want to be credited: your real name or a pseudonym you
+   use consistently. Leave your e-mail address out; the file is public.
 
 2. In that pull request's description, include:
 
@@ -135,8 +138,10 @@ Signing is per person, once, and covers every Contribution you make afterwards.
    > I am signing on my own behalf.
 
    If you are signing for a company, replace the second line with the company's
-   legal name and confirm you are authorised to bind it.
+   name and confirm you are authorised to bind it. Any name the company is
+   known by will do, in the description and in `CONTRIBUTORS.md`.
 
-That pull request, made from your own GitHub account, is your signature. Ask
-first if anything above is unclear or does not work for you — it is easier to
-discuss before you write the code than after.
+That pull request, made from your own GitHub account, is your signature. The
+account is what identifies you under this agreement, whatever name you sign
+with. Ask first if anything above is unclear or does not work for you — it is
+easier to discuss before you write the code than after.
