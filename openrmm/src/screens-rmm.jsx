@@ -400,7 +400,9 @@ function ChecksScreen({ route } = {}) {
   checks.forEach((c) => { if (c.enabled && !checkType(c.type).server) { const x = c.summary || {}; summary.passing += x.passing || 0; summary.warning += x.warning || 0; summary.failing += x.failing || 0; summary.unknown += x.unknown || 0; } });
   const toggle = async (c) => {
     try {
-      await api.updateCheck(c.id, { ...c, enabled: !c.enabled });
+      // Where a check applies changes through its attachments, not this PUT.
+      const { attachments, agent_id, policy_id, ...fields } = c;
+      await api.updateCheck(c.id, { ...fields, enabled: !c.enabled });
       toast.success(c.enabled ? t('checks.disabled') : t('checks.enabled'));
     } catch (e) {
       toast.error(t('checks.updateFailed'), e.message);
@@ -972,9 +974,11 @@ function TasksScreen() {
 
   const toggle = async (task) => {
     // Task updates use PUT, so the server validates the entire schedule. Keep
-    // the current task fields when changing just the enabled state.
+    // the current task fields when changing just the enabled state. Where it
+    // applies changes through its attachments, so those stay out.
     try {
-      await api.updateTask(task.id, { ...task, enabled: !task.enabled });
+      const { attachments, agent_id, policy_id, ...fields } = task;
+      await api.updateTask(task.id, { ...fields, enabled: !task.enabled });
       toast.success(task.enabled ? t('tasks.disabled') : t('tasks.enabled'));
     } catch (e) {
       toast.error(t('tasks.updateFailed'), e.message);

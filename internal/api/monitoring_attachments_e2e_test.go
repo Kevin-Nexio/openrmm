@@ -207,3 +207,85 @@ func TestSharedMonitoringAPIAccessE2EIntegration(t *testing.T) {
 	expect(f.do("PUT", "/api/tasks/"+task.ID, `{"name":"x","shell":"bash","script":"true","schedule_kind":"interval","interval_sec":3600}`), 403, "edit a task that also runs outside scope")
 	restore()
 }
+
+// Runs in the PostgreSQL CI job. The console switches a check or task on and
+// off by sending back what it read with enabled flipped. For an item on one
+// target that body names it twice, in attachments and in the agent_id or
+// policy_id kept for older clients, and the edit must still be accepted
+// (enabling an AI proposal goes the same way). A body naming another target
+// is still refused.
+func TestMonitoringEditAcceptsWhatItReadE2EIntegration(t *testing.T) {
+	f := newScriptFixture(t)
+	ctx := context.Background()
+	c, err := f.store.CreateClient(ctx, "Echo-"+uuid.NewString()[:8])
+	if err != nil {
+		t.Fatal(err)
+	}
+	s, err := f.store.CreateSite(ctx, c.ID, "HQ")
+	if err != nil {
+		t.Fatal(err)
+	}
+	var agents []string
+	for _, h := range []string{"E1", "E2"} {
+		a, err := f.store.CreateAgent(ctx, h+"-"+uuid.NewString()[:8], "linux", "amd64", "0.11.4", "tok-"+uuid.NewString(), &s.ID, nil)
+		if err != nil {
+			t.Fatal(err)
+		}
+		agents = append(agents, a.ID)
+	}
+	policy, err := f.store.CreatePolicy(ctx, "Echo-"+uuid.NewString()[:8], "", "")
+	if err != nil {
+		t.Fatal(err)
+	}
+	create := func(path, body string) map[string]any {
+		t.Helper()
+		rec := f.do("POST", path, body)
+		if rec.Code != 201 {
+			t.Fatalf("create %s = %d %s", path, rec.Code, rec.Body.String())
+		}
+		var out map[string]any
+		if err := json.Unmarshal(rec.Body.Bytes(), &out); err != nil {
+			t.Fatal(err)
+		}
+		return out
+	}
+	put := func(path string, obj map[string]any, change func(map[string]any)) int {
+		t.Helper()
+		body := map[string]any{}
+		for k, v := range obj {
+			body[k] = v
+		}
+		change(body)
+		b, _ := json.Marshal(body)
+		return f.do("PUT", path, string(b)).Code
+	}
+	check := `"type":"script","config":{"shell":"bash","script":"true"},"name":"echo"`
+	task := `"name":"echo","shell":"bash","script":"true","schedule_kind":"interval","interval_sec":3600`
+	for _, tc := range []struct{ what, path, body, single, other string }{
+		{"check on a device", "/api/checks", `{"agent_id":"` + agents[0] + `",` + check + `}`, "agent_id", agents[1]},
+		{"check on a policy", "/api/checks", `{"policy_id":"` + policy.ID + `",` + check + `}`, "policy_id", agents[1]},
+		{"task on a device", "/api/tasks", `{"agent_id":"` + agents[0] + `",` + task + `}`, "agent_id", agents[1]},
+		{"shared task", "/api/tasks", `{"attachments":[{"agent_id":"` + agents[0] + `"},{"policy_id":"` + policy.ID + `"}],` + task + `}`, "", agents[1]},
+	} {
+		obj := create(tc.path, tc.body)
+		path := tc.path + "/" + obj["id"].(string)
+		if tc.single != "" && obj[tc.single] == nil {
+			t.Fatalf("%s: the read lacks %s: %v", tc.what, tc.single, obj)
+		}
+		if code := put(path, obj, func(b map[string]any) { b["enabled"] = false }); code != 200 {
+			t.Fatalf("%s: sending back what was read = %d, want 200", tc.what, code)
+		}
+		if code := put(path, obj, func(b map[string]any) {
+			b["attachments"] = []map[string]string{{"agent_id": tc.other}}
+		}); code != 400 {
+			t.Fatalf("%s: other attachments = %d, want 400", tc.what, code)
+		}
+		if tc.single != "" {
+			if code := put(path, obj, func(b map[string]any) { b["agent_id"] = tc.other; b["policy_id"] = nil }); code != 400 {
+				t.Fatalf("%s: other agent_id beside the same attachments = %d, want 400", tc.what, code)
+			}
+		} else if code := put(path, obj, func(b map[string]any) { b["agent_id"] = agents[0] }); code != 400 {
+			t.Fatalf("%s: one owner field on a shared item = %d, want 400", tc.what, code)
+		}
+	}
+}

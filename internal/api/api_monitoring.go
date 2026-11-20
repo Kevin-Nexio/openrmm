@@ -235,8 +235,7 @@ func (s *Server) updateCheck(w http.ResponseWriter, r *http.Request) {
 	}
 	// Where a check applies changes through its attachments endpoints; an edit
 	// that names other targets is refused rather than silently ignored.
-	if requested, err := models.RequestedAttachments(c.Attachments, c.SingleAgentID, c.SinglePolicyID); err != nil ||
-		(len(requested) > 0 && !sameTargets(requested, existing.Attachments)) {
+	if !unchangedTargets(c.Attachments, c.SingleAgentID, c.SinglePolicyID, existing.Attachments) {
 		writeErr(w, http.StatusBadRequest, "change where a check applies through /api/checks/{id}/attachments")
 		return
 	}
@@ -451,8 +450,7 @@ func (s *Server) updateTask(w http.ResponseWriter, r *http.Request) {
 		writeErr(w, http.StatusBadRequest, "invalid body")
 		return
 	}
-	if requested, err := models.RequestedAttachments(t.Attachments, t.SingleAgentID, t.SinglePolicyID); err != nil ||
-		(len(requested) > 0 && !sameTargets(requested, existing.Attachments)) {
+	if !unchangedTargets(t.Attachments, t.SingleAgentID, t.SinglePolicyID, existing.Attachments) {
 		writeErr(w, http.StatusBadRequest, "change where a task applies through /api/tasks/{id}/attachments")
 		return
 	}

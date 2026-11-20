@@ -199,3 +199,43 @@ func TestEnablingAProposedCheckThroughTheAPIAcceptsItIntegration(t *testing.T) {
 		t.Errorf("provenance lost: proposed_by = %q", after.ProposedBy)
 	}
 }
+
+// The console enables a proposal by sending back the task as it read it, with
+// enabled flipped. That read names the task's one device twice, in
+// attachments and in agent_id, and the edit must still go through.
+func TestEnablingAProposalAsTheConsoleReadsItIntegration(t *testing.T) {
+	f := newProposalReviewFixture(t)
+	task := f.proposedTask(t)
+
+	rec := f.do(http.MethodGet, "/api/tasks", "")
+	if rec.Code != http.StatusOK {
+		t.Fatalf("list tasks: status %d", rec.Code)
+	}
+	var listed struct {
+		Tasks []map[string]any `json:"tasks"`
+	}
+	if err := json.Unmarshal(rec.Body.Bytes(), &listed); err != nil {
+		t.Fatal(err)
+	}
+	var read map[string]any
+	for _, x := range listed.Tasks {
+		if x["id"] == task.ID {
+			read = x
+		}
+	}
+	if read == nil || read["agent_id"] != f.agent || read["attachments"] == nil {
+		t.Fatalf("the read does not name the device in both forms: %v", read)
+	}
+	read["enabled"] = true
+	body, _ := json.Marshal(read)
+	if rec := f.do(http.MethodPut, "/api/tasks/"+task.ID, string(body)); rec.Code != http.StatusOK {
+		t.Fatalf("enabling the proposal as read: status %d, body=%s", rec.Code, rec.Body.String())
+	}
+	after, err := f.store.GetTask(f.ctx, task.ID)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !after.Enabled || after.ApprovedBy == "" || after.ProposedBy != "ai:assistant" {
+		t.Fatalf("after enabling: enabled=%v approved_by=%q proposed_by=%q", after.Enabled, after.ApprovedBy, after.ProposedBy)
+	}
+}

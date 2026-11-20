@@ -174,6 +174,33 @@ func (s *Server) requestedAttachments(w http.ResponseWriter, r *http.Request, li
 	return atts, true
 }
 
+// unchangedTargets reports whether the targets an update names, if it names
+// any, are the item's current ones. An edit that would move the item is
+// refused: that goes through the attachments endpoints. A client that sends
+// back what GET returned names an item on one target twice, in attachments
+// and in the agent_id or policy_id kept for older clients, so the two may
+// come together as long as they agree.
+func unchangedTargets(list []models.Attachment, agentID, policyID *string, current []models.Attachment) bool {
+	if len(list) == 0 {
+		requested, err := models.RequestedAttachments(nil, agentID, policyID)
+		return err == nil && (len(requested) == 0 || sameTargets(requested, current))
+	}
+	requested, err := models.RequestedAttachments(list, nil, nil)
+	if err != nil || !sameTargets(requested, current) {
+		return false
+	}
+	currentAgent, currentPolicy := models.SingleTarget(current)
+	return sameOptionalID(agentID, currentAgent) && sameOptionalID(policyID, currentPolicy)
+}
+
+// sameOptionalID reports whether a sent id, when sent, is the current one.
+func sameOptionalID(sent, current *string) bool {
+	if sent == nil || *sent == "" {
+		return true
+	}
+	return current != nil && *current == *sent
+}
+
 // sameTargets reports whether two attachment lists name the same targets.
 func sameTargets(a, b []models.Attachment) bool {
 	if len(a) != len(b) {

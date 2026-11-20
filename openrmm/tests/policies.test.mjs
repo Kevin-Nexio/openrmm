@@ -58,8 +58,16 @@ test('a policy\'s checks and tasks can be edited from the drawer', async () => {
   // The toggle was inert: `onChange={() => { }} disabled`.
   assert.doesNotMatch(detail, /onChange=\{\(\) => \{ \}\}/, 'the task toggle must do something');
   assert.match(detail, /onChange=\{\(\) => \(!task\.enabled && awaitingReview\(task\) \? setReviewTask\(task\) : setConfirmToggleTask\(task\)\)\}/);
-  assert.match(detail, /api\.updateTask\(task\.id, \{ \.\.\.task, enabled: !task\.enabled \}\)/,
-    'toggling goes through PUT, so the whole task has to be resent');
+  // Toggling goes through PUT, so the whole task has to be resent; where it
+  // applies is left out (an item on one target reads back in two forms).
+  assert.match(detail, /const \{ attachments, agent_id, policy_id, \.\.\.fields \} = task;\s*await api\.updateTask\(task\.id, \{ \.\.\.fields, enabled: !task\.enabled \}\)/,
+    'toggling resends the task without its attachment fields');
+  for (const [file, re] of [
+    ['src/screens-rmm.jsx', /const \{ attachments, agent_id, policy_id, \.\.\.fields \} = c;\s*await api\.updateCheck\(c\.id, \{ \.\.\.fields, enabled: !c\.enabled \}\)/],
+    ['src/screens-rmm.jsx', /const \{ attachments, agent_id, policy_id, \.\.\.fields \} = task;\s*await api\.updateTask\(task\.id, \{ \.\.\.fields, enabled: !task\.enabled \}\)/],
+  ]) {
+    assert.match(await readFile(path.join(root, file), 'utf8'), re, file + ': the list toggles leave the attachment fields out');
+  }
   // Changing what a policy contains is gated separately from editing the policy.
   assert.match(detail, /const canChecks = can\('checks\.manage'\), canTasks = can\('tasks\.manage'\)/);
 });

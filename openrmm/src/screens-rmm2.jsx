@@ -705,10 +705,12 @@ function PolicyDetail({ policy, onClose, onSaved }) {
     : null);
 
   // Task updates go through PUT, so the server revalidates the whole schedule;
-  // resend the task unchanged apart from the flag being flipped.
+  // resend the task unchanged apart from the flag being flipped. Where it
+  // applies changes through its attachments, so those stay out.
   const toggleTask = async (task) => {
     try {
-      await api.updateTask(task.id, { ...task, enabled: !task.enabled });
+      const { attachments, agent_id, policy_id, ...fields } = task;
+      await api.updateTask(task.id, { ...fields, enabled: !task.enabled });
       toast.success(task.enabled ? t('tasks.disabled') : t('tasks.enabled'), task.name);
     } catch (e) { toast.error(t('tasks.updateFailed'), e.message); }
     finally { setConfirmToggleTask(null); }
