@@ -52,10 +52,18 @@ func TestDockerSnapshotScopedAPIAndConnectionLease(t *testing.T) {
 			t.Fatal("out-of-scope collection status leaked")
 		}
 	}
+	unknownRaw := get(f.scoped, "/api/docker?update=unknown&limit=1", http.StatusOK)
+	if err := json.Unmarshal(unknownRaw, &fleet); err != nil || fleet.Total != 1 || len(fleet.Containers) != 1 || fleet.Containers[0].Name != "mine" || strings.Contains(string(unknownRaw), "other-tenant") {
+		t.Fatalf("update filter leaked scope or lost old-agent reports: %s %v", unknownRaw, err)
+	}
+	availableRaw := get(f.scoped, "/api/docker?update=available", http.StatusOK)
+	if err := json.Unmarshal(availableRaw, &fleet); err != nil || fleet.Total != 0 {
+		t.Fatalf("old agent incorrectly counted as an update: %s %v", availableRaw, err)
+	}
 	get(f.scoped, "/api/devices/"+f.b1+"/docker", http.StatusForbidden)
 	get(f.scoped, "/api/docker?agent_id="+f.b1, http.StatusForbidden)
 	get(f.scoped, "/api/docker?scope=site&id="+f.siteB.ID, http.StatusForbidden)
-	for _, query := range []string{"limit=201", "offset=-1", "health=green", "state=bad"} {
+	for _, query := range []string{"limit=201", "offset=-1", "health=green", "state=bad", "update=install"} {
 		get(f.admin, "/api/docker?"+query, http.StatusBadRequest)
 	}
 	get("", "/api/docker", http.StatusUnauthorized)

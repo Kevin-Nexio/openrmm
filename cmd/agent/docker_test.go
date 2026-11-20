@@ -28,7 +28,7 @@ func TestDockerInspectTemplateRendersOnlyAllowedJSON(t *testing.T) {
 		if withHealth {
 			state["Health"] = map[string]any{"Status": "healthy", "Log": "CANARY_SECRET"}
 		}
-		fixture := map[string]any{"Id": dockerTestID, "Name": "/web.1", "RestartCount": 0, "State": state, "Config": map[string]any{"Image": "web:v1", "Env": []string{"CANARY_SECRET"}, "Labels": map[string]string{"private": "CANARY_SECRET", "com.docker.compose.project": "site", "com.docker.compose.service": "web"}}, "Mounts": "CANARY_SECRET"}
+		fixture := map[string]any{"Id": dockerTestID, "Image": "sha256:" + dockerTestID, "Name": "/web.1", "RestartCount": 0, "State": state, "Config": map[string]any{"Image": "web:v1", "Env": []string{"CANARY_SECRET"}, "Labels": map[string]string{"private": "CANARY_SECRET", "com.docker.compose.project": "site", "com.docker.compose.service": "web"}}, "Mounts": "CANARY_SECRET"}
 		var output bytes.Buffer
 		if err := tmpl.Execute(&output, fixture); err != nil {
 			t.Fatal(err)

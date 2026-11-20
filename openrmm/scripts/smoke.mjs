@@ -68,7 +68,7 @@ const fleet = [
 let dockerFailure = false;
 const dockerContainer = { id: 'a'.repeat(64), name: 'web', image: 'example/web:v1', state: 'running', health: 'healthy', cpu_percent: 125.5, memory_used_bytes: 2097152, memory_limit_bytes: 1073741824, restart_count: 2, compose_project: 'demo', compose_service: 'web' };
 const dockerHost = () => ({ agent_id: 'dev-1', hostname: 'SMOKE-PC', description: 'Smoke device', agent_status: 'online', status: dockerFailure ? 'unavailable' : 'available', error_code: dockerFailure ? 'engine_unavailable' : '', stale: dockerFailure, last_attempt_at: new Date().toISOString(), last_success_at: new Date(Date.now() - (dockerFailure ? 180000 : 0)).toISOString() });
-const dockerContainers = () => [dockerContainer, { ...dockerContainer, id: 'b'.repeat(64), name: 'worker', state: 'exited', health: 'none', cpu_percent: null, memory_used_bytes: null, memory_limit_bytes: null }];
+const dockerContainers = () => [{ ...dockerContainer, update: { status:'update_available', version_status:'available', latest_tag:'2.0.0', version_kind:'major', version_error_code:'tag_search_incomplete', checked_at:new Date().toISOString() } }, { ...dockerContainer, id: 'b'.repeat(64), name: 'worker', state: 'exited', health: 'none', cpu_percent: null, memory_used_bytes: null, memory_limit_bytes: null }];
 let complianceTableMode = false;
 // Patches > Compliance: descriptions belong to devices, counts sort as
 // numbers, and dates with offsets must be compared by their actual instant.
@@ -195,7 +195,7 @@ const server = createServer(async (req, res) => {
         const q = (url.searchParams.get('q') || '').toLowerCase();
         if (q === 'http-error') return json(res, 403, { error: 'Forbidden' });
         dockerFailure = q === 'engine-error';
-        const rows = dockerContainers().filter((c) => (dockerFailure || !q || (c.name + c.image).includes(q)) && (!url.searchParams.get('state') || c.state === url.searchParams.get('state')) && (!url.searchParams.get('health') || c.health === url.searchParams.get('health'))).map((c) => ({ ...c, ...dockerHost() }));
+        const rows = dockerContainers().filter((c) => (dockerFailure || !q || (c.name + c.image).includes(q)) && (!url.searchParams.get('state') || c.state === url.searchParams.get('state')) && (!url.searchParams.get('health') || c.health === url.searchParams.get('health'))).map((c) => ({ ...c, ...dockerHost() })).filter((c) => { const filter = url.searchParams.get('update'); const result = c.stale || !c.update ? 'unknown' : 'available'; return !filter || filter === result; });
         return json(res, 200, { hosts: [dockerHost(), { agent_id:'dev-2', hostname:'ALPHA-WS', status:'unsupported', stale:true, error_code:'platform_unsupported' }, { agent_id:'dev-3', hostname:'BETA-SRV', status:'unknown', stale:true }], containers: rows, total:rows.length, limit:100, offset:0 });
       }
       if (pathname === '/api/devices/dev-1/docker') return json(res, 200, { ...dockerHost(), containers:dockerContainers() });
@@ -748,6 +748,17 @@ async function dockerBrowserFlow() {
   (await wait(()=>button('Docker'))).click();
   await wait(()=>rows().length===2);
   if (!document.querySelector('[data-docker-name="worker"]').textContent.includes('Not sampled')) throw new Error('Stopped metrics must be absent');
+  const updateSelect = () => document.querySelector('select[aria-label="Updates"]');
+  if (!document.querySelector('[data-docker-name="web"]').textContent.includes('Same tag: new image') || !document.querySelector('[data-docker-name="web"]').textContent.includes('Newer version found') || !document.querySelector('[data-docker-name="web"]').textContent.includes('Major version: review migration requirements')) throw new Error('Update types and migration guidance must be visible');
+  if (!document.querySelector('[data-docker-name="worker"]').textContent.includes('Awaiting a check or an agent')) throw new Error('Older agents must not appear current');
+  change(updateSelect(),'available');
+  await wait(()=>rows().length===1 && rows()[0].dataset.dockerName==='web');
+  change(updateSelect(),'unknown');
+  await wait(()=>rows().length===1 && rows()[0].dataset.dockerName==='worker');
+  change(updateSelect(),'current');
+  await wait(()=>rows().length===0 && document.body.textContent.includes('No matching containers'));
+  change(updateSelect(),'');
+  await wait(()=>rows().length===2);
   change(document.querySelector('select[aria-label="State"]'),'running');
   await wait(()=>rows().length===1);
   change(document.querySelector('select[aria-label="State"]'),'');
@@ -760,6 +771,7 @@ async function dockerBrowserFlow() {
   await wait(()=>document.body.textContent.includes('Unable to load Docker inventory') && rows().length===0);
   change(search(),'engine-error');
   await wait(()=>rows().length===2 && rows()[0].dataset.stale==='true');
+  if (!document.querySelector('[data-docker-name="web"] [data-update-stale="true"]') || !document.querySelector('[data-docker-name="web"]').textContent.includes('2.0.0')) throw new Error('Stale updates must retain previous observations');
   document.querySelector('details summary').click();
   await wait(()=>document.body.textContent.includes('The local Docker engine could not be read.'));
   if (!document.querySelector('[data-docker-collection="unsupported"]') || !document.querySelector('[data-docker-collection="unknown"]')) throw new Error('Missing legacy/platform status');
@@ -769,6 +781,12 @@ async function dockerBrowserFlow() {
   tab.click();
   await wait(()=>rows().length===2 && rows()[0].dataset.stale==='true');
   if (!document.querySelector('[data-docker-collection="unavailable"]')) throw new Error('Device collection failure hidden');
+  change(updateSelect(),'available');
+  await wait(()=>rows().length===0 && document.body.textContent.includes('No matching containers'));
+  change(updateSelect(),'unknown');
+  await wait(()=>rows().length===2);
+  change(updateSelect(),'');
+  await wait(()=>rows().length===2);
   change(search(),'worker');
   await wait(()=>rows().length===1 && rows()[0].dataset.dockerName==='worker');
   (await wait(()=>button('Checks'))).click();
