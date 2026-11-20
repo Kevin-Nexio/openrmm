@@ -22,7 +22,7 @@ func dockerTestProjection(state, health string) []byte {
 }
 
 func TestDockerInspectTemplateRendersOnlyAllowedJSON(t *testing.T) {
-	tmpl := template.Must(template.New("inspect").Funcs(template.FuncMap{"json": func(v any) string { b, _ := json.Marshal(v); return string(b) }}).Parse(dockerInspectProjection))
+	tmpl := template.Must(template.New("inspect").Option("missingkey=error").Funcs(template.FuncMap{"json": func(v any) string { b, _ := json.Marshal(v); return string(b) }}).Parse(dockerInspectProjection))
 	for _, withHealth := range []bool{false, true} {
 		state := map[string]any{"Status": "running", "StartedAt": "2026-01-02T03:04:05Z"}
 		if withHealth {
