@@ -40,8 +40,18 @@ func (s *Service) send(agentID, typ string, payload any) bool {
 }
 
 // DispatchScan asks an online agent to scan for missing patches.
-func (s *Service) DispatchScan(agentID string) bool {
-	return s.send(agentID, protocol.MsgPatchScan, protocol.PatchScanMsg{})
+func (s *Service) DispatchScan(ctx context.Context, agentID string, refresh bool) (string, error) {
+	id := uuid.NewString()
+	if err := s.store.ReservePatchScan(ctx, agentID, id, refresh); err != nil {
+		return "", err
+	}
+	if !s.send(agentID, protocol.MsgPatchScan, protocol.PatchScanMsg{RequestID: id, RefreshMetadata: refresh}) {
+		if err := s.store.FailPatchScan(ctx, agentID, id, "offline"); err != nil {
+			return "", err
+		}
+		return "", ErrOffline
+	}
+	return id, nil
 }
 
 // DispatchInstall claims approved patches before delivery and always sends their
