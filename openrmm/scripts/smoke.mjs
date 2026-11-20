@@ -539,8 +539,12 @@ async function deviceLibraryRunBrowserFlow() {
   (await wait(() => button('Devices'))).click();
   (await wait(() => [...document.querySelectorAll('tbody tr')].find((tr) => tr.textContent.includes('SMOKE-PC')))).click();
   (await wait(() => button('Run script'))).click();
-  const library = await wait(() => [...document.querySelectorAll('select')].find((el) => [...el.options].some((o) => o.value === 'script-e2e')));
-  change(library, 'script-e2e');
+  // The saved script is picked from the searchable library picker.
+  const pickLibraryScript = async () => {
+    (await wait(() => button('Start from a saved script…'))).click();
+    (await wait(() => button('Variable installer'))).click();
+  };
+  await pickLibraryScript();
   await wait(() => bound()?.textContent.includes('Variable installer'));
   const editor = await wait(() => [...document.querySelectorAll('textarea')].find((el) => el.value.includes('customerKey')));
   change(editor, editor.value + '\necho edited');
@@ -558,8 +562,7 @@ async function deviceLibraryRunBrowserFlow() {
   (await wait(() => button(create) && !button(create).disabled && button(create))).click();
   await wait(() => !edited());
   (await wait(() => button('Run script'))).click();
-  const library2 = await wait(() => [...document.querySelectorAll('select')].find((el) => [...el.options].some((o) => o.value === 'script-e2e')));
-  change(library2, 'script-e2e');
+  await pickLibraryScript();
   await wait(() => bound());
   (await wait(() => button(create) && !button(create).disabled && button(create))).click();
   await wait(() => !bound());
