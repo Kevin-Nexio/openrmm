@@ -36,6 +36,7 @@ test('only the current verified/native scan can support clean compliance', () =>
   const { sandbox: ui } = harness();
   assert.equal(ui.patchComplianceStatus({ status: 'compliant' }), 'unknown');
   assert.equal(ui.patchComplianceStatus({ scan_state: verified }), 'compliant');
+  assert.equal(ui.patchComplianceStatus({ status: 'unknown', scan_state: verified }), 'unknown');
   for (const scan_state of [
     { ...verified, scan_mode: 'cached' }, { ...verified, scan_mode: 'legacy' },
     { ...verified, status: 'failed' }, { ...verified, status: 'pending' },

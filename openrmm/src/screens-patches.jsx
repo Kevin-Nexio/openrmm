@@ -75,6 +75,7 @@ function patchScanVerified(state) {
 function patchComplianceStatus(row) {
   if (row.missing_security > 0 || row.failed > 0 || row.status === 'critical') return 'critical';
   if (row.missing_total > 0 || row.reboot_pending || row.status === 'at_risk') return 'at_risk';
+  if (row.status === 'unknown') return 'unknown';
   return patchScanVerified(row.scan_state) ? 'compliant' : 'unknown';
 }
 function PatchScanSummary({ state, lastScan }) {
