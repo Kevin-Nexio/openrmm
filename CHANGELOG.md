@@ -6,6 +6,17 @@ tag.
 
 ## [Unreleased]
 
+### Fixed
+
+- **A check timeout counts as one failure.** The server deadline was exactly
+  `timeout_sec`, while the agent starts its own timer only when the order
+  arrives. The server recorded the timeout, then counted the agent's late
+  result for the same run again, so "Failures to alert" of 2 fired on a single
+  timeout. The server now waits 30 seconds past the agent's timeout. A late
+  result replaces that timeout instead of adding another failure, and a late
+  success still clears the streak. A check can set Timeouts to "Count as a
+  failure" (the default) or "Ignore".
+
 ## [0.11.4] - 2026-11-17
 
 ### Fixed

@@ -1378,13 +1378,13 @@ var policyFilter = `policy_id IN (SELECT reach.policy_id FROM agents dev CROSS J
 // ===================== Checks =====================
 
 const checkCols = `id, agent_id, policy_id, type, name, config, warn_threshold, err_threshold,
-	interval_sec, failure_count, recovery_count, hysteresis, cooldown_sec, timeout_sec, enabled, proposed_by, approved_by, created_at`
+	interval_sec, failure_count, recovery_count, hysteresis, cooldown_sec, timeout_sec, timeout_policy, enabled, proposed_by, approved_by, created_at`
 
 func scanCheck(row pgx.Row) (*models.Check, error) {
 	var c models.Check
 	err := row.Scan(&c.ID, &c.AgentID, &c.PolicyID, &c.Type, &c.Name, &c.Config,
 		&c.WarnThreshold, &c.ErrThreshold, &c.IntervalSec, &c.FailureCount,
-		&c.RecoveryCount, &c.Hysteresis, &c.CooldownSec, &c.TimeoutSec,
+		&c.RecoveryCount, &c.Hysteresis, &c.CooldownSec, &c.TimeoutSec, &c.TimeoutPolicy,
 		&c.Enabled, &c.ProposedBy, &c.ApprovedBy, &c.CreatedAt)
 	if errors.Is(err, pgx.ErrNoRows) {
 		return nil, ErrNotFound
@@ -1428,13 +1428,16 @@ func insertCheck(ctx context.Context, q dbQuerier, c *models.Check) error {
 	if c.TimeoutSec <= 0 {
 		c.TimeoutSec = 180
 	}
+	if c.TimeoutPolicy == "" {
+		c.TimeoutPolicy = models.TimeoutPolicyCount
+	}
 	_, err := q.Exec(ctx,
 		`INSERT INTO checks (id, agent_id, policy_id, type, name, config, warn_threshold, err_threshold,
-		                      interval_sec, failure_count, recovery_count, hysteresis, cooldown_sec, timeout_sec, enabled, proposed_by, approved_by)
-		 VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11,$12,$13,$14,$15,$16,$17)`,
+		                      interval_sec, failure_count, recovery_count, hysteresis, cooldown_sec, timeout_sec, timeout_policy, enabled, proposed_by, approved_by)
+		 VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11,$12,$13,$14,$15,$16,$17,$18)`,
 		c.ID, c.AgentID, c.PolicyID, c.Type, c.Name, []byte(c.Config), c.WarnThreshold,
 		c.ErrThreshold, c.IntervalSec, c.FailureCount, c.RecoveryCount, c.Hysteresis,
-		c.CooldownSec, c.TimeoutSec, c.Enabled, c.ProposedBy, c.ApprovedBy)
+		c.CooldownSec, c.TimeoutSec, c.TimeoutPolicy, c.Enabled, c.ProposedBy, c.ApprovedBy)
 	return err
 }
 
@@ -1503,11 +1506,11 @@ func (s *Store) UpdateCheck(ctx context.Context, c *models.Check) error {
 	_, err := s.pool.Exec(ctx,
 		`UPDATE checks SET type=$2, name=$3, config=$4, warn_threshold=$5, err_threshold=$6,
 		                   interval_sec=$7, enabled=$8, failure_count=$9, recovery_count=$10,
-		                   hysteresis=$11, cooldown_sec=$12, timeout_sec=$13, approved_by=$14
+		                   hysteresis=$11, cooldown_sec=$12, timeout_sec=$13, timeout_policy=$14, approved_by=$15
 		 WHERE id=$1`,
 		c.ID, c.Type, c.Name, []byte(c.Config), c.WarnThreshold, c.ErrThreshold,
 		c.IntervalSec, c.Enabled, c.FailureCount, c.RecoveryCount, c.Hysteresis,
-		c.CooldownSec, c.TimeoutSec, c.ApprovedBy)
+		c.CooldownSec, c.TimeoutSec, c.TimeoutPolicy, c.ApprovedBy)
 	return err
 }
 

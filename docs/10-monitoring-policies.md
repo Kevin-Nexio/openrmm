@@ -113,9 +113,11 @@ agent returns a raw value/output; the server computes `passing`/`warning`/
 
 ### A dispatch is tracked, not fired and forgotten
 
-Each `run_check` becomes a row in `check_executions` with a deadline
-(`timeout_sec`, default 180s). A partial unique index allows only **one pending
-execution per (check, agent)**, so an agent that is slow or has dropped is never
+Each `run_check` becomes a row in `check_executions` with a deadline of
+`timeout_sec` plus 30 seconds (default 180s on the agent, 210s on the server).
+The extra 30 seconds is there so the agent's own result, which starts counting
+only when the order arrives, can land before the server records a timeout.
+A partial unique index allows only **one pending execution per (check, agent)**, so an agent that is slow or has dropped is never
 sent the same check again while the first is still owed. Passing the deadline
 marks the execution `timed_out` — counted by `rmm_check_timeouts_total` — rather
 than leaving it pending forever.
@@ -131,6 +133,7 @@ streak and the check declares its own flap policy:
 | `recovery_count` | 2 | consecutive successes before it clears |
 | `hysteresis` | 2 | band a recovering value must clear the threshold by |
 | `cooldown_sec` | 300 | quiet period before the same condition may raise again |
+| `timeout_policy` | `count` | `count` records one failure when a run times out; `ignore` leaves the streak unchanged. A late result never adds a second failure for the same run |
 
 A value oscillating on its threshold therefore produces **one** alert instead of
 one per reading. `GET /api/checks/{id}/instances` shows this state per agent.

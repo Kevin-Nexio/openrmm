@@ -543,6 +543,7 @@ function CheckEditor({ check, onClose, devMap, policies, defaultPolicyId }) {
   const [hysteresis, setHysteresis] = useState(check?.hysteresis ?? 2);
   const [cooldown, setCooldown] = useState(check?.cooldown_sec ?? 300);
   const [timeout, setTimeoutSec] = useState(check?.timeout_sec ?? 180);
+  const [timeoutPolicy, setTimeoutPolicy] = useState(check?.timeout_policy || 'count');
   const [enabled, setEnabled] = useState(check?.enabled ?? true);
   const [busy, setBusy] = useState(false);
   const ct = checkType(type);
@@ -552,7 +553,7 @@ function CheckEditor({ check, onClose, devMap, policies, defaultPolicyId }) {
     setBusy(true);
     const config = ct.server ? serverRuleConfig(type, ruleCfg) : {}; if (ct.cfg) config[ct.cfg] = cfgVal; if (type === 'script') config.shell = shell; if (type === 'macservice') config.state = serviceState;
     const body = { type, name: name || ct.label, config, interval_sec: Number(interval), enabled,
-      failure_count: Number(failureCount), recovery_count: Number(recoveryCount), hysteresis: Number(hysteresis), cooldown_sec: Number(cooldown), timeout_sec: Number(timeout) };
+      failure_count: Number(failureCount), recovery_count: Number(recoveryCount), hysteresis: Number(hysteresis), cooldown_sec: Number(cooldown), timeout_sec: Number(timeout), timeout_policy: timeoutPolicy };
     if (!ct.server && ct.dir !== 'state' && ct.dir !== 'script') { body.warn_threshold = Number(warn); body.err_threshold = Number(err); }
     if (target.startsWith('dev:')) body.agent_id = target.slice(4); else if (target.startsWith('pol:')) body.policy_id = target.slice(4);
     try { if (check) await api.updateCheck(check.id, body); else await api.createCheck(body); toast.success(check ? t('checks.updated') : t('checks.created')); onClose(); }
@@ -590,7 +591,7 @@ function CheckEditor({ check, onClose, devMap, policies, defaultPolicyId }) {
         )}
         {(ct.dir === 'state' || ct.dir === 'script') && <Field label={t('checks.intervalSec')} className="w-40"><Input type="number" value={interval} onChange={(e) => setInterval(e.target.value)} /></Field>}
         {!ct.server && <div className="rounded-xl border border-line bg-elevated/30 p-3 space-y-3"><div className="text-[12px] font-semibold text-ink">{t('checks.reliability')}</div>
-          <div className="grid grid-cols-2 sm:grid-cols-3 gap-3"><Field label={t('checks.failuresToAlert')}><Input type="number" min="1" max="100" value={failureCount} onChange={(e) => setFailureCount(e.target.value)} /></Field><Field label={t('checks.successesToRecover')}><Input type="number" min="1" max="100" value={recoveryCount} onChange={(e) => setRecoveryCount(e.target.value)} /></Field><Field label={t('checks.timeout')}><Input type="number" min="5" value={timeout} onChange={(e) => setTimeoutSec(e.target.value)} /></Field><Field label={t('checks.cooldown')}><Input type="number" min="0" value={cooldown} onChange={(e) => setCooldown(e.target.value)} /></Field>{(ct.dir === 'low' || ct.dir === 'high') && <Field label={t('checks.hysteresis')}><Input type="number" min="0" max="100" step="0.1" value={hysteresis} onChange={(e) => setHysteresis(e.target.value)} /></Field>}</div>
+          <div className="grid grid-cols-2 sm:grid-cols-3 gap-3"><Field label={t('checks.failuresToAlert')}><Input type="number" min="1" max="100" value={failureCount} onChange={(e) => setFailureCount(e.target.value)} /></Field><Field label={t('checks.successesToRecover')}><Input type="number" min="1" max="100" value={recoveryCount} onChange={(e) => setRecoveryCount(e.target.value)} /></Field><Field label={t('checks.timeout')}><Input type="number" min="5" value={timeout} onChange={(e) => setTimeoutSec(e.target.value)} /></Field><Field label={t('checks.timeouts')}><Select value={timeoutPolicy} onChange={(e) => setTimeoutPolicy(e.target.value)}><option value="count">{t('checks.timeoutCount')}</option><option value="ignore">{t('checks.timeoutIgnore')}</option></Select></Field><Field label={t('checks.cooldown')}><Input type="number" min="0" value={cooldown} onChange={(e) => setCooldown(e.target.value)} /></Field>{(ct.dir === 'low' || ct.dir === 'high') && <Field label={t('checks.hysteresis')}><Input type="number" min="0" max="100" step="0.1" value={hysteresis} onChange={(e) => setHysteresis(e.target.value)} /></Field>}</div>
         </div>}
         <label className="flex items-center gap-2.5"><Toggle checked={enabled} onChange={(next) => { setEnabled(next); toast.info(next ? t('checks.willEnable') : t('checks.willDisable')); }} /><span className="text-[13px] text-ink">{t('checks.enabledLabel')}</span></label>
         <div className="flex items-start gap-2 rounded-lg border border-line bg-elevated/40 px-3 py-2 text-[11.5px] text-muted"><Icon name="info" size={14} className="mt-0.5 shrink-0 text-faint" />{ct.server ? t('rules.serverHelp') : type === 'linuxservice' ? t('check.service.linuxHint') : type === 'macservice' ? t('check.service.macHint') : ct.dir === 'low' ? t('checks.help.low') : ct.dir === 'high' ? t('checks.help.high') : type === 'ping' ? t('checks.help.ping') : ct.dir === 'state' ? t('checks.help.state') : t('checks.help.script')}</div>

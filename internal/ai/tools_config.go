@@ -183,6 +183,7 @@ type proposedCheckArgs struct {
 	WarnThreshold *float64        `json:"warn_threshold"`
 	ErrThreshold  *float64        `json:"err_threshold"`
 	IntervalSec   int             `json:"interval_sec"`
+	TimeoutPolicy string          `json:"timeout_policy"`
 }
 
 // check builds the proposed check, switched off and attributed, through the
@@ -206,6 +207,7 @@ func (in proposedCheckArgs) check(tc ToolContext, agentID, policyID *string) (*m
 		c.IntervalSec = 300
 	}
 	c.FailureCount, c.RecoveryCount, c.TimeoutSec = 2, 2, 180
+	c.TimeoutPolicy = in.TimeoutPolicy
 	if err := models.ValidateCheck(c); err != nil {
 		return nil, err
 	}

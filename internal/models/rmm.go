@@ -42,6 +42,21 @@ const (
 	CheckExecutionCanceled  = "canceled"
 )
 
+// TimeoutPolicyCount records one failure when a run misses its deadline.
+// TimeoutPolicyIgnore leaves the failure streak unchanged.
+const (
+	TimeoutPolicyCount  = "count"
+	TimeoutPolicyIgnore = "ignore"
+)
+
+// What a timed-out execution already did to the failure counter.
+// Empty means it was not counted, which includes an offline run marked unknown.
+const (
+	TimeoutEffectNone    = ""
+	TimeoutEffectCounted = "counted"
+	TimeoutEffectIgnored = "ignored"
+)
+
 // Task schedule kinds.
 const (
 	ScheduleInterval = "interval"
@@ -297,6 +312,10 @@ type Check struct {
 	Hysteresis    float64         `json:"hysteresis"`
 	CooldownSec   int             `json:"cooldown_sec"`
 	TimeoutSec    int             `json:"timeout_sec"`
+	// TimeoutPolicy is how a missed deadline counts toward failure_count.
+	// count (the default) records one failure; ignore leaves the streak alone.
+	// A late result for a run that already timed out never adds a second one.
+	TimeoutPolicy string          `json:"timeout_policy"`
 	Enabled       bool            `json:"enabled"`
 	ProposedBy    string          `json:"proposed_by,omitempty"`
 	ApprovedBy    string          `json:"approved_by,omitempty"`
