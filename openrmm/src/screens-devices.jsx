@@ -1971,7 +1971,7 @@ function DeviceChecks({ id, navigate, onClose }) {
               </div>
               {c.output && <div className="text-[11.5px] text-muted mono mt-1 truncate" title={c.output}>{c.output}</div>}
               <div className="text-[11px] text-faint mt-0.5">
-                {ct.server ? t('rules.priority') : c.last_result_at ? t('dchecks.lastResult', { when: timeAgo(c.last_result_at) }) : t('dchecks.noResult')}
+                {ct.server ? t(c.governing === true ? 'rules.effective' : c.governing === false ? 'rules.notEffective' : 'rules.priority') : c.last_result_at ? t('dchecks.lastResult', { when: timeAgo(c.last_result_at) }) : t('dchecks.noResult')}
                 {value != null && <span className="mono"> · {value}</span>}
               </div>
             </div>

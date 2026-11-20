@@ -29,6 +29,7 @@ import (
 // deviceCheck is a check as it stands on one device.
 type deviceCheck struct {
 	models.Check
+	Governing *bool `json:"governing,omitempty"`
 	// PolicyName names the policy the check came through; empty when it is
 	// assigned to the device directly.
 	PolicyName string `json:"policy_name,omitempty"`
@@ -80,7 +81,26 @@ func (s *Server) listDeviceChecks(w http.ResponseWriter, r *http.Request) {
 		writeErr(w, http.StatusInternalServerError, err.Error())
 		return
 	}
-	writeJSON(w, http.StatusOK, map[string]any{"checks": deviceChecks(checks, states, names)})
+	out := deviceChecks(checks, states, names)
+	governing := map[string]string{}
+	for i := range out {
+		if !models.IsServerRule(out[i].Type) {
+			continue
+		}
+		winner, found := governing[out[i].Type]
+		if !found {
+			rule, err := s.store.GoverningRuleForAgent(ctx, out[i].Type, id)
+			if err != nil {
+				writeErr(w, http.StatusInternalServerError, err.Error())
+				return
+			}
+			winner = rule.CheckID
+			governing[out[i].Type] = winner
+		}
+		effective := out[i].ID == winner
+		out[i].Governing = &effective
+	}
+	writeJSON(w, http.StatusOK, map[string]any{"checks": out})
 }
 
 func (s *Server) listDeviceTasks(w http.ResponseWriter, r *http.Request) {
