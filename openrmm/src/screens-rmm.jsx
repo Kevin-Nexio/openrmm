@@ -722,6 +722,7 @@ function CheckReview({ check, target }) {
       {check.proposed_by && <ReviewRow label={t('review.proposedByLabel')}>{check.proposed_by}</ReviewRow>}
       {check.warn_threshold != null && <ReviewRow label={t('review.thresholds')}>{t('checks.thresholds', { warn: check.warn_threshold, err: check.err_threshold })}</ReviewRow>}
       {!ct.server && <ReviewRow label={t('review.interval')}>{fmtInterval(check.interval_sec)}</ReviewRow>}
+      {!ct.server && <ReviewRow label={t('checks.timeouts')}>{t(check.timeout_policy === 'ignore' ? 'checks.timeoutIgnore' : 'checks.timeoutCount')}</ReviewRow>}
       {config && <CodeBlock code={config} shell="json" maxHeight={200} label={t('review.config')} />}
     </div>
   );

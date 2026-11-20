@@ -15,7 +15,8 @@ tag.
   timeout. The server now waits 30 seconds past the agent's timeout. A late
   result replaces that timeout instead of adding another failure, and a late
   success still clears the streak. A check can set Timeouts to "Count as a
-  failure" (the default) or "Ignore".
+  failure" (the default) or "Ignore". The review that approves a check, including
+  a policy activation, shows that choice.
 
 ## [0.11.4] - 2026-11-17
 
