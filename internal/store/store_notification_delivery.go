@@ -41,7 +41,7 @@ func alertDeliveryContext(a *models.Alert, eventType string) models.Notification
 		AgentID: notificationString(a.AgentSnapshotID), ClientID: notificationString(a.ClientID),
 		SiteID: notificationString(a.SiteID), GroupID: notificationString(a.GroupID),
 		AlertID: a.ID, NotificationSeq: a.NotificationSeq, SourceType: a.SourceType,
-		RuleID: notificationString(a.RuleID), Route: models.NotificationRouteSnapshot{Mode: "automatic"}}
+		RuleID: notificationString(a.RuleID), Route: a.NotificationRouteSnapshot}
 }
 
 // sameNotificationModel compares the fields that identify the rendered
@@ -117,9 +117,13 @@ func (s *Store) QueueAgentNotifications(ctx context.Context, agentID, eventType,
 		WHERE a.id=$1 FOR SHARE OF a`, agentID).Scan(&siteID, &clientID, &groupID); err != nil {
 		return err
 	}
+	route, _, err := effectiveNotificationRoute(ctx, tx, notificationString(clientID), notificationString(siteID))
+	if err != nil {
+		return err
+	}
 	context := models.NotificationDeliveryContext{Version: 1, EventType: eventType, AgentID: agentID,
 		ClientID: notificationString(clientID), SiteID: notificationString(siteID), GroupID: notificationString(groupID),
-		Route: models.NotificationRouteSnapshot{Mode: "automatic"}}
+		Route: route}
 	if err := fanoutNotification(ctx, tx, context, &agentID, nil, subject, body, dedupeKey, operator); err != nil {
 		return err
 	}
@@ -127,6 +131,9 @@ func (s *Store) QueueAgentNotifications(ctx context.Context, agentID, eventType,
 }
 
 func fanoutNotification(ctx context.Context, tx pgx.Tx, delivery models.NotificationDeliveryContext, agentID, alertID *string, subject, body, dedupeKey string, operator bool) error {
+	if err := validateNotificationRouteSnapshot(delivery.Route); err != nil {
+		return err
+	}
 	recipients, err := recipientsForDelivery(ctx, tx, delivery, true, true, "", "", operator)
 	if err != nil {
 		return err
@@ -164,9 +171,10 @@ func recipientsForDelivery(ctx context.Context, q dbQuerier, d models.Notificati
 		AND (NOT $12 OR NOT EXISTS (SELECT 1 FROM notification_rule_filters f WHERE f.user_id=u.id AND f.mode='selected')
 		 OR ($8 AND (($13::uuid IS NULL AND $14<>'check' AND EXISTS (SELECT 1 FROM notification_rule_filters f WHERE f.user_id=u.id AND f.include_defaults))
 		 OR EXISTS (SELECT 1 FROM notification_rule_selections sel WHERE sel.user_id=u.id AND sel.check_id=$13))))
+		AND ($15='automatic' OR ($15='selected' AND u.id=ANY($16::uuid[])))
 		ORDER BY u.id`, d.EventType, DefaultSubscribed(d.EventType), notificationUUID(d.AgentID), notificationUUID(d.ClientID),
 		notificationUUID(d.SiteID), notificationUUID(d.GroupID), scopeKnown, ruleKnown, notificationUUID(userID), address,
-		operator, d.AlertID != "", notificationUUID(d.RuleID), d.SourceType)
+		operator, d.AlertID != "", notificationUUID(d.RuleID), d.SourceType, d.Route.Mode, d.Route.UserIDs)
 	if err != nil {
 		return nil, err
 	}
@@ -195,8 +203,11 @@ func decodeDeliveryContext(raw json.RawMessage) (models.NotificationDeliveryCont
 	if err := decoder.Decode(new(any)); err != io.EOF {
 		return d, fmt.Errorf("invalid trailing delivery context")
 	}
-	if d.Version != 1 || !ValidNotificationEvent(d.EventType) || d.AgentID == "" || d.Route.Mode != "automatic" {
+	if d.Version != 1 || !ValidNotificationEvent(d.EventType) || d.AgentID == "" {
 		return d, fmt.Errorf("unsupported delivery context")
+	}
+	if err := validateNotificationRouteSnapshot(d.Route); err != nil {
+		return d, err
 	}
 	for _, id := range []string{d.AgentID, d.ClientID, d.SiteID, d.GroupID, d.AlertID, d.RuleID} {
 		if id != "" {

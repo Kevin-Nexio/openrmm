@@ -6,6 +6,15 @@ tag.
 
 ## [Unreleased]
 
+### Added
+
+- Client/Site alert email recipient settings with explicit inheritance or
+  replacement, scoped existing-account selection and conflict-safe audited saves.
+  New incidents capture their route for consistent recovery notifications; current
+  recipient rights are still enforced before delivery. Migration 037 preserves
+  automatic behavior for existing incidents. Upgrade all server/worker instances
+  together before configuring routes.
+
 ### Fixed
 
 - Recheck queued alert recipients before every SMTP attempt using immutable

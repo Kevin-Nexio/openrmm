@@ -22,10 +22,11 @@ const alertCols = `al.id, al.agent_id, al.source_type, al.source_id, al.conditio
 	al.resolution_note, al.reopened_from, al.last_notified_at,
 	al.notification_pending, al.notification_kind, al.notification_seq,
 	al.silenced_until, al.silenced_by, al.silence_reason,
-	al.last_observation_id, al.rule_id`
+	al.last_observation_id, al.rule_id, al.notification_route_snapshot`
 
 func scanAlert(row pgx.Row) (*models.Alert, error) {
 	var a models.Alert
+	var routeRaw json.RawMessage
 	err := row.Scan(&a.ID, &a.AgentID, &a.SourceType, &a.SourceID, &a.ConditionKey,
 		&a.AgentSnapshotID, &a.AgentHostname, &a.SiteID, &a.ClientID, &a.GroupID,
 		&a.Severity, &a.Message, &a.Status, &a.CreatedAt, &a.FirstSeenAt,
@@ -35,10 +36,14 @@ func scanAlert(row pgx.Row) (*models.Alert, error) {
 		&a.ResolutionNote, &a.ReopenedFrom, &a.LastNotifiedAt,
 		&a.NotificationPending, &a.NotificationKind, &a.NotificationSeq,
 		&a.SilencedUntil, &a.SilencedBy, &a.SilenceReason,
-		&a.LastObservationID, &a.RuleID)
+		&a.LastObservationID, &a.RuleID, &routeRaw)
 	if errors.Is(err, pgx.ErrNoRows) {
 		return nil, ErrNotFound
 	}
+	if err != nil {
+		return nil, err
+	}
+	a.NotificationRouteSnapshot, err = decodeNotificationRouteSnapshot(routeRaw)
 	if err != nil {
 		return nil, err
 	}
@@ -402,6 +407,14 @@ func (s *Store) ObserveAlert(ctx context.Context, obs AlertObservation) (*AlertT
 		notificationKind = models.AlertEventOpened
 		notificationSeq = 1
 	}
+	route, _, err := effectiveNotificationRoute(ctx, tx, notificationString(clientID), notificationString(siteID))
+	if err != nil {
+		return nil, err
+	}
+	routeRaw, err := json.Marshal(route)
+	if err != nil {
+		return nil, err
+	}
 	id := newID()
 	opened, err := scanAlert(tx.QueryRow(ctx, `INSERT INTO alerts AS al (
 		id, agent_id, source_type, source_id, condition_key,
@@ -409,14 +422,14 @@ func (s *Store) ObserveAlert(ctx context.Context, obs AlertObservation) (*AlertT
 		severity, message, status, created_at, first_seen_at, last_seen_at,
 		updated_at, observed_value, threshold_value, output, reopened_from,
 		notification_pending, notification_kind, notification_seq,
-		silenced_until, silenced_by, silence_reason, last_observation_id, rule_id
+		silenced_until, silenced_by, silence_reason, last_observation_id, rule_id, notification_route_snapshot
 	) VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11,$12,$13,$14,$14,$14,$14,
-	          $15,$16,$17,$18,$19,$20,$21,$22,$23,$24,$25,$26)
+	          $15,$16,$17,$18,$19,$20,$21,$22,$23,$24,$25,$26,$27)
 	RETURNING `+alertCols, id, obs.AgentID, obs.SourceType, obs.SourceID,
 		obs.ConditionKey, snapshotID, hostname, siteID, clientID, groupID, obs.Severity,
 		obs.Message, status, obs.ObservedAt, obs.ObservedValue, obs.Threshold,
 		obs.Output, reopenedFrom, pending, notificationKind, notificationSeq,
-		silencedUntil, silencedBy, silenceReason, obs.ObservationID, obs.RuleID))
+		silencedUntil, silencedBy, silenceReason, obs.ObservationID, obs.RuleID, routeRaw))
 	if err != nil {
 		return nil, err
 	}

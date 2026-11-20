@@ -2,8 +2,8 @@ package models
 
 // NotificationDeliveryContext is the immutable provenance of a queued message.
 // It is deliberately separate from live agent membership and mutable alert rules.
-// Version 1 supports the existing automatic recipient route; routing settings can
-// extend this closed model without changing the meaning of already queued mail.
+// Version 1 records an automatic route or the explicit Client/Site selection
+// frozen when the incident opened (at queue time for nonincident events).
 type NotificationDeliveryContext struct {
 	Version         int                       `json:"version"`
 	EventType       string                    `json:"event_type"`
@@ -19,5 +19,9 @@ type NotificationDeliveryContext struct {
 }
 
 type NotificationRouteSnapshot struct {
-	Mode string `json:"mode"`
+	Mode      string   `json:"mode"`
+	UserIDs   []string `json:"user_ids,omitempty"`
+	ScopeType string   `json:"scope_type,omitempty"`
+	ScopeID   string   `json:"scope_id,omitempty"`
+	Version   int64    `json:"version,omitempty"`
 }
