@@ -9,12 +9,11 @@ tag.
 ### Fixed
 
 - **Ping and Windows service checks keep accented characters.** On Windows,
-  `ping` and `sc query` write in the console's OEM code page. A pt-BR install
-  prints "Estatísticas do Ping" and "O serviço especificado não existe", and
-  the agent sent those bytes undecoded, so the console showed "Estat?sticas"
-  and "servi?o". The agent now decodes them as it already did for cmd and
-  PowerShell scripts. Linux and macOS output, already UTF-8, is unchanged.
-  Needs the agent update.
+  `ping` and `sc query` write in the console's OEM code page. The agent sent
+  those bytes undecoded, so accented characters showed as "?". The agent now
+  decodes them as it already did for cmd and PowerShell scripts. Linux and
+  macOS output, already UTF-8, is unchanged. Needs the agent update; results
+  stored before it keep the "?".
 
 ## [0.11.4] - 2026-11-17
 
