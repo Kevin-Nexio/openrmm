@@ -240,6 +240,7 @@ function PoliciesTab() {
   const del = async (p) => { try { await api.deletePatchPolicy(p.id); window.dataBus.emit('patch-pol'); toast.info(t('patchpol.deleted')); } catch (e) { toast.error(t('common.failed'), e.message); } };
   return (
     <div className="space-y-3">
+      <window.EditProposalsPanel kind="patch_policy" />
       {can('patches.policies.manage') && <div className="flex justify-end"><Button variant="primary" icon="plus" onClick={() => setEditing({})}>{t('patchpol.new')}</Button></div>}
       {q.loading ? <Card className="p-4"><Skeleton className="h-16 w-full" /></Card>
         : !pols.length ? <Card><EmptyState icon="policy" title={t('patchpol.empty')} msg={t('patchpol.emptyMsg')} /></Card>

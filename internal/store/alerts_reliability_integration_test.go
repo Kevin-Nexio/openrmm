@@ -58,7 +58,7 @@ func newAlertReliabilityFixture(t *testing.T, prefix string) alertReliabilityFix
 		t.Fatal(err)
 	}
 	check, err := st.CreateCheck(ctx, &models.Check{
-		AgentID: &agent.ID, Type: models.CheckScript, Name: prefix + " check",
+		Attachments: models.OnAgent(&agent.ID), Type: models.CheckScript, Name: prefix + " check",
 		Config:      json.RawMessage(`{"shell":"bash","script":"exit 1"}`),
 		IntervalSec: 30, FailureCount: 2, RecoveryCount: 2,
 		CooldownSec: 300, TimeoutSec: 30, Enabled: true,
@@ -420,6 +420,87 @@ func TestDurableCheckExecutionDeduplicationAndStaleResults(t *testing.T) {
 	}
 }
 
+func TestTimeoutCountsOnceAndCanBeIgnored(t *testing.T) {
+	f := newAlertReliabilityFixture(t, "timeout-once")
+	ctx := context.Background()
+	base := time.Now().UTC().Add(-time.Hour)
+
+	lateFailure := func(executionID string) (*models.CheckState, CheckResultDisposition) {
+		t.Helper()
+		state, disposition, err := f.store.RecordCheckResult(ctx, &models.CheckResult{
+			CheckID: f.check.ID, AgentID: f.agent.ID, ExecutionID: &executionID,
+			Status: models.CheckFailing, Output: "agent timed out",
+		})
+		if err != nil {
+			t.Fatal(err)
+		}
+		return state, disposition
+	}
+
+	counted, created, err := f.store.CreateCheckExecution(ctx, f.check.ID, f.agent.ID, base, 10*time.Second)
+	if err != nil || !created {
+		t.Fatalf("counted execution created=%v err=%v", created, err)
+	}
+	expired, err := f.store.ExpireCheckExecutions(ctx, counted.DeadlineAt.Add(time.Second), 10)
+	if err != nil || len(expired) != 1 {
+		t.Fatalf("expired=%#v err=%v", expired, err)
+	}
+	state, applied, err := f.store.RecordCheckTimeout(ctx, &expired[0], "deadline exceeded")
+	if err != nil || !applied || state.ConsecutiveFailures != 1 {
+		t.Fatalf("timeout state=%#v applied=%v err=%v", state, applied, err)
+	}
+	state, disposition := lateFailure(counted.ID)
+	if disposition != CheckResultApplied || state.ConsecutiveFailures != 1 || state.LastOutput != "agent timed out" {
+		t.Fatalf("late failure state=%#v disposition=%q", state, disposition)
+	}
+
+	// A late success replaces the counted timeout instead of leaving the failure.
+	passed, created, err := f.store.CreateCheckExecution(ctx, f.check.ID, f.agent.ID, base.Add(time.Minute), 10*time.Second)
+	if err != nil || !created {
+		t.Fatalf("success execution created=%v err=%v", created, err)
+	}
+	expired, err = f.store.ExpireCheckExecutions(ctx, passed.DeadlineAt.Add(time.Second), 10)
+	if err != nil || len(expired) != 1 || expired[0].ID != passed.ID {
+		t.Fatalf("expired success run=%#v err=%v", expired, err)
+	}
+	if _, applied, err = f.store.RecordCheckTimeout(ctx, &expired[0], "deadline exceeded"); err != nil || !applied {
+		t.Fatalf("second timeout applied=%v err=%v", applied, err)
+	}
+	state, disposition, err = f.store.RecordCheckResult(ctx, &models.CheckResult{
+		CheckID: f.check.ID, AgentID: f.agent.ID, ExecutionID: &passed.ID,
+		Status: models.CheckPassing, Output: "recovered",
+	})
+	if err != nil || disposition != CheckResultApplied || state.ConsecutiveFailures != 0 || state.ConsecutiveSuccesses != 1 {
+		t.Fatalf("late success state=%#v disposition=%q err=%v", state, disposition, err)
+	}
+
+	check, err := f.store.GetCheck(ctx, f.check.ID)
+	if err != nil {
+		t.Fatal(err)
+	}
+	check.TimeoutPolicy = models.TimeoutPolicyIgnore
+	if err := f.store.UpdateCheck(ctx, check); err != nil {
+		t.Fatal(err)
+	}
+	ignored, created, err := f.store.CreateCheckExecution(ctx, f.check.ID, f.agent.ID, base.Add(2*time.Minute), 10*time.Second)
+	if err != nil || !created {
+		t.Fatalf("ignored execution created=%v err=%v", created, err)
+	}
+	expired, err = f.store.ExpireCheckExecutions(ctx, ignored.DeadlineAt.Add(time.Second), 10)
+	if err != nil || len(expired) != 1 || expired[0].ID != ignored.ID {
+		t.Fatalf("expired ignored run=%#v err=%v", expired, err)
+	}
+	before := state.ConsecutiveSuccesses
+	state, applied, err = f.store.RecordCheckTimeout(ctx, &expired[0], "ignored deadline")
+	if err != nil || applied || state.ConsecutiveSuccesses != before || state.ConsecutiveFailures != 0 {
+		t.Fatalf("ignored timeout state=%#v applied=%v err=%v", state, applied, err)
+	}
+	state, disposition = lateFailure(ignored.ID)
+	if disposition != CheckResultUncounted || state.ConsecutiveFailures != 0 || state.ConsecutiveSuccesses != before {
+		t.Fatalf("ignored late failure state=%#v disposition=%q", state, disposition)
+	}
+}
+
 func TestScheduledAndCanceledSuppressionsReconcileActiveAlert(t *testing.T) {
 	f := newAlertReliabilityFixture(t, "suppression")
 	ctx := context.Background()
@@ -515,5 +596,57 @@ func TestAlertPaginationUsesStableTupleCursor(t *testing.T) {
 	})
 	if err != nil || len(second) != 2 || second[0].ID == first[0].ID {
 		t.Fatalf("second page with sentinel = %#v, err=%v", second, err)
+	}
+}
+
+// An agent that stopped a run at the check's timeout says so (agent 0.12.0).
+// The check's timeout policy applies to that run as to a timeout the server
+// records: count makes it one failure, ignore leaves the streak alone. A
+// failure the agent does not mark as a timeout always counts.
+func TestAgentReportedTimeoutFollowsThePolicy(t *testing.T) {
+	f := newAlertReliabilityFixture(t, "agent-timeout")
+	ctx := context.Background()
+	base := time.Now().UTC().Add(-time.Hour)
+	run := func(at time.Time, timedOut bool, status string) (*models.CheckState, CheckResultDisposition, string) {
+		t.Helper()
+		execution, created, err := f.store.CreateCheckExecution(ctx, f.check.ID, f.agent.ID, at, 10*time.Second)
+		if err != nil || !created {
+			t.Fatalf("execution created=%v err=%v", created, err)
+		}
+		state, disposition, err := f.store.RecordCheckResult(ctx, &models.CheckResult{
+			CheckID: f.check.ID, AgentID: f.agent.ID, ExecutionID: &execution.ID,
+			Status: status, Output: "Stopped at the check's 10s timeout.", TimedOut: timedOut,
+		})
+		if err != nil {
+			t.Fatal(err)
+		}
+		var effect string
+		if err := f.store.pool.QueryRow(ctx, `SELECT timeout_effect FROM check_executions WHERE id=$1`, execution.ID).Scan(&effect); err != nil {
+			t.Fatal(err)
+		}
+		return state, disposition, effect
+	}
+
+	state, disposition, effect := run(base, true, models.CheckFailing)
+	if disposition != CheckResultApplied || state.ConsecutiveFailures != 1 || effect != models.TimeoutEffectCounted {
+		t.Fatalf("counted agent timeout state=%#v disposition=%q effect=%q", state, disposition, effect)
+	}
+
+	check, err := f.store.GetCheck(ctx, f.check.ID)
+	if err != nil {
+		t.Fatal(err)
+	}
+	check.TimeoutPolicy = models.TimeoutPolicyIgnore
+	if err := f.store.UpdateCheck(ctx, check); err != nil {
+		t.Fatal(err)
+	}
+	state, disposition, effect = run(base.Add(time.Minute), true, models.CheckWarning)
+	if disposition != CheckResultUncounted || state.ConsecutiveFailures != 1 || effect != models.TimeoutEffectIgnored {
+		t.Fatalf("ignored agent timeout state=%#v disposition=%q effect=%q", state, disposition, effect)
+	}
+	// Control: an ordinary failure still counts under ignore.
+	state, disposition, effect = run(base.Add(2*time.Minute), false, models.CheckFailing)
+	if disposition != CheckResultApplied || state.ConsecutiveFailures != 2 || effect != models.TimeoutEffectNone {
+		t.Fatalf("plain failure under ignore state=%#v disposition=%q effect=%q", state, disposition, effect)
 	}
 }

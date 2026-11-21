@@ -61,7 +61,8 @@ test('the column can be shown or hidden, and the list filters and searches by us
   assert.match(devices, /\{shows\('user'\) && sortTh\('user', t\('devices\.col\.user'\), 'px-3 hidden sm:table-cell'\)\}/);
   assert.match(devices, /\{shows\('user'\) && <td[^>]*><LoggedInUser device=\{d\} \/><\/td>\}/);
   assert.match(devices, /<window\.ColumnPicker columns=\{optionalCols\} hidden=\{hiddenCols\} onToggle=\{toggleCol\}/);
-  assert.match(devices, /localStorage\.setItem\(DEVICE_COLUMNS_KEY/);
+  assert.match(devices, /saveDeviceColumns\(localStorage, next\)/, 'the choice is remembered');
+  assert.match(devices, /storage\.setItem\(DEVICE_COLUMNS_KEY,/);
   assert.match(devices, /if \(userF === 'with' && !d\.logged_in_user\) return false;/);
   assert.match(devices, /if \(userF === 'none' && d\.logged_in_user\) return false;/);
   assert.match(devices, /\(d\.logged_in_user \|\| ''\)\.toLowerCase\(\)\.includes\(needle\)/, 'search matches the user');
