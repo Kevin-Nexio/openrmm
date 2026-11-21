@@ -91,6 +91,10 @@ tag.
 
 ### Fixed
 
+- Notification links can use `RMM_CONSOLE_PUBLIC_URL` on split-ingress deployments,
+  instead of sending operators to the agents origin. An unset value retains the
+  existing `RMM_PUBLIC_URL` fallback.
+
 - **Ping and Windows service checks keep accented characters.** On Windows,
   `ping` and `sc query` write in the console's OEM code page. The agent sent
   those bytes undecoded, so accented characters showed as "?". The agent now
