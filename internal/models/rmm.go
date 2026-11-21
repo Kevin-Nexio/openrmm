@@ -42,6 +42,21 @@ const (
 	CheckExecutionCanceled  = "canceled"
 )
 
+// TimeoutPolicyCount records one failure when a run misses its deadline.
+// TimeoutPolicyIgnore leaves the failure streak unchanged.
+const (
+	TimeoutPolicyCount  = "count"
+	TimeoutPolicyIgnore = "ignore"
+)
+
+// What a timed-out execution already did to the failure counter.
+// Empty means it was not counted, which includes an offline run marked unknown.
+const (
+	TimeoutEffectNone    = ""
+	TimeoutEffectCounted = "counted"
+	TimeoutEffectIgnored = "ignored"
+)
+
 // Task schedule kinds.
 const (
 	ScheduleInterval = "interval"
@@ -303,12 +318,16 @@ type Check struct {
 	Hysteresis     float64         `json:"hysteresis"`
 	CooldownSec    int             `json:"cooldown_sec"`
 	TimeoutSec     int             `json:"timeout_sec"`
-	Enabled        bool            `json:"enabled"`
-	ProposedBy     string          `json:"proposed_by,omitempty"`
-	ApprovedBy     string          `json:"approved_by,omitempty"`
-	CreatedAt      time.Time       `json:"created_at"`
-	Instances      []CheckInstance `json:"instances,omitempty"`
-	Summary        *CheckSummary   `json:"summary,omitempty"`
+	// TimeoutPolicy is how a missed deadline counts toward failure_count.
+	// count (the default) records one failure; ignore leaves the streak alone.
+	// A late result for a run that already timed out never adds a second one.
+	TimeoutPolicy string          `json:"timeout_policy"`
+	Enabled       bool            `json:"enabled"`
+	ProposedBy    string          `json:"proposed_by,omitempty"`
+	ApprovedBy    string          `json:"approved_by,omitempty"`
+	CreatedAt     time.Time       `json:"created_at"`
+	Instances     []CheckInstance `json:"instances,omitempty"`
+	Summary       *CheckSummary   `json:"summary,omitempty"`
 }
 
 // CheckResult is one execution of a check on an agent.
@@ -321,6 +340,9 @@ type CheckResult struct {
 	Value       *float64  `json:"value,omitempty"`
 	Output      string    `json:"output"`
 	RanAt       time.Time `json:"ran_at"`
+	// TimedOut is the agent's word that it stopped this run at the check's
+	// timeout. It decides how the run counts and is not stored.
+	TimedOut bool `json:"-"`
 }
 
 // CheckExecution is one durably tracked dispatch. The execution id correlates

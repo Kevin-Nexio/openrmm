@@ -47,6 +47,13 @@ func applyCheckDefaults(body []byte, c *models.Check, existing *models.Check) {
 	setInt("recovery_count", &c.RecoveryCount, 2, valueOrZero(existing, func(x *models.Check) int { return x.RecoveryCount }))
 	setInt("cooldown_sec", &c.CooldownSec, 300, valueOrZero(existing, func(x *models.Check) int { return x.CooldownSec }))
 	setInt("timeout_sec", &c.TimeoutSec, 180, valueOrZero(existing, func(x *models.Check) int { return x.TimeoutSec }))
+	oldPolicy := models.TimeoutPolicyCount
+	if existing != nil && existing.TimeoutPolicy != "" {
+		oldPolicy = existing.TimeoutPolicy
+	}
+	if _, ok := raw["timeout_policy"]; !ok {
+		c.TimeoutPolicy = oldPolicy
+	}
 	oldHysteresis := 0.0
 	if existing != nil {
 		oldHysteresis = existing.Hysteresis

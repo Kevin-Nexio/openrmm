@@ -45,6 +45,8 @@ func TestEditedObjectIsValidatedWhenProposed(t *testing.T) {
 		{"policy", `{"name":"Servers"}`, ""},
 		{"policy", `{"name":""}`, "name"},
 		{"check", `{"interval_sec":"often"}`, "wrong type"},
+		{"check", `{"timeout_policy":"ignore"}`, ""},
+		{"check", `{"timeout_policy":"skip"}`, "timeout_policy"},
 	} {
 		err := validateEditedObject(tc.kind, objects[tc.kind], raw(tc.fields))
 		switch {

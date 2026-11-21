@@ -117,7 +117,7 @@ type EditChanges struct {
 // id, provenance, approval, an AI release) is the server's, never a proposal's.
 var EditableFields = map[string][]string{
 	EditScript: {"name", "description", "category", "shell", "body", "params", "variables"},
-	EditCheck:  {"name", "config", "warn_threshold", "err_threshold", "interval_sec", "failure_count", "recovery_count", "hysteresis", "cooldown_sec", "timeout_sec", "enabled"},
+	EditCheck:  {"name", "config", "warn_threshold", "err_threshold", "interval_sec", "failure_count", "recovery_count", "hysteresis", "cooldown_sec", "timeout_sec", "timeout_policy", "enabled"},
 	EditTask:   {"name", "script_id", "shell", "script", "schedule_kind", "interval_sec", "run_at_minute", "days_of_week", "run_at_minutes", "timezone", "enabled"},
 	EditPolicy: {"name", "description", "enabled"},
 	EditPatchPolicy: {"name", "enabled", "auto_approve", "auto_approve_age_days", "exclusions", "window_days",

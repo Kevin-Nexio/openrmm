@@ -50,6 +50,18 @@ const review = {
   checks: [{ id: 'c1', name: 'Disk', type: 'diskspace', enabled: false, proposed_by: 'mcp:claude', config: { path: '/' } }],
 };
 
+test('approving a check shows whether a timeout counts', () => {
+  const reviewOf = (policy) => harness(
+    'function checkType(){return {label:"Script", server:false}}\nfunction fmtInterval(n){return n+"s"}\n'
+      + slice(rmm, 'function CheckReview(', 'function TasksScreen('),
+    'CheckReview',
+    { check: { type: 'script', name: 'Cleanup', interval_sec: 300, timeout_policy: policy, config: {} }, target: 'Acme' },
+    {});
+  assert.ok(reviewOf('ignore').text().includes('checks.timeoutIgnore'), 'ignore is visible');
+  assert.ok(reviewOf('count').text().includes('checks.timeoutCount'), 'count is visible');
+  assert.ok(!reviewOf('count').text().includes('checks.timeoutIgnore'), 'count is not labelled ignore');
+});
+
 test('activating a policy shows everything it puts into effect and sends the reviewed fingerprint', async () => {
   let activated = null;
   const ui = harness(slice(rmm2, 'function PolicyActivation(', 'function PolicyCard('), 'PolicyActivation',

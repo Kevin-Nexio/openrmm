@@ -147,6 +147,9 @@ var migrationV38SQL string
 //go:embed migrations/039_audit_chain_transaction_time.sql
 var migrationV39SQL string
 
+//go:embed migrations/040_check_timeout_policy.sql
+var migrationV40SQL string
+
 var migrations = []migration{
 	{version: 1, name: "baseline", sql: migrationV1SQL},
 	{version: 2, name: "pending_totp_secret", sql: migrationV2SQL},
@@ -187,6 +190,7 @@ var migrations = []migration{
 	{version: 37, name: "monitoring_attachments", sql: migrationV37SQL},
 	{version: 38, name: "edit_proposals", sql: migrationV38SQL},
 	{version: 39, name: "audit_chain_transaction_time", sql: migrationV39SQL},
+	{version: 40, name: "check_timeout_policy", sql: migrationV40SQL},
 }
 
 // Migrate applies pending migrations atomically. The transaction-scoped lock

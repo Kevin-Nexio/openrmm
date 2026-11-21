@@ -10,6 +10,7 @@ import (
 	"bytes"
 	"context"
 	"encoding/json"
+	"errors"
 	"flag"
 	"fmt"
 	"log"
@@ -1404,9 +1405,18 @@ func (a *agent) runCheck(chk protocol.RunCheckMsg) {
 		output = "unknown check type: " + chk.Type
 	}
 
+	// Say so when this run was stopped at the check's timeout: the server
+	// applies the check's timeout policy to it (count it once, or ignore it).
+	timedOut := !success && errors.Is(checkCtx.Err(), context.DeadlineExceeded)
+	if timedOut {
+		if output = strings.TrimRight(output, "\r\n"); output != "" {
+			output += "\n"
+		}
+		output += fmt.Sprintf("Stopped at the check's %s timeout.", timeout)
+	}
 	a.reportCheckResult(protocol.CheckResultMsg{
 		CheckID: chk.CheckID, ExecutionID: chk.ExecutionID,
-		Value: value, Output: truncateRunes(output, 4000), Success: success,
+		Value: value, Output: truncateRunes(output, 4000), Success: success, TimedOut: timedOut,
 	})
 }
 

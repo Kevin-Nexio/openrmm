@@ -359,6 +359,9 @@ CREATE TABLE IF NOT EXISTS checks (
                         CONSTRAINT checks_timeout_valid CHECK (timeout_sec BETWEEN 5 AND 86400),
     proposed_by     TEXT NOT NULL DEFAULT '',
     approved_by     TEXT NOT NULL DEFAULT '',
+    -- Added by migration 040, so it stays last: ADD COLUMN appends.
+    timeout_policy  TEXT NOT NULL DEFAULT 'count'
+                        CONSTRAINT checks_timeout_policy_valid CHECK (timeout_policy IN ('count', 'ignore')),
     -- An AI proposal nobody has reviewed must not be enabled: the scheduler
     -- selects WHERE enabled, so this keeps it from ever running unseen.
     CONSTRAINT checks_unreviewed_proposal_disabled
@@ -379,6 +382,9 @@ CREATE TABLE IF NOT EXISTS check_executions (
     dispatched_at TIMESTAMPTZ NOT NULL DEFAULT now(),
     deadline_at   TIMESTAMPTZ NOT NULL,
     completed_at  TIMESTAMPTZ,
+    timeout_effect TEXT NOT NULL DEFAULT ''
+                      CONSTRAINT check_executions_timeout_effect_valid
+                      CHECK (timeout_effect IN ('', 'counted', 'ignored')),
     CONSTRAINT check_executions_deadline_valid CHECK (deadline_at >= dispatched_at)
 );
 CREATE UNIQUE INDEX IF NOT EXISTS uq_check_execution_pending

@@ -90,7 +90,7 @@ var editToolDefs = []Tool{
 		},"required":["kind","id"],"additionalProperties":false}`),
 	}},
 	editToolDef("propose_script_edit", "library script", "name, description, category, shell, body, params, variables", ""),
-	editToolDef("propose_check_edit", "check", "name, config, warn_threshold, err_threshold, interval_sec, failure_count, recovery_count, hysteresis, cooldown_sec, timeout_sec, enabled",
+	editToolDef("propose_check_edit", "check", "name, config, warn_threshold, err_threshold, interval_sec, failure_count, recovery_count, hysteresis, cooldown_sec, timeout_sec, timeout_policy (count or ignore), enabled",
 		`"attach":{"type":"array","maxItems":50,"description":"policies or devices to apply it to as well","items":`+attachmentItems+`},
 		"detach":{"type":"array","maxItems":50,"description":"policies or devices to take it off","items":`+attachmentItems+`}`),
 	editToolDef("propose_task_edit", "scheduled task", "name, script_id, shell, script, schedule_kind, interval_sec, run_at_minute, days_of_week, run_at_minutes, timezone, enabled",

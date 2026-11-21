@@ -301,13 +301,15 @@ is its rows in `check_attachments` (below).
 | recovery_count | int | consecutive successes before it clears (1–100, default 2) |
 | hysteresis | double | band a recovering value must clear the threshold by (0–100, default 2) |
 | cooldown_sec | int | quiet period before the same condition may raise again (default 300) |
-| timeout_sec | int | how long a dispatched execution may stay unanswered (5–86400, default 180) |
+| timeout_sec | int | how long the agent may run the check (5–86400, default 180). The server deadline is this plus 30 seconds |
+| timeout_policy | text | `count` (default) or `ignore`. `count` records one failure; `ignore` does not move the streak |
 | created_at | timestamptz | |
 
 ### `check_executions`
 One dispatch of a check to an agent (`id`, `check_id`, `agent_id`, `status`,
 `dispatched_at`, `deadline_at`, `completed_at`). Status is
-`pending`/`completed`/`timed_out`/`canceled`.
+`pending`/`completed`/`timed_out`/`canceled`. `timeout_effect` is `''`,
+`counted` or `ignored`: whether that timeout already changed the failure streak.
 
 A **partial unique index on (check_id, agent_id) where status = 'pending'**
 allows only one outstanding execution per pair, so a slow or disconnected agent

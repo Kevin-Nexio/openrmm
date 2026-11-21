@@ -220,7 +220,7 @@ func TestAlertRuleMigrationFromPreviousSchemaIntegration(t *testing.T) {
 		t.Fatal(err)
 	}
 	// Seeded with SQL: the store code targets the latest schema (migration 032
-	// added the policy switch it reads and writes).
+	// added the policy switch it reads and writes, 040 the timeout policy).
 	policy := &models.Policy{ID: newID()}
 	if _, err := st.pool.Exec(ctx, `INSERT INTO policies (id, name) VALUES ($1, 'old policy')`, policy.ID); err != nil {
 		t.Fatal(err)

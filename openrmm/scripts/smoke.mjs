@@ -389,14 +389,28 @@ async function runMobileChrome(chrome, url, { width = 375, flow } = {}) {
     });
     await command('Page.enable');
     await command('Runtime.enable');
-    await command('Emulation.setDeviceMetricsOverride', { width, height: 812, deviceScaleFactor: 1, mobile: width === 375 });
+    const metrics = (requested) => command('Emulation.setDeviceMetricsOverride', { width: requested, height: 812, deviceScaleFactor: 1, mobile: width === 375 });
+    await metrics(width);
     await command('Page.navigate', { url });
     await delay(250);
-    const initialWidth = await command('Runtime.evaluate', { expression: 'innerWidth', returnByValue: true });
-    if (initialWidth.result.value !== width) {
-      await command('Emulation.setDeviceMetricsOverride', { width: 2 * width - initialWidth.result.value, height: 812, deviceScaleFactor: 1, mobile: width === 375 });
+    // Headless Chrome can report a width a couple of pixels off, and an early
+    // sample is not the settled page. Correct until innerWidth matches, then
+    // record that width ourselves: the page's own timer can run first.
+    let requested = width;
+    for (let attempt = 0; attempt < 3; attempt++) {
+      const reading = await command('Runtime.evaluate', { expression: 'innerWidth', returnByValue: true });
+      const actual = reading.result.value;
+      if (actual === width) break;
+      if (!Number.isFinite(actual)) break;
+      requested += width - actual;
+      await metrics(requested);
+      await delay(100);
     }
     await delay(1750);
+    await command('Runtime.evaluate', {
+      expression: 'document.documentElement.dataset.smokeWidth=innerWidth+":"+document.documentElement.scrollWidth',
+      returnByValue: true,
+    });
     if (flow) {
       const result = await command('Runtime.evaluate', { expression: `(${flow.toString()})()`, returnByValue: true, awaitPromise: true });
       assert.equal(result.exceptionDetails, undefined, JSON.stringify(result.exceptionDetails));
@@ -906,12 +920,18 @@ async function sharedMonitoringBrowserFlow() {
 
   (await wait(() => button('Policies'))).click();
   (await wait(() => [...document.querySelectorAll('button')].find((el) => el.textContent.trim().startsWith('Backup coverage')))).click();
-  (await wait(() => button('Add an existing check…'))).click();
-  (await wait(() => button('Reviewed memory check'))).click();
-  await wait(() => document.body.textContent.includes('Reviewed memory check'));
-  (await wait(() => button('Add an existing check…'))).click();
-  await wait(() => document.activeElement?.tagName === 'INPUT');
-  if (button('Reviewed memory check')) throw new Error('The already attached check is still offered');
+  const checkName = 'Reviewed memory check';
+  const picker = await wait(() => button('Add an existing check…'));
+  const pickerArea = picker.parentElement;
+  picker.click();
+  (await wait(() => button(checkName, pickerArea))).click();
+  await wait(() => [...document.querySelectorAll('span')]
+    .some((span) => span.textContent.trim() === checkName && !pickerArea.contains(span)));
+
+  picker.click();
+  // The policy's rows and the picker refresh independently after the attach.
+  // Require a known remaining option so a closed or empty picker cannot pass.
+  await wait(() => button('Monitor 01', pickerArea) && !button(checkName, pickerArea));
   document.documentElement.dataset.sharedMonitoringE2e = 'passed';
   return true;
 }

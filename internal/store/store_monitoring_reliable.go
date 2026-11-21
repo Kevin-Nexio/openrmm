@@ -17,6 +17,9 @@ const (
 	CheckResultApplied   CheckResultDisposition = "applied"
 	CheckResultDuplicate CheckResultDisposition = "duplicate"
 	CheckResultStale     CheckResultDisposition = "stale"
+	// CheckResultUncounted stored the row but did not move the failure streak.
+	// An ignored timeout, and a late failure for that same run, use it.
+	CheckResultUncounted CheckResultDisposition = "uncounted"
 )
 
 // Aliases c/a are shared by dispatch, coverage, and inbound result checks.
@@ -201,12 +204,13 @@ func (s *Store) RecordCheckResult(ctx context.Context, r *models.CheckResult) (*
 	defer func() { _ = tx.Rollback(ctx) }()
 
 	var dispatchedAt *time.Time
+	timeoutEffect := models.TimeoutEffectNone
 	if r.ExecutionID != nil && *r.ExecutionID != "" {
 		var checkID, agentID, status string
 		var dispatched time.Time
-		err = tx.QueryRow(ctx, `SELECT check_id, agent_id, status, dispatched_at
+		err = tx.QueryRow(ctx, `SELECT check_id, agent_id, status, dispatched_at, timeout_effect
 			FROM check_executions WHERE id=$1 FOR UPDATE`, *r.ExecutionID).
-			Scan(&checkID, &agentID, &status, &dispatched)
+			Scan(&checkID, &agentID, &status, &dispatched, &timeoutEffect)
 		if errors.Is(err, pgx.ErrNoRows) {
 			return nil, "", ErrNotFound
 		}
@@ -300,6 +304,57 @@ func (s *Store) RecordCheckResult(ctx context.Context, r *models.CheckResult) (*
 		}
 	}
 
+	// The agent stopped this run at the check's timeout. That is the timeout the
+	// server records when no result arrives, so the check's policy applies to
+	// it too: ignore leaves the streak alone, count makes it the run's one
+	// failure. A timeout the server already recorded decides on its own below.
+	if r.TimedOut && r.Status != models.CheckPassing && timeoutEffect == models.TimeoutEffectNone {
+		var policy string
+		if err := tx.QueryRow(ctx, `SELECT timeout_policy FROM checks WHERE id=$1`, r.CheckID).Scan(&policy); errors.Is(err, pgx.ErrNoRows) {
+			return nil, "", ErrNotFound
+		} else if err != nil {
+			return nil, "", err
+		}
+		effect := models.TimeoutEffectCounted
+		if policy == models.TimeoutPolicyIgnore {
+			effect, timeoutEffect = models.TimeoutEffectIgnored, models.TimeoutEffectIgnored
+		}
+		if r.ExecutionID != nil {
+			if _, err := tx.Exec(ctx, `UPDATE check_executions SET timeout_effect=$2 WHERE id=$1`,
+				*r.ExecutionID, effect); err != nil {
+				return nil, "", err
+			}
+		}
+	}
+
+	// An ignored timeout is not a failure. A late failure for that same run is
+	// the timeout arriving from the agent, so it does not start a streak either.
+	// A late success still counts: the check did pass.
+	if timeoutEffect == models.TimeoutEffectIgnored && r.Status != models.CheckPassing {
+		st, stateErr := scanCheckState(tx.QueryRow(ctx, `
+			SELECT check_id, agent_id, status, consecutive_failures, consecutive_successes,
+			       last_value, last_output, last_result_at, last_dispatch_at, reconciled_at, updated_at
+			FROM check_states WHERE check_id=$1 AND agent_id=$2`, r.CheckID, r.AgentID))
+		if errors.Is(stateErr, ErrNotFound) {
+			st = &models.CheckState{CheckID: r.CheckID, AgentID: r.AgentID, Status: models.CheckUnknown}
+		} else if stateErr != nil {
+			return nil, "", stateErr
+		}
+		if err := tx.Commit(ctx); err != nil {
+			return nil, "", err
+		}
+		return st, CheckResultUncounted, nil
+	}
+
+	// A timeout that already counted is this run's one failure. The late result
+	// replaces its output and status and leaves the counter where it is.
+	failureUpdate := `CASE
+				WHEN EXCLUDED.status IN ('warning','failing')
+				THEN check_states.consecutive_failures + 1 ELSE 0 END`
+	if timeoutEffect == models.TimeoutEffectCounted &&
+		(r.Status == models.CheckWarning || r.Status == models.CheckFailing) {
+		failureUpdate = `check_states.consecutive_failures`
+	}
 	st, err := scanCheckState(tx.QueryRow(ctx, `
 		INSERT INTO check_states (
 			check_id, agent_id, status, consecutive_failures, consecutive_successes,
@@ -312,9 +367,7 @@ func (s *Store) RecordCheckResult(ctx context.Context, r *models.CheckResult) (*
 		)
 		ON CONFLICT (check_id, agent_id) DO UPDATE SET
 			status=EXCLUDED.status,
-			consecutive_failures=CASE
-				WHEN EXCLUDED.status IN ('warning','failing')
-				THEN check_states.consecutive_failures + 1 ELSE 0 END,
+			consecutive_failures=`+failureUpdate+`,
 			consecutive_successes=CASE
 				WHEN EXCLUDED.status='passing'
 				THEN check_states.consecutive_successes + 1 ELSE 0 END,
@@ -384,6 +437,31 @@ func (s *Store) RecordCheckTimeout(ctx context.Context, e *models.CheckExecution
 		}
 		return st, false, nil
 	}
+	var policy string
+	if err := tx.QueryRow(ctx, `SELECT timeout_policy FROM checks WHERE id=$1`, e.CheckID).Scan(&policy); errors.Is(err, pgx.ErrNoRows) {
+		return nil, false, ErrNotFound
+	} else if err != nil {
+		return nil, false, err
+	}
+	if policy == models.TimeoutPolicyIgnore {
+		if _, err := tx.Exec(ctx, `UPDATE check_executions SET timeout_effect=$2 WHERE id=$1`,
+			e.ID, models.TimeoutEffectIgnored); err != nil {
+			return nil, false, err
+		}
+		st, err := scanCheckState(tx.QueryRow(ctx, `
+			SELECT check_id, agent_id, status, consecutive_failures, consecutive_successes,
+			       last_value, last_output, last_result_at, last_dispatch_at, reconciled_at, updated_at
+			FROM check_states WHERE check_id=$1 AND agent_id=$2`, e.CheckID, e.AgentID))
+		if errors.Is(err, ErrNotFound) {
+			st = &models.CheckState{CheckID: e.CheckID, AgentID: e.AgentID, Status: models.CheckUnknown}
+		} else if err != nil {
+			return nil, false, err
+		}
+		if err := tx.Commit(ctx); err != nil {
+			return nil, false, err
+		}
+		return st, false, nil
+	}
 	now := time.Now()
 	st, err := scanCheckState(tx.QueryRow(ctx, `
 		INSERT INTO check_states (
@@ -402,6 +480,10 @@ func (s *Store) RecordCheckTimeout(ctx context.Context, e *models.CheckExecution
 		          last_value, last_output, last_result_at, last_dispatch_at, reconciled_at, updated_at`,
 		e.CheckID, e.AgentID, output, now, e.DispatchedAt))
 	if err != nil {
+		return nil, false, err
+	}
+	if _, err := tx.Exec(ctx, `UPDATE check_executions SET timeout_effect=$2 WHERE id=$1`,
+		e.ID, models.TimeoutEffectCounted); err != nil {
 		return nil, false, err
 	}
 	if err := tx.Commit(ctx); err != nil {
