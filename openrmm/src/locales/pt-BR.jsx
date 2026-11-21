@@ -26,6 +26,7 @@
   "mailtpl.saved": "Modelos de mensagens salvos",
   "mailtpl.send": "Enviar exemplo ao meu e-mail",
   "mailtpl.testHint": "O exemplo usa as configurações salvas e o e-mail da sua conta. É necessário salvar após restaurar os padrões.",
+  "mailtpl.sharedTestLimit": "O limite de e-mails de teste do serviço compartilhado foi atingido. Tente novamente na próxima hora.",
   "mailtpl.example": "Apenas dados de exemplo. A prévia não salva alterações nem envia e-mails.",
 
   'nav.dashboard': 'Painel',

@@ -235,6 +235,21 @@ func (s *Server) testSMTPConfig(profile string) http.HandlerFunc {
 			}
 			message.To, message.Subject = to, "[TEST] "+message.Subject
 		}
+		if cfg.Operator {
+			reserved, err := s.store.ReserveSharedAlertTest(r.Context())
+			if err != nil {
+				writeErr(w, http.StatusInternalServerError, "could not reserve a shared SMTP test")
+				return
+			}
+			if !reserved {
+				writeJSON(w, http.StatusTooManyRequests, map[string]string{
+					"error": "The shared email test limit has been reached. Try again next hour.",
+					"code":  "shared_alert_test_limit",
+				})
+				return
+			}
+			message.Body += notify.OperatorAlertFooter(s.cfg.NotificationConsoleURL())
+		}
 		if err := notify.Send(cfg, message); err != nil {
 			// The SMTP server's own words are the most useful thing we can show, and
 			// this endpoint is already restricted to operators who can edit settings.

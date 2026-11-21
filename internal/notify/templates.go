@@ -15,6 +15,12 @@ import (
 
 const AlertTemplatesKey = "notify.alert_templates"
 
+const (
+	maxAlertSubjectRunes = 200
+	maxAlertSubjectBytes = maxAlertSubjectRunes * utf8.UTFMax
+	maxAlertBodyBytes    = 32 * 1024
+)
+
 type MailTemplate struct {
 	Subject string `json:"subject"`
 	Body    string `json:"body"`
@@ -122,18 +128,50 @@ func RenderAlertTemplate(c AlertTemplates, kind string, d AlertTemplateData) (Me
 		"event": d.Event, "details": d.Details, "time": d.Time.UTC().Format(time.RFC3339),
 		"console_url": strings.TrimRight(d.ConsoleURL, "/"), "agent_id": d.AgentID, "alert_id": d.AlertID,
 	}
-	render := func(s string) string {
-		return templateVariable.ReplaceAllStringFunc(s, func(token string) string { return values[templateVariable.FindStringSubmatch(token)[1]] })
-	}
-	subject := strings.Join(strings.Fields(render(tpl.Subject)), " ")
+	subject := strings.Join(strings.Fields(expandAlertTemplate(tpl.Subject, values, maxAlertSubjectBytes)), " ")
 	if subject == "" {
 		subject = "[OpenRMM] " + device
 	}
-	// Bound the rendered header even if a device description or details are huge.
-	if len([]rune(subject)) > 200 {
-		subject = string([]rune(subject)[:199]) + "…"
+	if runes := []rune(subject); len(runes) > maxAlertSubjectRunes {
+		subject = string(runes[:maxAlertSubjectRunes-1]) + "…"
 	}
-	return Message{Subject: subject, Body: render(tpl.Body)}, nil
+	return Message{Subject: subject, Body: expandAlertTemplate(tpl.Body, values, maxAlertBodyBytes)}, nil
+}
+
+// expandAlertTemplate bounds each append so repeated variables cannot grow the
+// buffer beyond the output budget. Truncate at a UTF-8 boundary.
+func expandAlertTemplate(template string, values map[string]string, limit int) string {
+	var result strings.Builder
+	appendPart := func(part string) bool {
+		prefix := alertTextPrefix(part, limit-result.Len())
+		result.WriteString(prefix)
+		return len(prefix) == len(part)
+	}
+	for {
+		match := templateVariable.FindStringSubmatchIndex(template)
+		if match == nil {
+			if appendPart(template) {
+				return result.String()
+			}
+			break
+		}
+		if !appendPart(template[:match[0]]) || !appendPart(values[template[match[2]:match[3]]]) {
+			break
+		}
+		template = template[match[1]:]
+	}
+	const ellipsis = "…"
+	return alertTextPrefix(result.String(), limit-len(ellipsis)) + ellipsis
+}
+
+func alertTextPrefix(text string, limit int) string {
+	if len(text) <= limit {
+		return text
+	}
+	for limit > 0 && !utf8.RuneStart(text[limit]) {
+		limit--
+	}
+	return text[:limit]
 }
 
 func SampleAlertTemplateData(kind, consoleURL string) AlertTemplateData {

@@ -20,6 +20,7 @@
   "mailtpl.saved": "Plantillas guardadas",
   "mailtpl.send": "Enviar ejemplo a mi correo",
   "mailtpl.testHint": "El ejemplo usa los ajustes guardados y el correo de tu cuenta. Debes guardar después de restaurar los valores predeterminados.",
+  "mailtpl.sharedTestLimit": "Se alcanzó el límite de correos de prueba del servicio compartido. Vuelve a intentarlo la próxima hora.",
   "mailtpl.example": "Solo datos de ejemplo. La vista previa no guarda cambios ni envía correos.",
 
   'nav.dashboard': 'Panel',

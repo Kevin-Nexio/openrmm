@@ -23,6 +23,7 @@
   "mailtpl.saved": "Message templates saved",
   "mailtpl.send": "Send example to my email",
   "mailtpl.testHint": "The example uses saved settings and sends to the email address on your account. Restoring defaults requires saving.",
+  "mailtpl.sharedTestLimit": "The shared email test limit has been reached. Try again next hour.",
   "mailtpl.example": "Sample data only. Previewing does not save changes or send email.",
 
   // ---- navigation

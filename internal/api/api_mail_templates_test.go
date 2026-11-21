@@ -3,17 +3,18 @@ package api
 import (
 	"encoding/json"
 	"fmt"
-	"io"
 	"mime"
 	"net/http"
 	"net/mail"
 	"strings"
 	"testing"
+	"time"
 
 	"github.com/p1ngu/rmm/internal/config"
 	"github.com/p1ngu/rmm/internal/models"
 	"github.com/p1ngu/rmm/internal/notify"
 	"github.com/p1ngu/rmm/internal/notify/smtptest"
+	"github.com/p1ngu/rmm/internal/store"
 )
 
 func TestAlertTemplatesConfigurationIntegration(t *testing.T) {
@@ -115,8 +116,7 @@ func TestAlertTemplatesSendStoredExampleIntegration(t *testing.T) {
 	if err != nil || subject != "[TEST] Restored Wiki server" {
 		t.Fatalf("subject: %q %v", subject, err)
 	}
-	rendered, _ := io.ReadAll(message.Body)
-	if !strings.Contains(string(rendered), "Wiki server: Example only:") {
+	if rendered := messages[0].Text(t); !strings.Contains(rendered, "Wiki server: Example only:") {
 		t.Fatalf("body: %s", rendered)
 	}
 	if code, _ := e.do("POST", "/api/config/smtp/alerts/test", `{"template_event":"unknown"}`, session); code != 400 {
@@ -124,5 +124,59 @@ func TestAlertTemplatesSendStoredExampleIntegration(t *testing.T) {
 	}
 	if len(relay.Messages()) != 1 {
 		t.Fatal("invalid event sent a message")
+	}
+}
+
+func TestSharedAlertTemplateSampleUsesSeparateBudgetIntegration(t *testing.T) {
+	relay := smtptest.New(t)
+	e := newSMTPE2E(t, withAlertService(relay))
+	const to = "admin@example.test"
+	user, err := e.store.CreateUser(e.ctx, "template-operator", "hash", models.RoleAdmin)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if _, err = e.store.UpdateUserEmail(e.ctx, user.ID, to); err != nil {
+		t.Fatal(err)
+	}
+	verification := "verify-" + user.ID
+	if err = e.store.CreateEmailVerification(e.ctx, user.ID, to, verification, time.Now().Add(time.Hour)); err != nil {
+		t.Fatal(err)
+	}
+	if _, err = e.store.ConfirmEmailVerification(e.ctx, verification); err != nil {
+		t.Fatal(err)
+	}
+	session := e.sessionFor(user.ID)
+	const route = "/api/config/smtp/alerts/test"
+	for i := range store.SharedAlertTestHourlyLimit {
+		body := `{"template_event":"alert"}`
+		if i == 0 {
+			body = `{}` // the fixed and customizable tests share the test budget
+		}
+		if code, out := e.do(http.MethodPost, route, body, session); code != http.StatusOK {
+			t.Fatalf("test mail %d: HTTP %d (%v)", i, code, out)
+		}
+	}
+	code, out := e.do(http.MethodPost, route, `{"template_event":"recovery"}`, session)
+	if code != http.StatusTooManyRequests || out["code"] != "shared_alert_test_limit" {
+		t.Fatalf("exhausted test budget: HTTP %d (%v)", code, out)
+	}
+	messages := relay.Messages()
+	if len(messages) != store.SharedAlertTestHourlyLimit {
+		t.Fatalf("sent %d samples", len(messages))
+	}
+	for _, m := range messages {
+		if len(m.To) != 1 || m.To[0] != to {
+			t.Fatal("test did not go to the confirmed address")
+		}
+		if !strings.Contains(m.Text(t), "for the instance acme.openrmm.test.") {
+			t.Fatal("test lacks the shared service footer")
+		}
+	}
+	sent, err := e.store.NotificationsSentSince(e.ctx, time.Now().Add(-time.Hour))
+	if err != nil || sent != 0 {
+		t.Fatalf("alert budget counted %d samples: %v", sent, err)
+	}
+	if got := e.auditCount("config.smtp.alerts.test", "app_settings"); got != store.SharedAlertTestHourlyLimit {
+		t.Fatalf("test audit entries = %d", got)
 	}
 }

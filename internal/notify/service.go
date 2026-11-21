@@ -207,7 +207,7 @@ func (s *Service) drain(ctx context.Context) {
 				}
 				continue
 			}
-			body += operatorFooter(publicURL)
+			body += OperatorAlertFooter(publicURL)
 		}
 		sendErr := Send(cfg, Message{To: n.Recipient, Subject: n.Subject, Body: body})
 		if sendErr == nil {
@@ -434,7 +434,7 @@ func AlertResolvedEvent(eventType, agentID, hostname, description, alertID, deta
 // the technical hostname in the message body. Keep headers on a single line.
 func deviceSubjectName(description, hostname, agentID string) string {
 	for _, value := range []string{description, hostname, agentID} {
-		if name := strings.Join(strings.Fields(value), " "); name != "" {
+		if name := strings.Join(strings.Fields(alertTextPrefix(strings.TrimSpace(value), maxAlertSubjectBytes)), " "); name != "" {
 			return name
 		}
 	}
@@ -494,10 +494,10 @@ func (s *Service) recipientConfirmed(ctx context.Context, userID, email string) 
 	return s.store.RecipientConfirmed(ctx, userID, email)
 }
 
-// operatorFooter says, under an alert sent through the operator's shared
+// OperatorAlertFooter says, under mail sent through the operator's shared
 // service, which instance it came from and that its text is that instance's:
 // the sender domain is the operator's, the words are not.
-func operatorFooter(publicURL string) string {
+func OperatorAlertFooter(publicURL string) string {
 	host := publicURL
 	if u, err := url.Parse(publicURL); err == nil && u.Host != "" {
 		host = u.Host

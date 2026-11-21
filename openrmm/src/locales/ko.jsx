@@ -20,6 +20,7 @@
   "mailtpl.saved": "메시지 템플릿 저장됨",
   "mailtpl.send": "내 이메일로 예시 보내기",
   "mailtpl.testHint": "저장된 설정을 사용해 계정 이메일로 보냅니다. 기본값을 복원한 후에는 저장해야 합니다.",
+  "mailtpl.sharedTestLimit": "공유 서비스의 테스트 이메일 한도에 도달했습니다. 다음 시간대에 다시 시도하세요.",
   "mailtpl.example": "예시 데이터만 표시합니다. 미리 보기는 변경 사항을 저장하거나 메일을 보내지 않습니다.",
 
   'nav.dashboard': "대시보드",

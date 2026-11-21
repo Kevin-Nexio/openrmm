@@ -2918,7 +2918,7 @@ function AlertTemplatePanel() {
     try {
       const result = await api.testAlertSMTP('', event);
       toast.success(t('mail.testSent'), t('mail.deliveredTo', { to: result.to }));
-    } catch (e) { toast.error(t('mail.testFailed'), e.message); }
+    } catch (e) { toast.error(t('mail.testFailed'), e.code === 'shared_alert_test_limit' ? t('mailtpl.sharedTestLimit') : e.message); }
     finally { setBusy(false); }
   };
   if (q.error) return <Card className="p-4"><p role="alert">{q.error.message}</p><Button onClick={() => q.refetch()}>{t('action.retry')}</Button></Card>;
@@ -3002,7 +3002,7 @@ function SMTPProfilePanel() {
     try {
       const r = await api.testAlertSMTP(testTo.trim());
       toast.success(t('mail.testSent'), t('mail.deliveredTo', { to: r.to }));
-    } catch (e) { toast.error(t('mail.testFailed'), e.message); }
+    } catch (e) { toast.error(t('mail.testFailed'), e.code === 'shared_alert_test_limit' ? t('mailtpl.sharedTestLimit') : e.message); }
     finally { setTesting(false); }
   };
 

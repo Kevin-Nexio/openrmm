@@ -3,6 +3,7 @@ package notify
 import (
 	"strings"
 	"testing"
+	"unicode/utf8"
 )
 
 func TestAlertTemplatesRenderChoicesAndLiteralValues(t *testing.T) {
@@ -33,6 +34,29 @@ func TestAlertTemplatesRenderChoicesAndLiteralValues(t *testing.T) {
 	m, err = RenderAlertTemplate(c, "alert", d)
 	if err != nil || strings.ContainsAny(m.Subject, "\r\n") {
 		t.Fatalf("header injection: %+v, %v", m, err)
+	}
+}
+
+func TestAlertTemplateBoundsExpandedText(t *testing.T) {
+	c := DefaultAlertTemplates()
+	c.Alert.Subject = "{{description}} {{description}}"
+	c.Alert.Body = "Device notes:\n" + strings.Repeat("{{description}}\n", 5)
+	d := SampleAlertTemplateData("alert", "https://console.example.test")
+	d.Description = strings.Repeat("界", 3000)
+	m, err := RenderAlertTemplate(c, "alert", d)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !utf8.ValidString(m.Subject) || utf8.RuneCountInString(m.Subject) > maxAlertSubjectRunes {
+		t.Fatalf("invalid subject length: %d", len(m.Subject))
+	}
+	if !utf8.ValidString(m.Body) || len(m.Body) > maxAlertBodyBytes || !strings.HasSuffix(m.Body, "…") {
+		t.Fatalf("body was not safely truncated: %d bytes", len(m.Body))
+	}
+	d.Description = "Small device"
+	m, err = RenderAlertTemplate(c, "alert", d)
+	if err != nil || m.Body != "Device notes:\n"+strings.Repeat("Small device\n", 5) {
+		t.Fatalf("normal template changed: %q (%v)", m.Body, err)
 	}
 }
 

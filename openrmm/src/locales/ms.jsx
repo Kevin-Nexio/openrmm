@@ -20,6 +20,7 @@
   "mailtpl.saved": "Templat mesej disimpan",
   "mailtpl.send": "Hantar contoh ke e-mel saya",
   "mailtpl.testHint": "Contoh menggunakan tetapan yang disimpan dan alamat e-mel akaun anda. Simpan selepas memulihkan lalai.",
+  "mailtpl.sharedTestLimit": "Had e-mel ujian bagi perkhidmatan dikongsi telah dicapai. Cuba lagi pada jam berikutnya.",
   "mailtpl.example": "Data contoh sahaja. Pratonton tidak menyimpan perubahan atau menghantar e-mel.",
 
   'nav.dashboard': "Papan pemuka",

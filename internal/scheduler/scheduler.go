@@ -888,8 +888,8 @@ func (s *Scheduler) queueAlertNotification(ctx context.Context, alert *models.Al
 
 func alertDeviceDescription(alert *models.Alert, agent *models.Agent) string {
 	if alert == nil || agent == nil || alert.AgentSnapshotID == nil ||
-		*alert.AgentSnapshotID != agent.ID || alert.FirstSeenAt.IsZero() ||
-		agent.MonitoringScopeSince.IsZero() || agent.MonitoringScopeSince.After(alert.FirstSeenAt) {
+		*alert.AgentSnapshotID != agent.ID || alert.AgentMonitoringScopeSince == nil ||
+		agent.MonitoringScopeSince.IsZero() || !agent.MonitoringScopeSince.Equal(*alert.AgentMonitoringScopeSince) {
 		return ""
 	}
 	return agent.Description

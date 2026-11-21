@@ -51,6 +51,9 @@ func TestAlertDescriptionOutboxIntegration(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
+	if opened.Alert.AgentMonitoringScopeSince == nil || !opened.Alert.AgentMonitoringScopeSince.Equal(a.MonitoringScopeSince) {
+		t.Fatal("the incident did not capture the device's scope revision")
+	}
 	if err = s.queueAlertNotification(ctx, &opened.Alert, ""); err != nil {
 		t.Fatal(err)
 	}

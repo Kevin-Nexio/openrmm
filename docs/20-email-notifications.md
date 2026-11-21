@@ -194,7 +194,7 @@ variables are `{{device}}`, `{{description}}`, `{{hostname}}`, `{{event}}`,
 substitution are not supported. Unknown or malformed variables are rejected.
 Subjects accept at most 512 bytes and no line breaks; bodies accept at most
 16,384 bytes. Rendered subjects have whitespace normalized and are capped at
-200 characters to bound device-supplied content.
+200 characters. Rendered bodies are capped at 32 KiB before MIME encoding.
 
 Preview uses fictional device data and does not save settings or send mail.
 Restore defaults changes the draft until Save is pressed. Send example requires
@@ -203,18 +203,18 @@ rules; the console sends to the current user's email address with a `[TEST]`
 prefix. It does not create an incident. Unsaved edits survive unrelated console
 refreshes.
 
-Templates are stored as one `notify.alert_templates` app setting; no migration
-is needed. They apply when a new notification is queued. Already queued mail,
+Templates are stored as one `notify.alert_templates` app setting. They apply
+when a new notification is queued. Already queued mail,
 password resets, job-failure mail and AI-release notifications are unchanged.
 SMTP settings, subscriptions, recipient scopes and shared-service footer rules
 remain independent of templates. Edits are audited as
 `config.mail.templates.update`, without logging the template text.
 
-A description is used only while the device remains in the incident's original
-monitoring scope. If the device has moved, the historical hostname is used so
-its new description cannot leak across client boundaries. Alert deduplication
-uses the incident and sequence, not the rendered subject, so renaming a device
-or editing a template does not resend the same incident.
+A description is used only when the device's current monitoring scope revision
+matches the incident's saved revision. For a moved device or an incident without
+a saved revision, the template uses the historical hostname as the device name.
+Alert deduplication uses the incident and sequence. Renaming a device or editing
+a template does not resend the same incident.
 
 ### The operator's shared alert service
 
@@ -258,7 +258,10 @@ relay does not need:
   is logged once each way.
 - **A footer** under each alert names the instance it came from and says the
   content is that instance's.
-- The alerts **test button** sends only to the caller's own confirmed address.
+- The alerts **test button** sends only to the caller's own confirmed address
+  and includes the same instance footer. Test mail has its own budget of 20
+  attempts per instance per UTC clock hour. Test attempts are outside the
+  notification outbox and do not use its hourly alert budget.
 
 Use a sending domain of its own for this service (for example
 `notify.example.com`), separate from the account transport's, so complaints

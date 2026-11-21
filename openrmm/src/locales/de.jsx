@@ -20,6 +20,7 @@
   "mailtpl.saved": "Nachrichtenvorlagen gespeichert",
   "mailtpl.send": "Beispiel an meine E-Mail senden",
   "mailtpl.testHint": "Das Beispiel verwendet die gespeicherten Einstellungen und deine Konto-E-Mail. Wiederhergestellte Standardwerte müssen gespeichert werden.",
+  "mailtpl.sharedTestLimit": "Das Limit für Test-E-Mails über den gemeinsamen Dienst ist erreicht. Versuche es in der nächsten Stunde erneut.",
   "mailtpl.example": "Nur Beispieldaten. Die Vorschau speichert nichts und sendet keine E-Mail.",
 
   'nav.dashboard': 'Übersicht',

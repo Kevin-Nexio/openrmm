@@ -20,6 +20,7 @@
   "mailtpl.saved": "邮件模板已保存",
   "mailtpl.send": "发送示例到我的邮箱",
   "mailtpl.testHint": "示例使用已保存的设置，并发送到你的账户邮箱。恢复默认值后需要保存。",
+  "mailtpl.sharedTestLimit": "已达到共享服务的测试邮件发送上限。请在下一个整点后重试。",
   "mailtpl.example": "仅显示示例数据。预览不会保存更改或发送邮件。",
 
   'nav.dashboard': '仪表板',
