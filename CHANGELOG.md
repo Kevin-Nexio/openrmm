@@ -131,6 +131,26 @@ tag.
   - The scripts now take `COMPOSE_FILE` from the environment or `deploy/.env`
     and pass one `-f` per file, relative to `deploy/`.
   - `scripts/test-ops-compose-files.sh` runs in CI.
+- **Point-in-time recovery no longer replaces the database before it knows the
+  recovery will work.**
+  - **What went wrong:** `restore-pitr.sh` deleted the data volume first, then
+    replayed. If PostgreSQL could not reach the target, the database was down
+    and the old data was gone. That happened, for example, when a recovery to
+    the same instant was repeated with nothing written since.
+  - **Rehearsal:** the script now stops the writers and archives the WAL
+    segment in progress, so the last writes are replayable. It then rehearses
+    the recovery on a throwaway copy. Only if the target is reached does it
+    replace the data volume. Otherwise the writers start again, nothing has
+    changed, and the error explains why, with the timelines in the archive.
+  - **Leftover settings:** a recovery's settings stayed in
+    `postgresql.auto.conf`, so every later base backup carried them, and a
+    recovery with no target stopped at the old target instead. They are now
+    removed after the cluster is promoted, and dropped from older base backups
+    before replaying.
+  - **New:** `PITR_TARGET_TIMELINE` (`latest`, `current` or a number) chooses
+    the branch of history to replay.
+  - **Tests:** `scripts/test-pitr.sh` runs these cases against a real
+    PostgreSQL in CI. The production guide (section 7.1) explains timelines.
 
 ## [0.11.4] - 2026-11-17
 

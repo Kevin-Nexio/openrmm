@@ -372,6 +372,11 @@ cannot decrypt runtime secrets.
 
 ### 7.1 Point-in-time recovery (PITR)
 
+The PITR restore uses Python 3 to read the effective Compose configuration.
+It requires the project's local `rmm_pgdata` and `rmm_pgwal` volumes on the
+`postgres` service. It refuses external or customized storage before stopping
+the stack.
+
 The nightly dump alone means losing up to a day. Continuous WAL archiving cuts
 that to `POSTGRES_ARCHIVE_TIMEOUT` (default 300s) — `archive_timeout` matters
 because an idle database can otherwise sit on an unarchived segment for hours,
@@ -430,6 +435,43 @@ RESTORE_CONFIRM=rmm PITR_TARGET_TIME='2026-07-27 03:20:00+00' \
 Omit `PITR_TARGET_TIME` to replay as far forward as the archive allows. The
 script replaces the data volume but never the WAL volume, and holds the
 application down until the cluster leaves recovery.
+
+The live database is not touched until the recovery has been shown to work:
+1. **Stop and archive.** The script stops the writers (`RESTORE_WRITER_SERVICES`,
+   `frontend server` by default) and archives the WAL segment in progress. The
+   replay can then reach the last write, not just the last segment
+   `archive_timeout` closed. It waits up to `PITR_ARCHIVE_WAIT` seconds (120).
+2. **Rehearse.** It runs the same recovery on a throwaway copy of the base
+   backup.
+3. **Replace.** Only if PostgreSQL reaches the target there does it stop the
+   stack and replace the data volume.
+
+If the rehearsal fails, the writers start again and the database is as it
+was. The error then shows:
+- PostgreSQL's reason and the last transaction the replayed history holds;
+- the timelines in the archive.
+
+**Timelines.** Every recovery that ends starts a new timeline: a new branch of
+history from the recovery point. The writes made after that point on the old
+timeline stay in the archive but are no longer the current history.
+`PITR_TARGET_TIMELINE` chooses what to replay:
+- `latest` (the default) follows the newest branch. A recovery that undid a
+  mistake therefore stays undone.
+- `current` keeps to the base backup's timeline.
+- A number picks a branch from the list the error shows, for instance to get
+  back writes an earlier recovery dropped.
+
+A target later than the last transaction of the replayed history cannot be
+reached, because PostgreSQL never sees a commit past it. This happens, for
+example, when you repeat a recovery to the same instant with nothing written
+since. In that case, recover with no target (the state at that instant is the
+end of that history) or choose a timeline.
+
+A recovery's settings (`recovery_target_time` and the rest) are removed from
+`postgresql.auto.conf` once the cluster is promoted. Earlier versions of the
+script left them there, so later base backups carried them. The script drops
+them from any base backup before replaying, so a recovery with no target no
+longer stops at an old one.
 
 ### 7.2 Recovery drill (the RTO number)
 
