@@ -119,6 +119,18 @@ tag.
     finishes 5 seconds later, with its own exit status and a note that output
     after it exited is not included.
   - Needs the agent update.
+- **Restoring a backup works with the published images.** The ops scripts read
+  only `docker-compose.prod.yml` and ignored the `COMPOSE_FILE` that
+  `deploy/QUICKSTART.md` sets in `deploy/.env`.
+  - The cause: they gave it a default before reading `deploy/.env`, and passed
+    a list of files as a single one.
+  - The effect on `restore.sh` and `restore-pitr.sh`: after restoring the
+    database, they tried to build the server from source instead of starting
+    the published images. That failed, the automatic rollback failed the same
+    way, and the application was left stopped.
+  - The scripts now take `COMPOSE_FILE` from the environment or `deploy/.env`
+    and pass one `-f` per file, relative to `deploy/`.
+  - `scripts/test-ops-compose-files.sh` runs in CI.
 
 ## [0.11.4] - 2026-11-17
 
