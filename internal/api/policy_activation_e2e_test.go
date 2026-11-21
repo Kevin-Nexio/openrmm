@@ -160,7 +160,7 @@ func TestTaskAndCheckProposalApprovalIsAuditedE2E(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	task, err := f.store.CreateTask(ctx, &models.Task{AgentID: &agent.ID, Name: "Proposed task", Shell: "sh", Script: "true",
+	task, err := f.store.CreateTask(ctx, &models.Task{Attachments: models.OnAgent(&agent.ID), Name: "Proposed task", Shell: "sh", Script: "true",
 		ScheduleKind: models.ScheduleInterval, IntervalSec: 3600, ProposedBy: "mcp:claude"})
 	if err != nil {
 		t.Fatal(err)
@@ -174,7 +174,7 @@ func TestTaskAndCheckProposalApprovalIsAuditedE2E(t *testing.T) {
 		t.Fatalf("task approval audit: %+v", e)
 	}
 	warn, fail := 20.0, 10.0
-	check, err := f.store.CreateCheck(ctx, &models.Check{AgentID: &agent.ID, Name: "Proposed check", Type: models.CheckMemory,
+	check, err := f.store.CreateCheck(ctx, &models.Check{Attachments: models.OnAgent(&agent.ID), Name: "Proposed check", Type: models.CheckMemory,
 		Config: json.RawMessage(`{}`), WarnThreshold: &warn, ErrThreshold: &fail, IntervalSec: 300, TimeoutSec: 30,
 		FailureCount: 2, RecoveryCount: 2, ProposedBy: "mcp:claude"})
 	if err != nil {

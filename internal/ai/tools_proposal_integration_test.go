@@ -183,7 +183,7 @@ func TestProposedTaskCannotBeCreatedEnabledIntegration(t *testing.T) {
 	// And directly at the store, bypassing the tool entirely: the constraint is
 	// the real guard, because the REST handlers are a second path into this row.
 	_, err := f.st.CreateTask(f.ctx, &models.Task{
-		AgentID: &f.mineAgent, Name: "sneaky", Shell: "bash", Script: "echo hi",
+		Attachments: models.OnAgent(&f.mineAgent), Name: "sneaky", Shell: "bash", Script: "echo hi",
 		ScheduleKind: models.ScheduleInterval, IntervalSec: 3600,
 		Enabled: true, ProposedBy: "ai:someone",
 	})

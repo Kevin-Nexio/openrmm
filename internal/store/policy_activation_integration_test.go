@@ -58,14 +58,14 @@ func (f switchFixture) reach(t *testing.T, policyID, checkID, ruleType string) r
 		t.Fatal(err)
 	}
 	for _, task := range tasks {
-		r.tasks = r.tasks || (task.PolicyID != nil && *task.PolicyID == policyID)
+		r.tasks = r.tasks || (task.SinglePolicyID != nil && *task.SinglePolicyID == policyID)
 	}
 	checks, err := f.st.ChecksForAgent(f.ctx, f.device, &f.siteID, &f.clientID)
 	if err != nil {
 		t.Fatal(err)
 	}
 	for _, c := range checks {
-		r.checks = r.checks || (c.PolicyID != nil && *c.PolicyID == policyID)
+		r.checks = r.checks || (c.SinglePolicyID != nil && *c.SinglePolicyID == policyID)
 	}
 	if r.checkApplies, err = f.st.CheckAppliesToAgent(f.ctx, checkID, f.device); err != nil {
 		t.Fatal(err)
@@ -92,13 +92,13 @@ func (f switchFixture) reach(t *testing.T, policyID, checkID, ruleType string) r
 
 func memoryCheck(policyID string, enabled bool, proposedBy string) *models.Check {
 	warn, fail := 20.0, 10.0
-	return &models.Check{PolicyID: &policyID, Name: "Memory", Type: models.CheckMemory, Config: json.RawMessage(`{}`),
+	return &models.Check{Attachments: models.OnPolicy(&policyID), Name: "Memory", Type: models.CheckMemory, Config: json.RawMessage(`{}`),
 		WarnThreshold: &warn, ErrThreshold: &fail, IntervalSec: 300, TimeoutSec: 30, FailureCount: 2, RecoveryCount: 2,
 		Enabled: enabled, ProposedBy: proposedBy}
 }
 
 func shellTask(policyID string, enabled bool, proposedBy string) *models.Task {
-	return &models.Task{PolicyID: &policyID, Name: "Clean", Shell: "sh", Script: "true",
+	return &models.Task{Attachments: models.OnPolicy(&policyID), Name: "Clean", Shell: "sh", Script: "true",
 		ScheduleKind: models.ScheduleInterval, IntervalSec: 3600, Enabled: enabled, ProposedBy: proposedBy}
 }
 
@@ -120,7 +120,7 @@ func TestSwitchedOffPolicyAppliesNothingIntegration(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	if _, err := f.st.CreateCheck(f.ctx, &models.Check{PolicyID: &pol.ID, Name: "Offline", Type: models.CheckConnectivity,
+	if _, err := f.st.CreateCheck(f.ctx, &models.Check{Attachments: models.OnPolicy(&pol.ID), Name: "Offline", Type: models.CheckConnectivity,
 		Config: json.RawMessage(`{"after_min":15}`), IntervalSec: 300, TimeoutSec: 30, FailureCount: 1, RecoveryCount: 1, Enabled: true}); err != nil {
 		t.Fatal(err)
 	}

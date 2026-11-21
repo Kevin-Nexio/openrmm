@@ -174,7 +174,8 @@ func Tools() []Tool {
 				"config":{"type":"object","description":"type-specific settings"},
 				"warn_threshold":{"type":"number","description":"percent threshold for the warning level"},
 				"err_threshold":{"type":"number","description":"percent threshold for the failing level"},
-				"interval_sec":{"type":"integer","description":"seconds between runs (30-86400, default 300)"}
+				"interval_sec":{"type":"integer","description":"seconds between runs (30-86400, default 300)"},
+				"timeout_policy":{"type":"string","enum":["count","ignore"],"description":"how a timeout counts toward Failures to alert. count (default) records one failure; ignore leaves the streak unchanged. A timeout is never counted twice."}
 			},"required":["type","name"],"additionalProperties":false}`),
 		}},
 		{Type: "function", Function: FunctionDef{
@@ -207,7 +208,8 @@ func Tools() []Tool {
 						"config":{"type":"object","description":"type-specific settings, as in propose_check"},
 						"warn_threshold":{"type":"number"},
 						"err_threshold":{"type":"number"},
-						"interval_sec":{"type":"integer"}
+						"interval_sec":{"type":"integer"},
+						"timeout_policy":{"type":"string","enum":["count","ignore"],"description":"count (default) or ignore; a timeout is never counted twice"}
 					},"required":["type","name"],"additionalProperties":false}}
 			},"required":["name"],"additionalProperties":false}`),
 		}},
@@ -317,7 +319,7 @@ func Tools() []Tool {
 			},"additionalProperties":false}`),
 		}},
 	}
-	return append(append(append(base, highLevelTools()...), deviceToolDefs...), autonomyToolDefs...)
+	return append(append(append(append(base, highLevelTools()...), deviceToolDefs...), autonomyToolDefs...), editToolDefs...)
 }
 
 func ToolsForPermissions(perms map[string]bool) []Tool {
@@ -343,6 +345,9 @@ func toolPermission(name string) string {
 		return permission
 	}
 	if permission, ok := autonomyToolPermission(name); ok {
+		return permission
+	}
+	if permission, ok := editToolPermission(name); ok {
 		return permission
 	}
 	switch name {
@@ -413,6 +418,9 @@ func Execute(ctx context.Context, tc ToolContext, name string, args json.RawMess
 		return res
 	}
 	if res, ok := executeDeviceTool(ctx, tc, name, args); ok {
+		return res
+	}
+	if res, ok := executeEditTool(ctx, tc, name, args); ok {
 		return res
 	}
 	switch name {
