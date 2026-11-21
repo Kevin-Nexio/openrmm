@@ -42,6 +42,21 @@ const (
 	CheckExecutionCanceled  = "canceled"
 )
 
+// TimeoutPolicyCount records one failure when a run misses its deadline.
+// TimeoutPolicyIgnore leaves the failure streak unchanged.
+const (
+	TimeoutPolicyCount  = "count"
+	TimeoutPolicyIgnore = "ignore"
+)
+
+// What a timed-out execution already did to the failure counter.
+// Empty means it was not counted, which includes an offline run marked unknown.
+const (
+	TimeoutEffectNone    = ""
+	TimeoutEffectCounted = "counted"
+	TimeoutEffectIgnored = "ignored"
+)
+
 // Task schedule kinds.
 const (
 	ScheduleInterval = "interval"
@@ -283,20 +298,30 @@ type PolicyAssignment struct {
 
 // Check is a monitoring definition owned by an agent or a policy.
 type Check struct {
-	ID            string          `json:"id"`
-	AgentID       *string         `json:"agent_id,omitempty"`
-	PolicyID      *string         `json:"policy_id,omitempty"`
-	Type          string          `json:"type"`
-	Name          string          `json:"name"`
-	Config        json.RawMessage `json:"config"`
-	WarnThreshold *float64        `json:"warn_threshold,omitempty"`
-	ErrThreshold  *float64        `json:"err_threshold,omitempty"`
-	IntervalSec   int             `json:"interval_sec"`
-	FailureCount  int             `json:"failure_count"`
-	RecoveryCount int             `json:"recovery_count"`
-	Hysteresis    float64         `json:"hysteresis"`
-	CooldownSec   int             `json:"cooldown_sec"`
-	TimeoutSec    int             `json:"timeout_sec"`
+	ID string `json:"id"`
+	// Attachments are where the check applies: any number of policies and
+	// devices. None means it is not in use.
+	Attachments []Attachment `json:"attachments"`
+	// SingleAgentID and SinglePolicyID keep the fields of the one-owner API:
+	// set when the check has exactly one attachment, and on create a
+	// shorthand for it. Authorization never reads them; it reads Attachments.
+	SingleAgentID  *string         `json:"agent_id,omitempty"`
+	SinglePolicyID *string         `json:"policy_id,omitempty"`
+	Type           string          `json:"type"`
+	Name           string          `json:"name"`
+	Config         json.RawMessage `json:"config"`
+	WarnThreshold  *float64        `json:"warn_threshold,omitempty"`
+	ErrThreshold   *float64        `json:"err_threshold,omitempty"`
+	IntervalSec    int             `json:"interval_sec"`
+	FailureCount   int             `json:"failure_count"`
+	RecoveryCount  int             `json:"recovery_count"`
+	Hysteresis     float64         `json:"hysteresis"`
+	CooldownSec    int             `json:"cooldown_sec"`
+	TimeoutSec     int             `json:"timeout_sec"`
+	// TimeoutPolicy is how a missed deadline counts toward failure_count.
+	// count (the default) records one failure; ignore leaves the streak alone.
+	// A late result for a run that already timed out never adds a second one.
+	TimeoutPolicy string          `json:"timeout_policy"`
 	Enabled       bool            `json:"enabled"`
 	ProposedBy    string          `json:"proposed_by,omitempty"`
 	ApprovedBy    string          `json:"approved_by,omitempty"`
@@ -315,6 +340,9 @@ type CheckResult struct {
 	Value       *float64  `json:"value,omitempty"`
 	Output      string    `json:"output"`
 	RanAt       time.Time `json:"ran_at"`
+	// TimedOut is the agent's word that it stopped this run at the check's
+	// timeout. It decides how the run counts and is not stored.
+	TimedOut bool `json:"-"`
 }
 
 // CheckExecution is one durably tracked dispatch. The execution id correlates
@@ -366,18 +394,20 @@ type CheckSummary struct {
 
 // Task is scheduled automation owned by an agent or a policy.
 type Task struct {
-	ID           string  `json:"id"`
-	AgentID      *string `json:"agent_id,omitempty"`
-	PolicyID     *string `json:"policy_id,omitempty"`
-	Name         string  `json:"name"`
-	ScriptID     *string `json:"script_id,omitempty"`
-	Shell        string  `json:"shell"`
-	Script       string  `json:"script"`
-	ScheduleKind string  `json:"schedule_kind"`
-	IntervalSec  int     `json:"interval_sec"`
-	RunAtMinute  int     `json:"run_at_minute"`
-	DaysOfWeek   int     `json:"days_of_week"`   // weekly: bitmask, bit N = time.Weekday N (0=Sun)
-	RunAtMinutes []int   `json:"run_at_minutes"` // weekly: times of day, minutes since midnight in Timezone
+	ID string `json:"id"`
+	// Attachments, SingleAgentID and SinglePolicyID are as on Check.
+	Attachments    []Attachment `json:"attachments"`
+	SingleAgentID  *string      `json:"agent_id,omitempty"`
+	SinglePolicyID *string      `json:"policy_id,omitempty"`
+	Name           string       `json:"name"`
+	ScriptID       *string      `json:"script_id,omitempty"`
+	Shell          string       `json:"shell"`
+	Script         string       `json:"script"`
+	ScheduleKind   string       `json:"schedule_kind"`
+	IntervalSec    int          `json:"interval_sec"`
+	RunAtMinute    int          `json:"run_at_minute"`
+	DaysOfWeek     int          `json:"days_of_week"`   // weekly: bitmask, bit N = time.Weekday N (0=Sun)
+	RunAtMinutes   []int        `json:"run_at_minutes"` // weekly: times of day, minutes since midnight in Timezone
 	// Timezone is the IANA zone run_at_minute, run_at_minutes and the weekdays
 	// are in, daylight saving included. A task created without one is UTC;
 	// an edit that sends none keeps the zone it had.
@@ -470,17 +500,20 @@ type AlertEvent struct {
 
 type AlertSuppression struct {
 	MonitoringScopeSince *time.Time `json:"-"`
-	ID                   string     `json:"id"`
-	Kind                 string     `json:"kind"`
-	ScopeType            string     `json:"scope_type"`
-	ScopeID              string     `json:"scope_id"`
-	StartsAt             time.Time  `json:"starts_at"`
-	EndsAt               time.Time  `json:"ends_at"`
-	Reason               string     `json:"reason"`
-	CreatedBy            string     `json:"created_by"`
-	CreatedAt            time.Time  `json:"created_at"`
-	CanceledAt           *time.Time `json:"canceled_at,omitempty"`
-	CanceledBy           string     `json:"canceled_by,omitempty"`
+	// Snapshot is what a check-scoped silence covers, captured before the
+	// caller's scope is authorized and stored as captured. Server-side only.
+	Snapshot   *SuppressionSnapshot `json:"-"`
+	ID         string               `json:"id"`
+	Kind       string               `json:"kind"`
+	ScopeType  string               `json:"scope_type"`
+	ScopeID    string               `json:"scope_id"`
+	StartsAt   time.Time            `json:"starts_at"`
+	EndsAt     time.Time            `json:"ends_at"`
+	Reason     string               `json:"reason"`
+	CreatedBy  string               `json:"created_by"`
+	CreatedAt  time.Time            `json:"created_at"`
+	CanceledAt *time.Time           `json:"canceled_at,omitempty"`
+	CanceledBy string               `json:"canceled_by,omitempty"`
 }
 
 type AlertCounts struct {

@@ -7,7 +7,9 @@ from interactive `OPENRMM_PARAM_*` parameters, whose values remain visible on jo
 Do not use interactive parameters for credentials. Variables reach a device
 when the saved script itself runs: from **Scripts ▸ Run on device**, from a
 device's **Run script ▸ From library** while the script is unedited (the form
-says it runs the saved script), or as a scheduled library task. **Run on device**
+says it runs the saved script), from **Devices ▸ Deploy to many ▸ From the
+library** (each device gets its own value, resolved when its batch is
+approved), or as a scheduled library task. **Run on device**
 waits until unsaved changes in the editor are saved.
 
 A one-off job from a device's **Run script** tab can also receive variables, but

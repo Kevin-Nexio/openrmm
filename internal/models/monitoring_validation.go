@@ -53,7 +53,15 @@ func ValidateCheck(c *Check) error {
 		c.WarnThreshold, c.ErrThreshold = nil, nil
 		c.IntervalSec, c.TimeoutSec, c.FailureCount, c.RecoveryCount = 300, 180, 1, 1
 		c.Hysteresis, c.CooldownSec = 0, 300
+		c.TimeoutPolicy = TimeoutPolicyCount
 		return nil
+	}
+	switch c.TimeoutPolicy {
+	case "", TimeoutPolicyCount:
+		c.TimeoutPolicy = TimeoutPolicyCount
+	case TimeoutPolicyIgnore:
+	default:
+		return fmt.Errorf("timeout_policy must be count or ignore")
 	}
 	if c.IntervalSec < 30 || c.IntervalSec > 86400 {
 		return fmt.Errorf("interval_sec must be between 30 and 86400")

@@ -20,16 +20,16 @@ func TestDeviceChecksPairStateAndSource(t *testing.T) {
 	value := 91.5
 	at := time.Date(2026, 10, 14, 12, 0, 0, 0, time.UTC)
 	checks := []models.Check{
-		{ID: "c-policy-b", PolicyID: strp("p2"), Name: "disk"},
-		{ID: "c-direct", AgentID: strp("a1"), Name: "spooler"},
-		{ID: "c-policy-a", PolicyID: strp("p1"), Name: "memory"},
-		{ID: "c-never", PolicyID: strp("p1"), Name: "cpu"},
+		{ID: "c-policy-b", Attachments: []models.Attachment{{PolicyID: strp("p2"), Name: "Servers"}}, Name: "disk"},
+		{ID: "c-direct", Attachments: models.OnAgent(strp("a1")), Name: "spooler"},
+		{ID: "c-policy-a", Attachments: []models.Attachment{{PolicyID: strp("p1"), Name: "Baseline"}}, Name: "memory"},
+		{ID: "c-never", Attachments: []models.Attachment{{PolicyID: strp("p1"), Name: "Baseline"}}, Name: "cpu"},
 	}
 	states := map[string]*models.CheckState{
 		"c-policy-b": {Status: models.CheckFailing, LastValue: &value, LastOutput: "C: 91.5% used", LastResultAt: &at},
 		"c-direct":   {Status: ""},
 	}
-	got := deviceChecks(checks, states, map[string]string{"p1": "Baseline", "p2": "Servers"})
+	got := deviceChecks(checks, states, "a1", map[string]bool{"p1": true, "p2": true})
 
 	order := []string{}
 	for _, c := range got {
@@ -54,20 +54,44 @@ func TestDeviceChecksPairStateAndSource(t *testing.T) {
 	}
 }
 
+// A check shared by several policies, or also attached to the device, lists
+// every way it reaches the device, direct first and policies by name; a policy
+// that does not reach the device, and another device, are not sources here.
+func TestDeviceChecksListEverySource(t *testing.T) {
+	shared := models.Check{ID: "c-shared", Name: "disk", Attachments: []models.Attachment{
+		{PolicyID: strp("p-backup"), Name: "Backup server"},
+		{AgentID: strp("a2"), Name: "OTHER-PC"},
+		{PolicyID: strp("p-files"), Name: "File server"},
+		{AgentID: strp("a1"), Name: "THIS-PC"},
+		{PolicyID: strp("p-elsewhere"), Name: "Branch office"},
+	}}
+	got := deviceChecks([]models.Check{shared}, nil, "a1", map[string]bool{"p-backup": true, "p-files": true})
+	if len(got) != 1 {
+		t.Fatalf("a shared check is one row, got %d", len(got))
+	}
+	src := got[0].Sources
+	if len(src) != 3 || !src[0].Direct || src[1].Name != "Backup server" || src[2].Name != "File server" {
+		t.Fatalf("sources = %+v, want direct, Backup server, File server", src)
+	}
+	if got[0].PolicyName != "Backup server" {
+		t.Errorf("one-owner policy_name = %q", got[0].PolicyName)
+	}
+}
+
 func TestDeviceTasksLastRun(t *testing.T) {
 	at := time.Date(2026, 10, 14, 3, 0, 0, 0, time.UTC)
 	tasks := []models.Task{
-		{ID: "t-policy", PolicyID: strp("p1"), Name: "cleanup"},
-		{ID: "t-direct", AgentID: strp("a1"), Name: "backup"},
+		{ID: "t-policy", Attachments: []models.Attachment{{PolicyID: strp("p1"), Name: "Baseline"}}, Name: "cleanup"},
+		{ID: "t-direct", Attachments: models.OnAgent(strp("a1")), Name: "backup"},
 	}
-	got := deviceTasks(tasks, map[string]time.Time{"t-policy": at, "t-direct": {}}, map[string]string{"p1": "Baseline"})
+	got := deviceTasks(tasks, map[string]time.Time{"t-policy": at, "t-direct": {}}, "a1", map[string]bool{"p1": true})
 	if got[0].ID != "t-direct" || got[0].LastRunAt != nil {
 		t.Errorf("direct task first, never run: %+v", got[0])
 	}
 	if got[1].PolicyName != "Baseline" || got[1].LastRunAt == nil || !got[1].LastRunAt.Equal(at) {
 		t.Errorf("policy task with a run: %+v", got[1])
 	}
-	if got := deviceTasks(nil, nil, nil); got == nil || len(got) != 0 {
+	if got := deviceTasks(nil, nil, "a1", nil); got == nil || len(got) != 0 {
 		t.Errorf("no tasks must encode as an empty list, got %#v", got)
 	}
 }
@@ -102,17 +126,17 @@ func TestDeviceChecksAndTasksIncludeInheritedIntegration(t *testing.T) {
 	if _, err := f.store.AssignPolicy(ctx, policy.ID, models.ScopeSite, site.ID); err != nil {
 		t.Fatal(err)
 	}
-	inherited, err := f.store.CreateCheck(ctx, &models.Check{PolicyID: &policy.ID, Type: "memory", Name: "memory", Enabled: true})
+	inherited, err := f.store.CreateCheck(ctx, &models.Check{Attachments: models.OnPolicy(&policy.ID), Type: "memory", Name: "memory", Enabled: true})
 	if err != nil {
 		t.Fatal(err)
 	}
-	direct, err := f.store.CreateCheck(ctx, &models.Check{AgentID: &agent.ID, Type: "cpuload", Name: "cpu", Enabled: true})
+	direct, err := f.store.CreateCheck(ctx, &models.Check{Attachments: models.OnAgent(&agent.ID), Type: "cpuload", Name: "cpu", Enabled: true})
 	if err != nil {
 		t.Fatal(err)
 	}
 	for _, c := range []*models.Check{
-		{AgentID: &agent.ID, Type: "diskspace", Name: "disabled", Enabled: false},
-		{AgentID: &other.ID, Type: "diskspace", Name: "someone else's", Enabled: true},
+		{Attachments: models.OnAgent(&agent.ID), Type: "diskspace", Name: "disabled", Enabled: false},
+		{Attachments: models.OnAgent(&other.ID), Type: "diskspace", Name: "someone else's", Enabled: true},
 	} {
 		if _, err := f.store.CreateCheck(ctx, c); err != nil {
 			t.Fatal(err)
@@ -128,13 +152,13 @@ func TestDeviceChecksAndTasksIncludeInheritedIntegration(t *testing.T) {
 		t.Fatal(err)
 	}
 	task, err := f.store.CreateTask(ctx, &models.Task{
-		PolicyID: &policy.ID, Name: "nightly", Shell: "bash", Script: "true", ScheduleKind: "interval", IntervalSec: 3600, Enabled: true,
+		Attachments: models.OnPolicy(&policy.ID), Name: "nightly", Shell: "bash", Script: "true", ScheduleKind: "interval", IntervalSec: 3600, Enabled: true,
 	})
 	if err != nil {
 		t.Fatal(err)
 	}
 	if _, err := f.store.CreateTask(ctx, &models.Task{
-		AgentID: &agent.ID, Name: "off", Shell: "bash", Script: "true", ScheduleKind: "interval", IntervalSec: 3600,
+		Attachments: models.OnAgent(&agent.ID), Name: "off", Shell: "bash", Script: "true", ScheduleKind: "interval", IntervalSec: 3600,
 	}); err != nil {
 		t.Fatal(err)
 	}

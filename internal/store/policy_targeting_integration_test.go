@@ -91,7 +91,7 @@ func (f fleet) reached(t *testing.T, policyID, checkID string) []string {
 			t.Fatal(err)
 		}
 		applies, err := f.st.CheckAppliesToAgent(f.ctx, checkID, id)
-		if err != nil || !applies || !slices.ContainsFunc(tasks, func(task models.Task) bool { return task.PolicyID != nil && *task.PolicyID == policyID }) {
+		if err != nil || !applies || !slices.ContainsFunc(tasks, func(task models.Task) bool { return task.SinglePolicyID != nil && *task.SinglePolicyID == policyID }) {
 			t.Fatalf("%s is reached but does not get the policy's task and check: %v", id, err)
 		}
 	}
@@ -120,7 +120,7 @@ func TestPolicyTargetingReachIntegration(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	if _, err := f.st.CreateTask(f.ctx, &models.Task{PolicyID: &pol.ID, Name: "Backup", Shell: "sh", Script: "true",
+	if _, err := f.st.CreateTask(f.ctx, &models.Task{Attachments: models.OnPolicy(&pol.ID), Name: "Backup", Shell: "sh", Script: "true",
 		ScheduleKind: models.ScheduleInterval, IntervalSec: 3600, Enabled: true}); err != nil {
 		t.Fatal(err)
 	}
@@ -202,7 +202,7 @@ func TestGoverningRuleTargetingPrecedenceIntegration(t *testing.T) {
 		if err != nil {
 			t.Fatal(err)
 		}
-		if _, err := f.st.CreateCheck(f.ctx, &models.Check{PolicyID: &pol.ID, Name: name, Type: models.CheckConnectivity,
+		if _, err := f.st.CreateCheck(f.ctx, &models.Check{Attachments: models.OnPolicy(&pol.ID), Name: name, Type: models.CheckConnectivity,
 			Config: json.RawMessage(`{"after_min":` + afterMin + `}`), IntervalSec: 300, TimeoutSec: 30, FailureCount: 1, RecoveryCount: 1, Enabled: true}); err != nil {
 			t.Fatal(err)
 		}
@@ -370,7 +370,7 @@ func TestDeviceCannotRetargetItselfIntegration(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	if _, err := f.st.CreateTask(f.ctx, &models.Task{PolicyID: &pol.ID, Name: "Backup with a global secret", Shell: "powershell", Script: "exit 0",
+	if _, err := f.st.CreateTask(f.ctx, &models.Task{Attachments: models.OnPolicy(&pol.ID), Name: "Backup with a global secret", Shell: "powershell", Script: "exit 0",
 		ScheduleKind: models.ScheduleInterval, IntervalSec: 3600, Enabled: true}); err != nil {
 		t.Fatal(err)
 	}

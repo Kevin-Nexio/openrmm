@@ -1377,14 +1377,16 @@ var policyFilter = `policy_id IN (SELECT reach.policy_id FROM agents dev CROSS J
 
 // ===================== Checks =====================
 
-const checkCols = `id, agent_id, policy_id, type, name, config, warn_threshold, err_threshold,
-	interval_sec, failure_count, recovery_count, hysteresis, cooldown_sec, timeout_sec, enabled, proposed_by, approved_by, created_at`
+// checkCols are a check's columns, in scan order, for queries that alias
+// checks as c. Attachments are loaded apart (withCheckAttachments).
+const checkCols = `c.id, c.type, c.name, c.config, c.warn_threshold, c.err_threshold,
+	c.interval_sec, c.failure_count, c.recovery_count, c.hysteresis, c.cooldown_sec, c.timeout_sec, c.timeout_policy, c.enabled, c.proposed_by, c.approved_by, c.created_at`
 
 func scanCheck(row pgx.Row) (*models.Check, error) {
 	var c models.Check
-	err := row.Scan(&c.ID, &c.AgentID, &c.PolicyID, &c.Type, &c.Name, &c.Config,
+	err := row.Scan(&c.ID, &c.Type, &c.Name, &c.Config,
 		&c.WarnThreshold, &c.ErrThreshold, &c.IntervalSec, &c.FailureCount,
-		&c.RecoveryCount, &c.Hysteresis, &c.CooldownSec, &c.TimeoutSec,
+		&c.RecoveryCount, &c.Hysteresis, &c.CooldownSec, &c.TimeoutSec, &c.TimeoutPolicy,
 		&c.Enabled, &c.ProposedBy, &c.ApprovedBy, &c.CreatedAt)
 	if errors.Is(err, pgx.ErrNoRows) {
 		return nil, ErrNotFound
@@ -1395,17 +1397,30 @@ func scanCheck(row pgx.Row) (*models.Check, error) {
 	return &c, nil
 }
 
-// CreateCheck adds a check.
+// CreateCheck adds a check with its attachments (c.Attachments), in one
+// transaction: a check is never visible half attached.
 func (s *Store) CreateCheck(ctx context.Context, c *models.Check) (*models.Check, error) {
-	if err := insertCheck(ctx, s.pool, c); err != nil {
+	tx, err := s.pool.Begin(ctx)
+	if err != nil {
+		return nil, err
+	}
+	defer func() { _ = tx.Rollback(ctx) }()
+	if err := insertCheck(ctx, tx, c); err != nil {
+		return nil, err
+	}
+	if err := tx.Commit(ctx); err != nil {
 		return nil, err
 	}
 	return s.GetCheck(ctx, c.ID)
 }
 
-// insertCheck writes a new check through pool or transaction q, filling the
-// defaults the validators expect.
+// insertCheck writes a new check and its attachments through pool or
+// transaction q, filling the defaults the validators expect. An unapproved AI
+// proposal takes one attachment at most (ErrPendingSingleAttachment).
 func insertCheck(ctx context.Context, q dbQuerier, c *models.Check) error {
+	if c.ProposedBy != "" && c.ApprovedBy == "" && len(c.Attachments) > 1 {
+		return ErrPendingSingleAttachment
+	}
 	c.ID = newID()
 	if len(c.Config) == 0 {
 		c.Config = []byte("{}")
@@ -1428,19 +1443,46 @@ func insertCheck(ctx context.Context, q dbQuerier, c *models.Check) error {
 	if c.TimeoutSec <= 0 {
 		c.TimeoutSec = 180
 	}
+	if c.TimeoutPolicy == "" {
+		c.TimeoutPolicy = models.TimeoutPolicyCount
+	}
 	_, err := q.Exec(ctx,
-		`INSERT INTO checks (id, agent_id, policy_id, type, name, config, warn_threshold, err_threshold,
-		                      interval_sec, failure_count, recovery_count, hysteresis, cooldown_sec, timeout_sec, enabled, proposed_by, approved_by)
-		 VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11,$12,$13,$14,$15,$16,$17)`,
-		c.ID, c.AgentID, c.PolicyID, c.Type, c.Name, []byte(c.Config), c.WarnThreshold,
+		`INSERT INTO checks (id, type, name, config, warn_threshold, err_threshold,
+		                      interval_sec, failure_count, recovery_count, hysteresis, cooldown_sec, timeout_sec, timeout_policy, enabled, proposed_by, approved_by)
+		 VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11,$12,$13,$14,$15,$16)`,
+		c.ID, c.Type, c.Name, []byte(c.Config), c.WarnThreshold,
 		c.ErrThreshold, c.IntervalSec, c.FailureCount, c.RecoveryCount, c.Hysteresis,
-		c.CooldownSec, c.TimeoutSec, c.Enabled, c.ProposedBy, c.ApprovedBy)
-	return err
+		c.CooldownSec, c.TimeoutSec, c.TimeoutPolicy, c.Enabled, c.ProposedBy, c.ApprovedBy)
+	if err != nil {
+		return err
+	}
+	return checkAttachmentKind.insert(ctx, q, c.ID, c.Attachments)
 }
 
-// GetCheck fetches one check.
+// GetCheck fetches one check with its attachments.
 func (s *Store) GetCheck(ctx context.Context, id string) (*models.Check, error) {
-	return scanCheck(s.pool.QueryRow(ctx, `SELECT `+checkCols+` FROM checks WHERE id=$1`, id))
+	c, err := scanCheck(s.pool.QueryRow(ctx, `SELECT `+checkCols+` FROM checks c WHERE c.id=$1`, id))
+	if err != nil {
+		return nil, err
+	}
+	list, err := withCheckAttachments(ctx, s.pool, []models.Check{*c}, false)
+	if err != nil {
+		return nil, err
+	}
+	return &list[0], nil
+}
+
+// queryChecks runs a check query and fills the attachments.
+func (s *Store) queryChecks(ctx context.Context, sql string, args ...any) ([]models.Check, error) {
+	rows, err := s.pool.Query(ctx, sql, args...)
+	if err != nil {
+		return nil, err
+	}
+	list, err := scanChecks(rows)
+	if err != nil {
+		return nil, err
+	}
+	return withCheckAttachments(ctx, s.pool, list, false)
 }
 
 func scanChecks(rows pgx.Rows) ([]models.Check, error) {
@@ -1456,43 +1498,32 @@ func scanChecks(rows pgx.Rows) ([]models.Check, error) {
 	return out, rows.Err()
 }
 
-// ListChecks returns checks filtered by agent or policy (empty = all).
+// ListChecks returns checks attached directly to a device, or attached to a
+// policy, or all of them (both empty), with their attachments.
 func (s *Store) ListChecks(ctx context.Context, agentID, policyID string) ([]models.Check, error) {
 	switch {
 	case agentID != "":
-		rows, err := s.pool.Query(ctx, `SELECT `+checkCols+` FROM checks WHERE agent_id=$1 ORDER BY created_at`, agentID)
-		if err != nil {
-			return nil, err
-		}
-		return scanChecks(rows)
+		return s.queryChecks(ctx, `SELECT `+checkCols+` FROM checks c
+			WHERE EXISTS (SELECT 1 FROM check_attachments att WHERE att.check_id=c.id AND att.agent_id=$1) ORDER BY c.created_at, c.id`, agentID)
 	case policyID != "":
-		rows, err := s.pool.Query(ctx, `SELECT `+checkCols+` FROM checks WHERE policy_id=$1 ORDER BY created_at`, policyID)
-		if err != nil {
-			return nil, err
-		}
-		return scanChecks(rows)
+		return s.queryChecks(ctx, `SELECT `+checkCols+` FROM checks c
+			WHERE EXISTS (SELECT 1 FROM check_attachments att WHERE att.check_id=c.id AND att.policy_id=$1) ORDER BY c.created_at, c.id`, policyID)
 	default:
-		rows, err := s.pool.Query(ctx, `SELECT `+checkCols+` FROM checks ORDER BY created_at`)
-		if err != nil {
-			return nil, err
-		}
-		return scanChecks(rows)
+		return s.queryChecks(ctx, `SELECT `+checkCols+` FROM checks c ORDER BY c.created_at, c.id`)
 	}
 }
 
-// ChecksForAgent resolves the effective checks for an agent: those assigned
-// directly plus those from any policy in scope.
-// The site and client arguments are kept for callers; the device row is the
-// source of truth for its scope, OS and role.
+// ChecksForAgent resolves the effective checks for an agent: every enabled,
+// reviewed check one of whose attachments reaches it (checkReachesSQL), once
+// each. The site and client arguments are kept for callers; the device row is
+// the source of truth for its scope, OS and role.
 func (s *Store) ChecksForAgent(ctx context.Context, agentID string, _, _ *string) ([]models.Check, error) {
-	rows, err := s.pool.Query(ctx,
-		`SELECT `+checkCols+` FROM checks c WHERE enabled AND (proposed_by='' OR approved_by<>'') AND (agent_id=$1 OR `+policyFilter+`)
- AND (c.type NOT IN ('linuxservice','macservice') OR EXISTS (SELECT 1 FROM agents a WHERE a.id=$1 AND `+serviceCheckPlatformSQL+`))`,
+	return s.queryChecks(ctx,
+		`SELECT `+checkCols+` FROM checks c JOIN agents a ON a.id=$1
+		 WHERE c.enabled AND (c.proposed_by='' OR c.approved_by<>'') AND `+checkReachesSQL("c", "a")+`
+		   AND `+serviceCheckPlatformSQL+`
+		 ORDER BY c.created_at, c.id`,
 		agentID)
-	if err != nil {
-		return nil, err
-	}
-	return scanChecks(rows)
 }
 
 // UpdateCheck edits a check.
@@ -1503,11 +1534,11 @@ func (s *Store) UpdateCheck(ctx context.Context, c *models.Check) error {
 	_, err := s.pool.Exec(ctx,
 		`UPDATE checks SET type=$2, name=$3, config=$4, warn_threshold=$5, err_threshold=$6,
 		                   interval_sec=$7, enabled=$8, failure_count=$9, recovery_count=$10,
-		                   hysteresis=$11, cooldown_sec=$12, timeout_sec=$13, approved_by=$14
+		                   hysteresis=$11, cooldown_sec=$12, timeout_sec=$13, timeout_policy=$14, approved_by=$15
 		 WHERE id=$1`,
 		c.ID, c.Type, c.Name, []byte(c.Config), c.WarnThreshold, c.ErrThreshold,
 		c.IntervalSec, c.Enabled, c.FailureCount, c.RecoveryCount, c.Hysteresis,
-		c.CooldownSec, c.TimeoutSec, c.ApprovedBy)
+		c.CooldownSec, c.TimeoutSec, c.TimeoutPolicy, c.ApprovedBy)
 	return err
 }
 
@@ -1589,7 +1620,9 @@ func (s *Store) ListCheckResultsForUser(ctx context.Context, checkID, agentID, u
 
 // ===================== Tasks =====================
 
-const taskCols = `id, agent_id, policy_id, name, script_id, shell, script, schedule_kind, interval_sec, run_at_minute, days_of_week, run_at_minutes, timezone, enabled, proposed_by, approved_by, created_at`
+// taskCols are a task's columns, in scan order, for queries that alias tasks
+// as t. Attachments are loaded apart (withTaskAttachments).
+const taskCols = `t.id, t.name, t.script_id, t.shell, t.script, t.schedule_kind, t.interval_sec, t.run_at_minute, t.days_of_week, t.run_at_minutes, t.timezone, t.enabled, t.proposed_by, t.approved_by, t.created_at`
 
 // int32s / ints bridge the INTEGER[] column (pgx wants []int32) and the model's
 // []int field, so callers never deal with the width mismatch.
@@ -1612,7 +1645,7 @@ func ints(in []int32) []int {
 func scanTask(row pgx.Row) (*models.Task, error) {
 	var t models.Task
 	var mins []int32
-	err := row.Scan(&t.ID, &t.AgentID, &t.PolicyID, &t.Name, &t.ScriptID, &t.Shell, &t.Script,
+	err := row.Scan(&t.ID, &t.Name, &t.ScriptID, &t.Shell, &t.Script,
 		&t.ScheduleKind, &t.IntervalSec, &t.RunAtMinute, &t.DaysOfWeek, &mins, &t.Timezone, &t.Enabled, &t.ProposedBy, &t.ApprovedBy, &t.CreatedAt)
 	if errors.Is(err, pgx.ErrNoRows) {
 		return nil, ErrNotFound
@@ -1624,27 +1657,63 @@ func scanTask(row pgx.Row) (*models.Task, error) {
 	return &t, nil
 }
 
-// CreateTask adds a scheduled task.
+// CreateTask adds a scheduled task with its attachments, in one transaction.
 func (s *Store) CreateTask(ctx context.Context, t *models.Task) (*models.Task, error) {
-	if err := insertTask(ctx, s.pool, t); err != nil {
+	tx, err := s.pool.Begin(ctx)
+	if err != nil {
+		return nil, err
+	}
+	defer func() { _ = tx.Rollback(ctx) }()
+	if err := insertTask(ctx, tx, t); err != nil {
+		return nil, err
+	}
+	if err := tx.Commit(ctx); err != nil {
 		return nil, err
 	}
 	return s.GetTask(ctx, t.ID)
 }
 
-// insertTask writes a new task through pool or transaction q.
+// insertTask writes a new task and its attachments through pool or transaction
+// q. An unapproved AI proposal takes one attachment at most.
 func insertTask(ctx context.Context, q dbQuerier, t *models.Task) error {
+	if t.ProposedBy != "" && t.ApprovedBy == "" && len(t.Attachments) > 1 {
+		return ErrPendingSingleAttachment
+	}
 	t.ID = newID()
 	_, err := q.Exec(ctx,
-		`INSERT INTO tasks (id, agent_id, policy_id, name, script_id, shell, script, schedule_kind, interval_sec, run_at_minute, days_of_week, run_at_minutes, enabled, proposed_by, approved_by, timezone)
-		 VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11,$12,$13,$14,$15,COALESCE(NULLIF($16,''),'UTC'))`,
-		t.ID, t.AgentID, t.PolicyID, t.Name, t.ScriptID, t.Shell, t.Script, t.ScheduleKind, t.IntervalSec, t.RunAtMinute, t.DaysOfWeek, int32s(t.RunAtMinutes), t.Enabled, t.ProposedBy, t.ApprovedBy, t.Timezone)
-	return err
+		`INSERT INTO tasks (id, name, script_id, shell, script, schedule_kind, interval_sec, run_at_minute, days_of_week, run_at_minutes, enabled, proposed_by, approved_by, timezone)
+		 VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11,$12,$13,COALESCE(NULLIF($14,''),'UTC'))`,
+		t.ID, t.Name, t.ScriptID, t.Shell, t.Script, t.ScheduleKind, t.IntervalSec, t.RunAtMinute, t.DaysOfWeek, int32s(t.RunAtMinutes), t.Enabled, t.ProposedBy, t.ApprovedBy, t.Timezone)
+	if err != nil {
+		return err
+	}
+	return taskAttachmentKind.insert(ctx, q, t.ID, t.Attachments)
 }
 
-// GetTask fetches one task.
+// GetTask fetches one task with its attachments.
 func (s *Store) GetTask(ctx context.Context, id string) (*models.Task, error) {
-	return scanTask(s.pool.QueryRow(ctx, `SELECT `+taskCols+` FROM tasks WHERE id=$1`, id))
+	t, err := scanTask(s.pool.QueryRow(ctx, `SELECT `+taskCols+` FROM tasks t WHERE t.id=$1`, id))
+	if err != nil {
+		return nil, err
+	}
+	list, err := withTaskAttachments(ctx, s.pool, []models.Task{*t}, false)
+	if err != nil {
+		return nil, err
+	}
+	return &list[0], nil
+}
+
+// queryTasks runs a task query and fills the attachments.
+func (s *Store) queryTasks(ctx context.Context, sql string, args ...any) ([]models.Task, error) {
+	rows, err := s.pool.Query(ctx, sql, args...)
+	if err != nil {
+		return nil, err
+	}
+	list, err := scanTasks(rows)
+	if err != nil {
+		return nil, err
+	}
+	return withTaskAttachments(ctx, s.pool, list, false)
 }
 
 func scanTasks(rows pgx.Rows) ([]models.Task, error) {
@@ -1660,39 +1729,29 @@ func scanTasks(rows pgx.Rows) ([]models.Task, error) {
 	return out, rows.Err()
 }
 
-// ListTasks returns tasks filtered by agent or policy (empty = all).
+// ListTasks returns tasks attached directly to a device, or attached to a
+// policy, or all of them (both empty), with their attachments.
 func (s *Store) ListTasks(ctx context.Context, agentID, policyID string) ([]models.Task, error) {
 	switch {
 	case agentID != "":
-		rows, err := s.pool.Query(ctx, `SELECT `+taskCols+` FROM tasks WHERE agent_id=$1 ORDER BY created_at`, agentID)
-		if err != nil {
-			return nil, err
-		}
-		return scanTasks(rows)
+		return s.queryTasks(ctx, `SELECT `+taskCols+` FROM tasks t
+			WHERE EXISTS (SELECT 1 FROM task_attachments att WHERE att.task_id=t.id AND att.agent_id=$1) ORDER BY t.created_at, t.id`, agentID)
 	case policyID != "":
-		rows, err := s.pool.Query(ctx, `SELECT `+taskCols+` FROM tasks WHERE policy_id=$1 ORDER BY created_at`, policyID)
-		if err != nil {
-			return nil, err
-		}
-		return scanTasks(rows)
+		return s.queryTasks(ctx, `SELECT `+taskCols+` FROM tasks t
+			WHERE EXISTS (SELECT 1 FROM task_attachments att WHERE att.task_id=t.id AND att.policy_id=$1) ORDER BY t.created_at, t.id`, policyID)
 	default:
-		rows, err := s.pool.Query(ctx, `SELECT `+taskCols+` FROM tasks ORDER BY created_at`)
-		if err != nil {
-			return nil, err
-		}
-		return scanTasks(rows)
+		return s.queryTasks(ctx, `SELECT `+taskCols+` FROM tasks t ORDER BY t.created_at, t.id`)
 	}
 }
 
-// TasksForAgent resolves the effective tasks for an agent (direct + via policy).
+// TasksForAgent resolves the effective tasks for an agent: every enabled task
+// one of whose attachments reaches it (taskReachesSQL), once each, however many
+// of its policies reach the device.
 func (s *Store) TasksForAgent(ctx context.Context, agentID string, _, _ *string) ([]models.Task, error) {
-	rows, err := s.pool.Query(ctx,
-		`SELECT `+taskCols+` FROM tasks WHERE enabled AND (agent_id=$1 OR `+policyFilter+`)`,
+	return s.queryTasks(ctx,
+		`SELECT `+taskCols+` FROM tasks t JOIN agents a ON a.id=$1
+		 WHERE t.enabled AND `+taskReachesSQL("t", "a")+` ORDER BY t.created_at, t.id`,
 		agentID)
-	if err != nil {
-		return nil, err
-	}
-	return scanTasks(rows)
 }
 
 // UpdateTask edits a task.

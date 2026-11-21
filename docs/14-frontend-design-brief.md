@@ -44,18 +44,22 @@ runs code on real machines, so destructive/AI actions must feel deliberate.
 - Quick "Ask the AI" input that opens the chat with the typed prompt.
 
 ### 4.2 Devices
-- Table: hostname, OS (icon), arch, status pill, last seen.
+- Table: hostname, OS (icon), arch, status pill, last seen. Optional columns
+  (the **Columns** picker, remembered per browser) include the logged-in user,
+  client, site, department, tags and **Last boot**; Last boot starts hidden.
 - Filters: OS, status, group, tags. Search by hostname.
 - Row click → **Device detail** drawer/page:
   - Header: hostname, OS, status, last seen; **Remote** button (provider dropdown:
     native / terminal / meshcentral) → calls remote API, then opens the returned
     `connect_url` (`terminal` is an elevated shell requiring `devices.terminal` — see
     [`08-remote-access.md`](08-remote-access.md)).
-  - Tabs: **Inventory** (pretty-print the JSON), **Jobs** (this device's history),
+  - Tabs: **Inventory** (pretty-print the JSON), **Jobs** (this device's history;
+    a row expands in place to show the job's output, with **Open in Jobs** for the rest),
     **Checks** and **Tasks** (what monitors and runs on this machine — its own and
     those its policies bring — with state and last run; `GET /api/devices/{id}/checks`
     and `/tasks`), **Patches**, **Run script** (manual: shell selector + editor →
-    creates an approval-gated job), **Notes**.
+    creates an approval-gated job; **From library** is a searchable picker grouped
+    by category), **Notes**.
 
 ### 4.3 Jobs & Approval queue  ⭐ (the safety-critical screen)
 - Two views: **Awaiting approval** (default, prominent) and **All jobs**.

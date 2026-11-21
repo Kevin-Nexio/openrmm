@@ -5,6 +5,7 @@ import (
 	"encoding/json"
 	"errors"
 	"fmt"
+	"sort"
 	"strings"
 	"time"
 
@@ -131,12 +132,39 @@ const alertStillInLiveScopeSQL = `NOT EXISTS (
     )
 )`
 
-// agentSQL is a fixed SQL expression supplied by this file, never request data.
+// suppressionProvenanceSQL is true when silence s may apply to the device
+// agentSQL: a device-scoped silence while the device keeps the scope it had,
+// and a check-scoped one everywhere the check reaches when it was made with a
+// policy attachment (covers_policy_reach), otherwise only on the devices it
+// recorded, while each keeps its scope. agentSQL is a fixed SQL expression
+// supplied by this file, never request data.
 func suppressionProvenanceSQL(agentSQL string) string {
 	return `(s.scope_type NOT IN ('agent','check') OR
-        (s.scope_type='check' AND EXISTS (SELECT 1 FROM checks c WHERE c.id=s.scope_id AND c.policy_id IS NOT NULL)) OR
-        EXISTS (SELECT 1 FROM agents provenance_agent WHERE provenance_agent.id=` + agentSQL + `
-            AND provenance_agent.monitoring_scope_since=s.agent_monitoring_scope_since))`
+        (s.scope_type='agent' AND EXISTS (SELECT 1 FROM agents provenance_agent WHERE provenance_agent.id=` + agentSQL + `
+            AND provenance_agent.monitoring_scope_since=s.agent_monitoring_scope_since)) OR
+        (s.scope_type='check' AND (s.covers_policy_reach OR EXISTS (SELECT 1 FROM alert_suppression_agents sa
+            JOIN agents provenance_agent ON provenance_agent.id=sa.agent_id
+            WHERE sa.suppression_id=s.id AND sa.agent_id=` + agentSQL + `
+              AND provenance_agent.monitoring_scope_since=sa.monitoring_scope_since))))`
+}
+
+// suppressionListProvenanceSQL is suppressionProvenanceSQL for listing, where
+// no one device is given: a silence is still in force while its device, or one
+// of the devices it recorded, keeps its scope.
+const suppressionListProvenanceSQL = `(s.scope_type NOT IN ('agent','check') OR
+        (s.scope_type='agent' AND EXISTS (SELECT 1 FROM agents provenance_agent WHERE provenance_agent.id=s.scope_id
+            AND provenance_agent.monitoring_scope_since=s.agent_monitoring_scope_since)) OR
+        (s.scope_type='check' AND (s.covers_policy_reach OR EXISTS (SELECT 1 FROM alert_suppression_agents sa
+            JOIN agents provenance_agent ON provenance_agent.id=sa.agent_id
+            WHERE sa.suppression_id=s.id AND provenance_agent.monitoring_scope_since=sa.monitoring_scope_since))))`
+
+// policySuppressionReachesSQL is true when policy silence s covers check
+// checkSQL on device agentSQL: the check is attached to the policy and the
+// policy reaches the device. A check shared with another policy stays loud on
+// the devices only that other policy reaches. Fixed SQL from this file.
+func policySuppressionReachesSQL(checkSQL, agentSQL string) string {
+	return `(EXISTS (SELECT 1 FROM check_attachments sca WHERE sca.check_id=` + checkSQL + ` AND sca.policy_id=s.scope_id)
+		AND EXISTS (SELECT 1 FROM agents spd WHERE spd.id=` + agentSQL + ` AND s.scope_id IN ` + policiesReachingSQL("spd") + `))`
 }
 
 var suppressionMatchesAlertSQL = alertStillInLiveScopeSQL + ` AND ` + suppressionProvenanceSQL("al.agent_snapshot_id") + ` AND (
@@ -145,9 +173,7 @@ var suppressionMatchesAlertSQL = alertStillInLiveScopeSQL + ` AND ` + suppressio
 	(s.scope_type='client' AND s.scope_id=al.client_id) OR
 	(s.scope_type='group' AND s.scope_id=al.group_id) OR
 	(s.scope_type='check' AND s.scope_id=COALESCE(al.rule_id, CASE WHEN al.source_type='check' THEN al.source_id END)) OR
-	(s.scope_type='policy' AND EXISTS (
-		SELECT 1 FROM checks c WHERE c.id=COALESCE(al.rule_id, CASE WHEN al.source_type='check' THEN al.source_id END) AND c.policy_id=s.scope_id
-	))
+	(s.scope_type='policy' AND ` + policySuppressionReachesSQL("COALESCE(al.rule_id, CASE WHEN al.source_type='check' THEN al.source_id END)", "al.agent_snapshot_id") + `)
 )`
 
 func findActiveSuppression(ctx context.Context, tx pgx.Tx, obs AlertObservation, siteID, clientID, groupID *string, now time.Time) (*activeSuppression, error) {
@@ -163,9 +189,7 @@ func findActiveSuppression(ctx context.Context, tx pgx.Tx, obs AlertObservation,
 			(s.scope_type='client' AND s.scope_id=$3) OR
 			(s.scope_type='group' AND s.scope_id=$4) OR
 			(s.scope_type='check' AND s.scope_id=COALESCE($8::uuid, CASE WHEN $5='check' THEN $6::uuid END)) OR
-			(s.scope_type='policy' AND s.scope_id=(
-				SELECT policy_id FROM checks WHERE id=COALESCE($8::uuid, CASE WHEN $5='check' THEN $6::uuid END)
-			))
+			(s.scope_type='policy' AND `+policySuppressionReachesSQL("COALESCE($8::uuid, CASE WHEN $5='check' THEN $6::uuid END)", "$1::uuid")+`)
 		  )
 		ORDER BY ends_at DESC LIMIT 1`, obs.AgentID, siteID, clientID, groupID,
 		obs.SourceType, obs.SourceID, now, obs.RuleID).Scan(&sup.Until, &sup.Reason, &sup.Actor)
@@ -865,20 +889,41 @@ func (s *Store) TransitionAlert(ctx context.Context, id string, action AlertActi
 	return updated, nil
 }
 
-// SuppressionAgentSnapshot is captured before API scope authorization, then
-// validated under lock at insertion. A move between those steps invalidates it.
-func (s *Store) SuppressionAgentSnapshot(ctx context.Context, sup *models.AlertSuppression) (*models.Agent, error) {
-	if sup.ScopeType == models.ScopeAgent {
-		return s.GetAgent(ctx, sup.ScopeID)
-	}
-	if sup.ScopeType == "check" {
+// SuppressionSnapshot is captured before API scope authorization and stored
+// as captured: the devices a device- or check-scoped silence covers, each
+// with its monitoring scope, and whether a check had a policy attachment. A
+// move between capture and insertion invalidates it (ErrConflict), and an
+// attachment added in between is not covered. Nil for other scopes.
+func (s *Store) SuppressionSnapshot(ctx context.Context, sup *models.AlertSuppression) (*models.SuppressionSnapshot, error) {
+	snap := &models.SuppressionSnapshot{Agents: map[string]time.Time{}, Hostnames: map[string]string{}}
+	switch sup.ScopeType {
+	case models.ScopeAgent:
+		a, err := s.GetAgent(ctx, sup.ScopeID)
+		if err != nil {
+			return nil, err
+		}
+		snap.Agents[a.ID], snap.Hostnames[a.ID] = a.MonitoringScopeSince, a.Hostname
+		return snap, nil
+	case "check":
 		check, err := s.GetCheck(ctx, sup.ScopeID)
 		if err != nil {
 			return nil, err
 		}
-		if check.AgentID != nil {
-			return s.GetAgent(ctx, *check.AgentID)
+		for _, att := range check.Attachments {
+			if att.PolicyID != nil {
+				snap.CoversPolicyReach = true
+				continue
+			}
+			a, err := s.GetAgent(ctx, *att.AgentID)
+			if errors.Is(err, ErrNotFound) {
+				continue
+			}
+			if err != nil {
+				return nil, err
+			}
+			snap.Agents[a.ID], snap.Hostnames[a.ID] = a.MonitoringScopeSince, a.Hostname
 		}
+		return snap, nil
 	}
 	return nil, nil
 }
@@ -890,30 +935,64 @@ func (s *Store) CreateAlertSuppression(ctx context.Context, sup *models.AlertSup
 	if sup.StartsAt.IsZero() {
 		sup.StartsAt = time.Now()
 	}
-	snapshot, err := s.SuppressionAgentSnapshot(ctx, sup)
-	if err != nil {
-		return err
+	// The snapshot the caller authorized wins: a device attached, or a policy
+	// attachment added, after the API captured it was never authorized.
+	snapshot := sup.Snapshot
+	if snapshot == nil {
+		var err error
+		if snapshot, err = s.SuppressionSnapshot(ctx, sup); err != nil {
+			return err
+		}
+		// A caller that authorized one device's scope (MonitoringScopeSince)
+		// holds it to that scope: a move since then is a conflict, not a
+		// fresh snapshot.
+		if snapshot != nil && sup.MonitoringScopeSince != nil && len(snapshot.Agents) == 1 {
+			for id := range snapshot.Agents {
+				snapshot.Agents[id] = *sup.MonitoringScopeSince
+			}
+		}
 	}
 	tx, err := s.pool.Begin(ctx)
 	if err != nil {
 		return err
 	}
 	defer func() { _ = tx.Rollback(ctx) }()
+	coversPolicyReach := false
 	if snapshot != nil {
-		if sup.MonitoringScopeSince == nil {
-			sup.MonitoringScopeSince = &snapshot.MonitoringScopeSince
+		coversPolicyReach = sup.ScopeType == "check" && snapshot.CoversPolicyReach
+		ids := make([]string, 0, len(snapshot.Agents))
+		for id := range snapshot.Agents {
+			ids = append(ids, id)
 		}
-		if err := retireMovedAgentAlerts(ctx, tx, &snapshot.ID, time.Now(), sup.MonitoringScopeSince); err != nil {
-			return err
+		sort.Strings(ids) // a fixed lock order across concurrent creations
+		for _, id := range ids {
+			since := snapshot.Agents[id]
+			agentID := id
+			if err := retireMovedAgentAlerts(ctx, tx, &agentID, time.Now(), &since); err != nil {
+				return err
+			}
+		}
+		if sup.ScopeType == models.ScopeAgent {
+			if since, ok := snapshot.Agents[sup.ScopeID]; ok {
+				sup.MonitoringScopeSince = &since
+			}
 		}
 	}
 	err = tx.QueryRow(ctx, `INSERT INTO alert_suppressions
-		(id, kind, scope_type, scope_id, starts_at, ends_at, reason, created_by, agent_monitoring_scope_since)
-		VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9)
+		(id, kind, scope_type, scope_id, starts_at, ends_at, reason, created_by, agent_monitoring_scope_since, covers_policy_reach)
+		VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10)
 		RETURNING created_at`, sup.ID, sup.Kind, sup.ScopeType, sup.ScopeID,
-		sup.StartsAt, sup.EndsAt, sup.Reason, sup.CreatedBy, sup.MonitoringScopeSince).Scan(&sup.CreatedAt)
+		sup.StartsAt, sup.EndsAt, sup.Reason, sup.CreatedBy, sup.MonitoringScopeSince, coversPolicyReach).Scan(&sup.CreatedAt)
 	if err != nil {
 		return err
+	}
+	if snapshot != nil && sup.ScopeType == "check" {
+		for id, since := range snapshot.Agents {
+			if _, err := tx.Exec(ctx, `INSERT INTO alert_suppression_agents (suppression_id, agent_id, monitoring_scope_since) VALUES ($1,$2,$3)`,
+				sup.ID, id, since); err != nil {
+				return err
+			}
+		}
 	}
 	if err := tx.Commit(ctx); err != nil {
 		return err
@@ -937,7 +1016,8 @@ func suppressionAlertPredicate(scopeType string) string {
 	case "check":
 		return "COALESCE(al.rule_id, CASE WHEN al.source_type='check' THEN al.source_id END)=$1"
 	case "policy":
-		return "COALESCE(al.rule_id, CASE WHEN al.source_type='check' THEN al.source_id END) IN (SELECT id FROM checks WHERE policy_id=$1)"
+		return "COALESCE(al.rule_id, CASE WHEN al.source_type='check' THEN al.source_id END) IN (SELECT check_id FROM check_attachments WHERE policy_id=$1)" +
+			" AND EXISTS (SELECT 1 FROM agents spd WHERE spd.id=al.agent_snapshot_id AND $1::uuid IN " + policiesReachingSQL("spd") + ")"
 	default:
 		return "false"
 	}
@@ -982,7 +1062,7 @@ func (s *Store) ListAlertSuppressions(ctx context.Context, userID string, scoped
 		s.canceled_at, s.canceled_by
 		FROM alert_suppressions s
 		WHERE (NOT $3 OR (s.canceled_at IS NULL AND s.ends_at > now()))
-        AND (NOT $2 OR `+suppressionProvenanceSQL("CASE WHEN s.scope_type='agent' THEN s.scope_id ELSE (SELECT agent_id FROM checks WHERE id=s.scope_id) END")+`)
+        AND (NOT $2 OR `+suppressionListProvenanceSQL+`)
 		AND (NOT $2 OR EXISTS (
 			SELECT 1 FROM agents a
 			LEFT JOIN sites si ON si.id=a.site_id
@@ -992,9 +1072,9 @@ func (s *Store) ListAlertSuppressions(ctx context.Context, userID string, scoped
 				(s.scope_type='client' AND s.scope_id=si.client_id) OR
 				(s.scope_type='group' AND s.scope_id=a.group_id) OR
 				(s.scope_type='check' AND EXISTS (
-					SELECT 1 FROM checks c WHERE c.id=s.scope_id AND (
-						c.agent_id=a.id OR (c.policy_id IS NOT NULL AND EXISTS (
-							SELECT 1 FROM policy_assignments pa WHERE pa.policy_id=c.policy_id AND (
+					SELECT 1 FROM check_attachments ca WHERE ca.check_id=s.scope_id AND (
+						ca.agent_id=a.id OR (ca.policy_id IS NOT NULL AND EXISTS (
+							SELECT 1 FROM policy_assignments pa WHERE pa.policy_id=ca.policy_id AND (
 								(pa.scope_type='agent' AND pa.scope_id=a.id) OR
 								(pa.scope_type='group' AND pa.scope_id=a.group_id) OR
 								(pa.scope_type='site' AND pa.scope_id=a.site_id) OR
@@ -1178,9 +1258,7 @@ func (s *Store) ResolveInapplicableCheckAlerts(ctx context.Context, now time.Tim
 			SELECT 1 FROM checks c
 			JOIN agents a ON a.id=al.agent_id AND a.revoked_at IS NULL
 			LEFT JOIN sites si ON si.id=a.site_id
-			WHERE c.id=al.source_id AND c.enabled AND NOT (c.type=ANY($2::text[])) AND `+serviceCheckPlatformSQL+` AND (
-				c.agent_id=a.id OR c.policy_id IN `+policiesReachingSQL("a")+`
-			)
+			WHERE c.id=al.source_id AND c.enabled AND NOT (c.type=ANY($2::text[])) AND `+serviceCheckPlatformSQL+` AND `+checkReachesSQL("c", "a")+`
 		)
 		RETURNING `+alertCols, now, models.ServerRuleTypes)
 	if err != nil {

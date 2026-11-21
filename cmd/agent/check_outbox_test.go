@@ -6,6 +6,7 @@ import (
 	"path/filepath"
 	"reflect"
 	"runtime"
+	"strings"
 	"testing"
 	"time"
 
@@ -144,5 +145,31 @@ func TestDuplicateRunCheckResendsStoredResultWithoutExecution(t *testing.T) {
 	got := decodeQueuedCheckResult(t, <-a.send)
 	if !reflect.DeepEqual(got, stored) {
 		t.Fatalf("duplicate dispatch returned %#v, want stored %#v", got, stored)
+	}
+}
+
+// A run stopped at the check's timeout says so, so the server can apply the
+// check's timeout policy; a run that simply fails does not.
+func TestRunCheckReportsItsOwnTimeout(t *testing.T) {
+	if runtime.GOOS == "windows" {
+		t.Skip("uses bash")
+	}
+	run := func(script string) protocol.CheckResultMsg {
+		t.Helper()
+		a := &agent{send: make(chan []byte, 2)}
+		config, _ := json.Marshal(map[string]string{"shell": "bash", "script": script})
+		a.runCheck(protocol.RunCheckMsg{CheckID: "check-1", Type: "script", Config: config, TimeoutSec: 5})
+		return decodeQueuedCheckResult(t, <-a.send)
+	}
+	started := time.Now()
+	got := run("exec sleep 30")
+	if !got.TimedOut || got.Success || !strings.Contains(got.Output, "Stopped at the check's 5s timeout.") {
+		t.Fatalf("stopped run = %#v", got)
+	}
+	if elapsed := time.Since(started); elapsed > 20*time.Second {
+		t.Fatalf("the stopped run took %s", elapsed)
+	}
+	if got = run("exit 1"); got.TimedOut || got.Success {
+		t.Fatalf("a plain failure = %#v, want no timeout", got)
 	}
 }

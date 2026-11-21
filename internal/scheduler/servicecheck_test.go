@@ -42,7 +42,7 @@ func TestPlatformServiceCheckDispatchVersionGateIntegration(t *testing.T) {
 		if err != nil {
 			t.Fatal(err)
 		}
-		c, err := st.CreateCheck(ctx, &models.Check{AgentID: &a.ID, Type: models.CheckLinuxService, Name: "sshd", Config: json.RawMessage(`{"service":"sshd.service"}`), Enabled: true, IntervalSec: 300, TimeoutSec: 30, FailureCount: 2, RecoveryCount: 2})
+		c, err := st.CreateCheck(ctx, &models.Check{Attachments: models.OnAgent(&a.ID), Type: models.CheckLinuxService, Name: "sshd", Config: json.RawMessage(`{"service":"sshd.service"}`), Enabled: true, IntervalSec: 300, TimeoutSec: 30, FailureCount: 2, RecoveryCount: 2})
 		if err != nil {
 			t.Fatal(err)
 		}
