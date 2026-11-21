@@ -1456,7 +1456,16 @@ func doPing(ctx context.Context, host string) (bool, string) {
 		cmd = exec.CommandContext(ctx, "ping", "-c", "1", "-W", "3", host)
 	}
 	out, err := cmd.CombinedOutput()
-	return err == nil, string(out)
+	return pingResult(out, err, consoleCodePage())
+}
+
+// pingResult reads what ping printed. On Windows ping.exe writes in its
+// console's OEM page, like cmd: a pt-BR install prints "Estatísticas do Ping"
+// and "número" as cp850 bytes, which reached the console as "Estat?sticas"
+// until they were decoded here. Elsewhere the output is UTF-8 and passes
+// through unchanged.
+func pingResult(out []byte, err error, cp int) (bool, string) {
+	return err == nil, decodeOutputCP(out, cp)
 }
 
 func winServiceRunning(ctx context.Context, name string) (bool, string) {
@@ -1467,8 +1476,15 @@ func winServiceRunning(ctx context.Context, name string) (bool, string) {
 		return false, "no service configured"
 	}
 	out, _ := exec.CommandContext(ctx, "sc", "query", name).CombinedOutput()
-	running := strings.Contains(string(out), "RUNNING")
-	return running, string(out)
+	return serviceQueryResult(out, consoleCodePage())
+}
+
+// serviceQueryResult reads what sc query printed, in the console's OEM page
+// like ping's ("NOME_DO_SERVIÇO", "O serviço especificado não existe" on a
+// pt-BR install). The state keyword stays English in every language.
+func serviceQueryResult(out []byte, cp int) (bool, string) {
+	text := decodeOutputCP(out, cp)
+	return strings.Contains(text, "RUNNING"), text
 }
 
 // ---------- inventory ----------

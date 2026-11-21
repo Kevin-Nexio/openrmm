@@ -91,6 +91,12 @@ tag.
 
 ### Fixed
 
+- **Ping and Windows service checks keep accented characters.** On Windows,
+  `ping` and `sc query` write in the console's OEM code page. The agent sent
+  those bytes undecoded, so accented characters showed as "?". The agent now
+  decodes them as it already did for cmd and PowerShell scripts. Linux and
+  macOS output, already UTF-8, is unchanged. Needs the agent update; results
+  stored before it keep the "?".
 - **A check timeout counts as one failure.** The server deadline was exactly
   `timeout_sec`, while the agent starts its own timer only when the order
   arrives. The server recorded the timeout, then counted the agent's late
