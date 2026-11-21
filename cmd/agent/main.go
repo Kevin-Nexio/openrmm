@@ -1227,6 +1227,13 @@ func runScriptCtxEnv(ctx context.Context, shell, script string, extraEnv []strin
 	return runScriptCtxEnvSecrets(ctx, shell, script, extraEnv, nil)
 }
 
+// scriptOutputWait is how long a script's output may stay open once the script
+// has exited or been stopped: something it left running in the background can
+// hold it. Past that the run ends with the output read so far.
+const scriptOutputWait = 5 * time.Second
+
+const scriptOutputHeldNote = "A process the script left running in the background kept its output open; output after the script exited is not included."
+
 func runScriptCtxEnvSecrets(ctx context.Context, shell, script string, extraEnv, secretValues []string) (int, string, string) {
 	var cmd *exec.Cmd
 	switch shell {
@@ -1277,20 +1284,21 @@ func runScriptCtxEnvSecrets(ctx context.Context, shell, script string, extraEnv,
 		}
 		cmd.Env = append(cmd.Env, extraEnv...)
 	}
-	if runtime.GOOS == "windows" {
-		// Default ctx-cancel only kills the direct child; kill the tree instead.
-		cmd.Cancel = func() error {
-			if cmd.Process != nil {
-				_ = exec.Command("taskkill", "/F", "/T", "/PID", strconv.Itoa(cmd.Process.Pid)).Run()
-			}
-			return nil
-		}
-	}
+	killTreeOnCancel(cmd)
+	// A process the script leaves in the background can hold its output open
+	// after the script itself has exited. Stop waiting for it shortly after.
+	cmd.WaitDelay = scriptOutputWait
 	var stdout, stderr bytes.Buffer
 	cmd.Stdout = &stdout
 	cmd.Stderr = &stderr
 	err := cmd.Run()
 	exitCode := 0
+	if errors.Is(err, exec.ErrWaitDelay) {
+		// The script exited successfully; only its output was still held open.
+		// Its exit status stands, and the note says why the output may be cut.
+		err = nil
+		stderr.WriteString("\n" + scriptOutputHeldNote)
+	}
 	if err != nil {
 		if ee, ok := err.(*exec.ExitError); ok {
 			exitCode = ee.ExitCode()
