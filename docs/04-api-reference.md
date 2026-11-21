@@ -116,7 +116,7 @@ the caller's authority.
 
 | Method | Path | Permission | Description |
 |--------|------|------------|-------------|
-| GET | `/api/devices` | `devices.view` | List all agents → `{ "devices": [...] }`. Each device has `logged_in_user` (the interactive user its agent last reported, `""` when no one is logged in) and `logged_in_user_since`, plus `last_logged_in_user` (the last user seen, kept after they log off) and `last_logged_in_user_at` |
+| GET | `/api/devices` | `devices.view` | List all agents → `{ "devices": [...] }`. Each device has `logged_in_user` (the interactive user its agent last reported, `""` when no one is logged in) and `logged_in_user_since`, plus `last_logged_in_user` (the last user seen, kept after they log off) and `last_logged_in_user_at`, and `last_boot_at` (when the device last booted, from the uptime in its latest inventory; absent until the first one) |
 | GET | `/api/devices/{id}` | `devices.view` | One agent |
 | GET | `/api/devices/{id}/inventory` | `devices.view` | Latest inventory snapshot |
 | GET | `/api/devices/{id}/remote-capabilities` | `devices.view` | On-demand conservative native-desktop capability preflight |
@@ -187,6 +187,21 @@ remains approval-gated. AI proposal tools never use this bypass.
 { "agent_ids": ["..."], "site_id": "...", "group_id": "...",
   "shell": "bash", "script": "...", "description": "..." }
 ```
+or, to deploy a saved library script:
+```json
+{ "agent_ids": ["..."], "script_id": "...", "params": { "site": "hq" }, "description": "..." }
+```
+A library script runs **by id** on every device, as **Run script ▸ From
+library** does on one: `params` take values only from the script's declared
+parameters, and its script variables go with it, resolved for each device (its
+own value, its department's, site's, client's or the global one) when its batch
+is approved and sent. `description` defaults to `library: <name>`. Send either
+`script` or `script_id`, not both; `params` need a `script_id`. A proposal
+awaiting review answers 409. Every device is checked first, and the whole
+request is refused (400), naming the devices, if any of them could not run it: a
+variable with no value for that device, or an agent too old for the shell, the
+parameters or the variables.
+
 Targets are the **union** of `agent_ids` + a `site_id` + a `group_id`
 (department), intersected with the caller's access scope. The targets are then
 **split by company** — a deployment never spans companies — into **one
@@ -450,9 +465,13 @@ Two profiles; details in [20-email-notifications](20-email-notifications.md).
 
 | Method | Path | Permission | Description |
 |--------|------|------------|-------------|
-| GET | `/api/checks?agent_id=&policy_id=` | `checks.view` | List checks |
-| POST | `/api/checks` | `checks.manage` | Create (`type,name,config,warn_threshold,err_threshold,interval_sec`, `agent_id` or `policy_id`). Flap policy is optional: `failure_count` (1–100, default 2), `recovery_count` (1–100, default 2), `hysteresis` (0–100, default 2), `cooldown_sec` (0–604800, default 300), `timeout_sec` (5–86400, default 180). `type` also takes the Linux and macOS service checks (`linuxservice`, `macservice`; agent 0.10.0) and the server alert rules (`connectivity`, `job_failure`, `patch_failure`, `reboot_pending`, `agent_outdated`), which run on the server and take the `config` described in [24-alert-rules](24-alert-rules.md) |
-| PUT | `/api/checks/{id}` | `checks.manage` | Update |
+| GET | `/api/checks?agent_id=&policy_id=` | `checks.view` | List checks attached directly to a device, attached to a policy, or all. Each check has `attachments` (`[{policy_id or agent_id, name, added_by, added_at}]`, only those the caller may see); `agent_id` / `policy_id` are set when there is exactly one |
+| POST | `/api/checks` | `checks.manage` | Create (`type,name,config,warn_threshold,err_threshold,interval_sec`, and where it applies: `attachments: [{policy_id} or {agent_id}, …]`, or the one-target shorthand `agent_id` or `policy_id`; an empty list makes it Not in use and takes an unrestricted principal). Flap policy is optional: `failure_count` (1–100, default 2), `recovery_count` (1–100, default 2), `hysteresis` (0–100, default 2), `cooldown_sec` (0–604800, default 300), `timeout_sec` (5–86400, default 180), `timeout_policy` (`count` or `ignore`, default `count`). `type` also takes the Linux and macOS service checks (`linuxservice`, `macservice`; agent 0.10.0) and the server alert rules (`connectivity`, `job_failure`, `patch_failure`, `reboot_pending`, `agent_outdated`), which run on the server and take the `config` described in [24-alert-rules](24-alert-rules.md) |
+| PUT | `/api/checks/{id}` | `checks.manage` | Update. Takes every attachment: each device in the caller's scope, and an unrestricted principal when one is a policy. A body naming other targets is a **400**: attachments change through the endpoints below |
+| GET | `/api/checks/{id}/attachments` | `checks.view` | `{attachments, devices}`: where it applies and how many devices (in the caller's scope) it reaches |
+| POST | `/api/checks/{id}/attachments` | `checks.manage` | Attach to one more `{policy_id}` or `{agent_id}`. **409** when it is already there, or when it is an AI proposal awaiting review (one attachment only) |
+| DELETE | `/api/checks/{id}/attachments/{policy\|device}/{target}` | `checks.manage` | Detach; the check stays (Not in use after its last one) |
+| POST | `/api/checks/{id}/copy` | `checks.manage` | `{policy_id}` or `{agent_id}`: a copy takes that attachment; the original keeps the rest |
 | DELETE | `/api/checks/{id}` | `checks.manage` | Delete |
 | GET | `/api/checks/{id}/results?agent_id=&limit=` | `checks.view` | Result history |
 | GET | `/api/checks/{id}/instances` | `checks.view` | Per-agent state of this check: streaks, last value/output, pending execution and its deadline |
@@ -464,11 +483,18 @@ Two profiles; details in [20-email-notifications](20-email-notifications.md).
 
 | Method | Path | Permission | Description |
 |--------|------|------------|-------------|
-| GET | `/api/tasks?agent_id=&policy_id=` | `tasks.view` | List tasks |
+| GET | `/api/tasks?agent_id=&policy_id=` | `tasks.view` | List tasks, with `attachments` as for checks |
 | GET | `/api/tasks/{id}/targets` | `tasks.view` | Count of agents a run would hit (in caller scope) |
-| POST | `/api/tasks` | `tasks.manage` | Create (`name, script_id` or `shell+script`, `schedule_kind` + `interval_sec` / `run_at_minute` / `days_of_week`+`run_at_minutes`, `timezone`, `agent_id` or `policy_id`). `timezone` is the IANA zone the times of day are in (default `UTC`); anything else, `Local` included, is a **400** |
+| POST | `/api/tasks` | `tasks.manage` | Create (`name, script_id` or `shell+script`, `schedule_kind` + `interval_sec` / `run_at_minute` / `days_of_week`+`run_at_minutes`, `timezone`, and `attachments` or the `agent_id` / `policy_id` shorthand, as for checks). `timezone` is the IANA zone the times of day are in (default `UTC`); anything else, `Local` included, is a **400** |
 | PUT | `/api/tasks/{id}` | `tasks.manage` | Update. Without `timezone`, the task keeps its zone |
-| POST | `/api/tasks/{id}/run` | `tasks.manage` | Run now on all target agents (returns `{queued}`) |
+| POST | `/api/tasks/{id}/run` | `tasks.manage` | Run now on every device it reaches through any attachment, once each, in the caller's scope (returns `{queued}`) |
+| GET | `/api/edit-proposals?kind=&status=` | the object's view permission | Edits the AI proposed (`kind`: script, check, task, policy, patch_policy; `status`: pending, applied, rejected, stale, superseded, failed), only for objects the caller may see |
+| GET | `/api/edit-proposals/{id}` | the object's view permission | `{proposal, current, proposed, stale, names}`: the object now and as the proposal would leave it |
+| POST | `/api/edit-proposals/{id}/apply` | the permission an edit by hand takes | Apply it as the caller through the console's own handlers. **409** when it is stale (the object changed), no longer pending, or a step is refused (status `failed`, the outcome names the step) |
+| POST | `/api/edit-proposals/{id}/reject` | the permission an edit by hand takes | Reject it |
+| GET, POST | `/api/tasks/{id}/attachments` | `tasks.view` / `tasks.manage` | As for checks |
+| DELETE | `/api/tasks/{id}/attachments/{policy\|device}/{target}` | `tasks.manage` | As for checks |
+| POST | `/api/tasks/{id}/copy` | `tasks.manage` | As for checks |
 | DELETE | `/api/tasks/{id}` | `tasks.manage` | Delete |
 
 ## Policies

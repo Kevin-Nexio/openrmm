@@ -218,6 +218,16 @@ func (s *Server) createScript(w http.ResponseWriter, r *http.Request) {
 }
 
 func (s *Server) updateScript(w http.ResponseWriter, r *http.Request) {
+	s.updateScriptFields(w, r, true)
+}
+
+// The proposal transaction holds the script row. Category adoption must wait
+// until commit: category rename/delete lock registry entries before scripts.
+func (s *Server) updateScriptFromProposal(w http.ResponseWriter, r *http.Request) {
+	s.updateScriptFields(w, r, false)
+}
+
+func (s *Server) updateScriptFields(w http.ResponseWriter, r *http.Request, registerCategory bool) {
 	if !s.requireUnrestricted(w, r, "the global script library") {
 		return
 	}
@@ -269,8 +279,14 @@ func (s *Server) updateScript(w http.ResponseWriter, r *http.Request) {
 		detail, _ := json.Marshal(map[string]any{"reason": "edited", "name": sc.Name})
 		_ = s.store.AddAudit(r.Context(), actorOf(r), "script.ai_release.revoked", sc.ID, detail)
 	}
-	out, _ := s.store.GetScript(r.Context(), sc.ID)
-	s.store.RegisterScriptCategory(r.Context(), out.Category)
+	out, err := s.store.GetScript(r.Context(), sc.ID)
+	if err != nil {
+		writeErr(w, httpStatusFor(err), err.Error())
+		return
+	}
+	if registerCategory {
+		s.store.RegisterScriptCategory(r.Context(), out.Category)
+	}
 	writeJSON(w, http.StatusOK, out)
 }
 

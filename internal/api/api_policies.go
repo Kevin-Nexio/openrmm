@@ -198,6 +198,20 @@ func (s *Server) reviewPolicy(w http.ResponseWriter, r *http.Request) {
 			}
 		}
 		review.Exclusions = visible
+		// A check or task the policy shares names the other policies and
+		// devices it is attached to: only those this principal may see.
+		for i := range review.Tasks {
+			if err := s.redactTask(r, &review.Tasks[i]); err != nil {
+				writeErr(w, http.StatusInternalServerError, err.Error())
+				return
+			}
+		}
+		for i := range review.Checks {
+			if err := s.redactCheck(r, &review.Checks[i]); err != nil {
+				writeErr(w, http.StatusInternalServerError, err.Error())
+				return
+			}
+		}
 		review.Fingerprint = ""
 	}
 	writeJSON(w, http.StatusOK, review)

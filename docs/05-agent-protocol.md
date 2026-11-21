@@ -42,7 +42,7 @@ available only through explicit lab mode.
 | `job_result` | `{ job_id, exit_code, stdout, stderr, success }` | finalize the job (server replies `job_result_ack`) |
 | `patch_report` | `{ os, patches:[{identifier,title,classification,kb,reboot_required,...}] }` | upsert the device's missing patches ([16](16-patch-management.md)) |
 | `patch_result` | `{ request_id, results:[{identifier,success,reboot_required,error}], reboot_required }` | record an install run |
-| `check_result` | `{ check_id, execution_id, value, output, success }` | record one check run; the server replies `check_result_ack`. `value` carries the number for threshold checks (free %, load %, exit code), `success` the verdict for boolean ones (reachable / running / exit == 0) |
+| `check_result` | `{ check_id, execution_id, value, output, success, timed_out }` | record one check run; the server replies `check_result_ack`. `value` carries the number for threshold checks (free %, load %, exit code), `success` the verdict for boolean ones (reachable / running / exit == 0). `timed_out` (agent 0.12.0) says the agent stopped the run at the check's timeout, so the check's timeout policy applies |
 | `remote_status` | (reserved) | native remote-session state |
 | `credential_rotated` | `{ rotation_id }` | confirm durable replacement storage; replacement-token reconnect commits it |
 | `credential_rotation_canceled` | `{ rotation_id }` | confirm durable restoration; re-sent until `credential_rotation_canceled_ack` arrives |

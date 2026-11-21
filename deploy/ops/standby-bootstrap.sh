@@ -65,8 +65,10 @@ docker run --rm --network "$network" --user 70:70 \
   --wal-method=stream --write-recovery-conf --slot="$SLOT" --checkpoint=fast
 
 printf 'standby seeded. Start it with:\n' >&2
-printf '  docker compose -f %s -f %s up -d postgres-standby\n' \
-  "$(basename "$COMPOSE_FILE")" "docker-compose.standby.yml" >&2
+compose_files
+start=("docker" "compose")
+for ((i = 1; i < ${#COMPOSE_ARGS[@]}; i += 2)); do start+=(-f "$(basename "${COMPOSE_ARGS[i]}")"); done
+printf '  %s -f docker-compose.standby.yml up -d postgres-standby\n' "${start[*]}" >&2
 printf 'Then confirm streaming:\n' >&2
 printf "  compose exec postgres psql -U %s -d postgres -c \"SELECT client_addr, state, replay_lag FROM pg_stat_replication\"\n" \
   "$POSTGRES_USER" >&2

@@ -16,7 +16,11 @@ adds it for you:
 Signed-off-by: Your Name <your.email@example.com>
 ```
 
-Use your real name and an address you can be reached at.
+`git commit -s` takes both from your git configuration (`user.name` and
+`user.email`). Use a name you are known by, your real name or a pseudonym you
+use consistently, and an address that reaches you. If you would rather not
+publish your own address, GitHub's no-reply one works: it is under Settings ›
+Emails on GitHub.
 
 ### 2. Sign the CLA (once)
 
@@ -26,7 +30,8 @@ to the whole codebase, which is what the [Contributor License Agreement](CLA.md)
 establishes. You keep the copyright in your work; you grant a licence broad
 enough to include relicensing.
 
-Signing takes one pull request and covers everything you contribute afterwards —
+Signing takes one pull request and covers everything you contribute afterwards.
+It needs no e-mail address, and a pseudonym is fine —
 [the instructions are at the end of the CLA](CLA.md#how-to-sign).
 
 If the CLA is a problem for you, say so in an issue before writing code. It is a

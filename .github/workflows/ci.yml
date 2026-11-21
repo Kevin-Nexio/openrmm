@@ -272,11 +272,23 @@ jobs:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
       - name: Shell syntax and lint
         run: |
-          bash -n deploy/public/install.sh deploy/public/uninstall.sh scripts/test-install-migration.sh scripts/test-backup-retention.sh
-          shellcheck -x deploy/public/install.sh deploy/public/uninstall.sh scripts/test-install-migration.sh scripts/test-backup-retention.sh deploy/ops/*.sh
+          bash -n deploy/public/install.sh deploy/public/uninstall.sh scripts/test-install-migration.sh scripts/test-backup-retention.sh scripts/test-ops-compose-files.sh scripts/test-restore.sh scripts/test-pitr-args.sh scripts/test-pitr.sh
+          shellcheck -x deploy/public/install.sh deploy/public/uninstall.sh scripts/test-install-migration.sh scripts/test-backup-retention.sh scripts/test-ops-compose-files.sh scripts/test-restore.sh scripts/test-pitr-args.sh scripts/test-pitr.sh deploy/ops/*.sh
           for script in deploy/ops/*.sh; do bash -n "$script"; done
       - name: Backup retention
         run: bash scripts/test-backup-retention.sh
+      - name: Ops scripts use the deployment's compose files
+        run: bash scripts/test-ops-compose-files.sh
+      - name: Point-in-time recovery input checks
+        run: bash scripts/test-pitr-args.sh
+      # Throwaway PostgreSQL projects. Restore: backup, verify and restore with
+      # layered compose files, as a QUICKSTART install has them. PITR: recovery
+      # to a time, a refused recovery that changes nothing, leftover recovery
+      # settings, timelines, broken archiving, quiet logging.
+      - name: Backup and restore
+        run: bash scripts/test-restore.sh
+      - name: Point-in-time recovery
+        run: bash scripts/test-pitr.sh
       # Installs into the runner's real system paths, which is why it only runs
       # on a throwaway machine. It covers the installer's transaction, the
       # directory-ownership refusal and uninstall.sh; the agent is a stand-in,

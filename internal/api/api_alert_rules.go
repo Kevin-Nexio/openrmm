@@ -118,23 +118,10 @@ func (s *Server) notificationRuleChoices(r *http.Request) ([]notificationRuleCho
 	if err != nil {
 		return nil, err
 	}
-	visible, scoped, err := s.scopedAgentSet(r)
-	if err != nil {
-		return nil, err
-	}
-	policies := map[string]bool{}
 	for _, c := range checks {
-		allowed := !scoped || inScope(visible, c.AgentID)
-		if !allowed && c.PolicyID != nil {
-			var known bool
-			allowed, known = policies[*c.PolicyID]
-			if !known {
-				allowed, err = s.store.PolicyAllowedForUser(r.Context(), s.scopeUserID(r), *c.PolicyID)
-				if err != nil {
-					return nil, err
-				}
-				policies[*c.PolicyID] = allowed
-			}
+		allowed, _, err := s.attachmentAccess(r, c.Attachments)
+		if err != nil {
+			return nil, err
 		}
 		if allowed {
 			out = append(out, notificationRuleChoice{ID: c.ID, Name: c.Name, Type: c.Type})

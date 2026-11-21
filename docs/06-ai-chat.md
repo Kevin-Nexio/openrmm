@@ -85,6 +85,9 @@ server (`11-mcp`).
 | `propose_library_script` | `scripts.manage` | **write (gated)** | A library script awaiting review: it cannot run, be scheduled or be released until approved. Unrestricted admins only |
 | `propose_move_devices` | `clients.manage` | **write (gated)** | Propose moving up to 500 devices to a site (and optional department). Changes nothing until a person approves it under Devices ▸ Pending operations |
 | `propose_delete_devices` | `devices.delete` | **write (gated)** | Propose deleting up to 500 devices. The approver must type the device count |
+| `list_scripts` | `scripts.view` | read | Library scripts: id, name, category, shell, parameters and variable names, review state. No body |
+| `get_editable_object` | the object's view permission | read | What an edit proposal can change of a script, check, task, policy or patch policy: its editable fields, where a check or task applies, a policy's assignments and excluded devices, with names. Scope-filtered |
+| `propose_script_edit` / `propose_check_edit` / `propose_task_edit` / `propose_policy_edit` / `propose_patch_policy_edit` | `scripts.manage` / `checks.manage` / `tasks.manage` / `policies.manage` / `patches.policies.manage` | **write (gated)** | Propose an edit to an existing object (fields, a check's or task's attachments, a policy's assignments and exclusions). **Nothing changes** until a person applies it in the object's screen; see [Edits proposed by the AI](#edits-proposed-by-the-ai). Scripts and policies: unrestricted admins only |
 
 ### Configuration is proposed too, and here is why
 
@@ -129,6 +132,49 @@ Configuration is not created enabled even for an unrestricted administrator. The
 model reads inventory, hostnames and alert text — data that comes from the
 monitored machines. "An admin asked" is not evidence that an admin *authored* the
 request, so the gate does not depend on who is asking.
+
+### Edits proposed by the AI
+
+The assistant may also propose an **edit** to an existing library script,
+check, task, policy or patch policy (`propose_*_edit`). An edit proposal is a
+row in `edit_proposals`; the object does not change.
+
+- **Bound to what it saw.** The proposal records a hash of the object as the
+  assistant read it (`get_editable_object`). Applying locks the current object
+  and its links before comparing the hash. If the current editable state has
+  changed, the proposal is **stale** and the assistant has to propose again.
+  A new proposal supersedes the previous pending one unless a decision is in
+  progress.
+- **Checked when proposed.** An edit that changes fields is validated as the
+  object would be after it, with the same rules as a manual edit (a check's
+  interval and thresholds, a task's schedule, a patch policy's window and
+  reboot, a script's parameters). An invalid value is refused at once and
+  nothing is proposed, so the assistant can correct it. What needs the
+  database, such as a script's variables, is checked again when applied.
+- **Reviewed where the object lives.** Scripts, Checks, Scheduled tasks,
+  Policies and Patches ▸ Policies list the edits waiting for them. The review
+  shows each changed field before and after, and the attachments, assignments
+  and exclusions added or removed, with names.
+- **Decided as the person.** Applying or rejecting requires management
+  permission over the whole object. The server accepts one decision at a
+  time. Applying uses the same validation as a manual edit. Its changes,
+  status and audit entry commit together. If a step is refused, all changes
+  are rolled back and the failure identifies that step. If the transaction
+  is interrupted, its locks are released on rollback and the proposal stays
+  pending.
+- **Never autonomous.** No autonomy setting applies an edit. A policy can be
+  switched off by an edit, but switched on only through its activation review.
+- **Never on a proposal awaiting review.** An object the AI proposed and nobody
+  has reviewed yet cannot be edited this way. Switching such a check or task on
+  through an edit would approve it while the review showed only the changed
+  fields, not the script it runs; it is reviewed on its own screen instead.
+  Run now also requires that a proposed task has been reviewed.
+- **What a restricted user sees.** Only proposals for checks, tasks and scripts,
+  with the devices and policies outside their scope left out. Detailed
+  decision outcomes are shown to unrestricted readers. Policy and patch
+  policy proposals are for unrestricted administrators. Reading a policy
+  through `get_editable_object` returns only the assignments and device
+  exclusions visible to the caller.
 
 ### Why the write tools only *propose*
 

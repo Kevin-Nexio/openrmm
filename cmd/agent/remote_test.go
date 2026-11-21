@@ -1,11 +1,16 @@
 package main
 
-import "testing"
+import (
+	"testing"
+
+	"github.com/p1ngu/rmm/internal/protocol"
+)
 
 func TestRelayURL(t *testing.T) {
 	cases := []struct{ ws, want string }{
-		{"ws://192.168.0.40:3000/ws/agent", "ws://192.168.0.40:3000/ws/remote?session=session-id&role=agent"},
-		{"wss://rmm.example.com/ws/agent", "wss://rmm.example.com/ws/remote?session=session-id&role=agent"},
+		{"ws://192.168.0.40:3000/ws/agent", "ws://192.168.0.40:3000/ws/remote?role=agent&session=session-id"},
+		{"wss://rmm.example.com/ws/agent?mode=test#setup", "wss://rmm.example.com/ws/remote?role=agent&session=session-id"},
+		{"ws://[::1]:3000/ws/agent", "ws://[::1]:3000/ws/remote?role=agent&session=session-id"},
 	}
 	for _, c := range cases {
 		a := &agent{wsURL: c.ws}
@@ -19,6 +24,39 @@ func TestLegacyRelayURL(t *testing.T) {
 	a := &agent{wsURL: "wss://rmm.example.com/ws/agent"}
 	if got, want := a.legacyRelayURL("ticket"), "wss://rmm.example.com/ws/remote?role=agent&token=ticket"; got != want {
 		t.Fatalf("legacyRelayURL() = %q, want %q", got, want)
+	}
+}
+
+func TestRelayForStartUsesTheConfiguredRoute(t *testing.T) {
+	a := &agent{wsURL: "wss://rmm.example.test:9443/ws/agent"}
+	rs := protocol.RemoteStartMsg{
+		SessionID: "s",
+		Token:     "legacy+t",
+		RelayURL:  "wss://rmm.example.test:9443/another-view",
+	}
+	relay, ticket := a.relayForStart(rs)
+	want := "wss://rmm.example.test:9443/ws/remote?role=agent&token=legacy%2Bt"
+	if relay != want || ticket != "" {
+		t.Fatalf("legacy start = (%q, %q), want (%q, \"\")", relay, ticket, want)
+	}
+}
+
+func TestRelayForStartPrefersTheAgentTicket(t *testing.T) {
+	a := &agent{wsURL: "wss://rmm.example.test/ws/agent"}
+	rs := protocol.RemoteStartMsg{SessionID: "s&1", AgentTicket: "agent-ticket", Token: "legacy-ticket"}
+	relay, ticket := a.relayForStart(rs)
+	want := "wss://rmm.example.test/ws/remote?role=agent&session=s%261"
+	if relay != want || ticket != rs.AgentTicket {
+		t.Fatalf("ticketed start = (%q, %q), want (%q, %q)", relay, ticket, want, rs.AgentTicket)
+	}
+}
+
+func TestRelayForStartRejectsInvalidConfiguredOrigins(t *testing.T) {
+	for _, origin := range []string{"", "/ws/agent", "https://rmm.example.test/ws/agent", "wss://user@rmm.example.test/ws/agent", "ws://:3000/ws/agent", "wss://example.test/%"} {
+		a := &agent{wsURL: origin}
+		if relay, _ := a.relayForStart(protocol.RemoteStartMsg{SessionID: "s"}); relay != "" {
+			t.Errorf("relay with configured address %q = %q, want empty", origin, relay)
+		}
 	}
 }
 

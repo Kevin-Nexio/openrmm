@@ -213,8 +213,8 @@ type RemoteStartMsg struct {
 	// Token is a temporary compatibility field for agents released before the
 	// session-ticket handshake. New agents must use AgentTicket instead.
 	Token string `json:"token,omitempty"`
-	// RelayURL is accepted only from pre-ticket servers during a rolling upgrade.
-	// Current agents derive the relay from their configured control origin.
+	// RelayURL is retained for wire compatibility with pre-ticket releases.
+	// Agents derive the relay from their configured control origin.
 	RelayURL   string `json:"relay_url,omitempty"`
 	Kind       string `json:"kind,omitempty"`
 	AllowFiles *bool  `json:"allow_files,omitempty"`
@@ -278,6 +278,10 @@ type CheckResultMsg struct {
 	Value       *float64 `json:"value,omitempty"` // numeric checks: free %, load %, or exit code
 	Output      string   `json:"output"`
 	Success     bool     `json:"success"` // boolean checks: reachable / running / exit==0
+	// TimedOut says the agent stopped this run at the check's timeout. The
+	// server then applies the check's timeout policy to it, as it does to a
+	// timeout it records itself. Agents before 0.12.0 never set it.
+	TimedOut bool `json:"timed_out,omitempty"`
 }
 
 type CheckResultAckMsg struct {

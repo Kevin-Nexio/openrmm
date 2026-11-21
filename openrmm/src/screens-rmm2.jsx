@@ -22,6 +22,7 @@ function ScriptsScreen() {
           <Button variant="ghost" icon="grid" onClick={() => setManaging(true)}>{t('scripts.categories')}</Button>
           <Button variant="primary" icon="plus" onClick={() => setEditing('new')}>{t('scripts.new')}</Button>
         </div>} />
+      <window.EditProposalsPanel kind="script" />
       <div role="tablist" aria-label={t('title.scripts')} className="flex gap-2 mb-4">
         {['library', ...(can('scripts.variables') ? ['variables'] : [])].map((key) => <Button key={key} role="tab" id={'scripts-tab-' + key} aria-controls={'scripts-panel-' + key} aria-selected={tab === key} onClick={() => setTab(key)} variant={tab === key ? 'secondary' : 'ghost'}>{t('vars.' + key)}</Button>)}
       </div>
@@ -542,6 +543,7 @@ function PoliciesScreen() {
     <Page wide>
       <PageHeader title={t('title.policies')} subtitle={t('pol.subtitle')}
         actions={can('policies.manage') && <Button variant="primary" icon="plus" onClick={() => setCreating(true)}>{t('pol.new')}</Button>} />
+      <window.EditProposalsPanel kind="policy" />
       <div className="grid sm:grid-cols-2 lg:grid-cols-3 gap-3">
         {policies.map((p) => <PolicyCard key={p.id} policy={p} onClick={() => setDetail(p)} />)}
       </div>
@@ -685,12 +687,30 @@ function PolicyDetail({ policy, onClose, onSaved }) {
   const [activating, setActivating] = useState(false);
   const [confirmOff, setConfirmOff] = useState(false);
   const canChecks = can('checks.manage'), canTasks = can('tasks.manage');
+  // Checks and tasks this policy can include: the ones it does not have yet.
+  // An AI proposal awaiting review stays where it was proposed.
+  const allChecksQ = useQuery(['checks-attachable'], () => canChecks ? api.listChecks() : Promise.resolve({ checks: [] }), { invalidateOn: ['checks'] });
+  const allTasksQ = useQuery(['tasks-attachable'], () => canTasks ? api.listTasks() : Promise.resolve({ tasks: [] }), { invalidateOn: ['tasks'] });
+  const attachable = (items) => (items || []).filter((x) => !awaitingReview(x) && !(x.attachments || []).some((a) => a.policy_id === policy.id));
+  const includeExisting = async (kind, id) => {
+    if (!id) return;
+    try {
+      if (kind === 'check') await api.attachCheck(id, { policy_id: policy.id }); else await api.attachTask(id, { policy_id: policy.id });
+      window.dataBus.emit(kind === 'check' ? 'checks' : 'tasks');
+      toast.success(t('attach.added'));
+    } catch (e) { toast.error(t('common.failed'), e.message); }
+  };
+  const sharedBadge = (item) => ((item.attachments || []).length > 1
+    ? <span className="rounded-md border border-line bg-elevated px-1.5 py-0.5 text-[10.5px] text-muted" title={(item.attachments || []).map((a) => a.name).filter(Boolean).join(', ')}>{t('attach.shared', { n: item.attachments.length })}</span>
+    : null);
 
   // Task updates go through PUT, so the server revalidates the whole schedule;
-  // resend the task unchanged apart from the flag being flipped.
+  // resend the task unchanged apart from the flag being flipped. Where it
+  // applies changes through its attachments, so those stay out.
   const toggleTask = async (task) => {
     try {
-      await api.updateTask(task.id, { ...task, enabled: !task.enabled });
+      const { attachments, agent_id, policy_id, ...fields } = task;
+      await api.updateTask(task.id, { ...fields, enabled: !task.enabled });
       toast.success(task.enabled ? t('tasks.disabled') : t('tasks.enabled'), task.name);
     } catch (e) { toast.error(t('tasks.updateFailed'), e.message); }
     finally { setConfirmToggleTask(null); }
@@ -767,11 +787,15 @@ function PolicyDetail({ policy, onClose, onSaved }) {
       <div className="flex-1 overflow-y-auto scroll-area p-5">
         {tab === 'checks' && (
           <div className="space-y-3">
-            {canChecks && <div className="flex justify-end"><Button size="sm" variant="ghost" icon="plus" onClick={() => setEditCheck('new')}>{t('pol.addCheck')}</Button></div>}
+            {canChecks && <div className="flex flex-wrap items-center justify-end gap-2">
+              <Combobox value="" onChange={(id) => includeExisting('check', id)} className="flex-1 min-w-[200px]" placeholder={t('attach.addExistingCheck')}
+                options={attachable(allChecksQ.data?.checks).map((c) => ({ value: c.id, label: c.name || checkType(c.type).label, group: checkType(c.type).label }))} />
+              <Button size="sm" variant="ghost" icon="plus" onClick={() => setEditCheck('new')}>{t('pol.addCheck')}</Button>
+            </div>}
             {checks.length ? <div className="space-y-2">{checks.map((c) => { const ct = checkType(c.type); return (
               <div key={c.id} className="flex items-center gap-3 rounded-xl border border-line bg-card px-3.5 py-3">
                 <Icon name={ct.icon} size={15} className="text-muted" />
-                <div className="flex-1 min-w-0"><div className="text-[13px] text-ink font-medium truncate">{c.name}</div><div className="text-[11px] text-faint">{ct.label} · {c.warn_threshold != null ? t('pol.thresholdsShort', { warn: c.warn_threshold, err: c.err_threshold }) : ''}</div></div>
+                <div className="flex-1 min-w-0"><div className="flex items-center gap-2"><span className="text-[13px] text-ink font-medium truncate">{c.name}</span>{sharedBadge(c)}</div><div className="text-[11px] text-faint">{ct.label} · {c.warn_threshold != null ? t('pol.thresholdsShort', { warn: c.warn_threshold, err: c.err_threshold }) : ''}</div></div>
                 <StatusPill status={c.latest?.status || 'passing'} size="sm" />
                 {canChecks && <Button size="sm" variant="ghost" icon="edit" onClick={() => setEditCheck(c)}>{t('action.edit')}</Button>}
               </div>); })}</div>
@@ -780,11 +804,15 @@ function PolicyDetail({ policy, onClose, onSaved }) {
         )}
         {tab === 'tasks' && (
           <div className="space-y-3">
-            {canTasks && <div className="flex justify-end"><Button size="sm" variant="ghost" icon="plus" onClick={() => setEditTask('new')}>{t('pol.addTask')}</Button></div>}
+            {canTasks && <div className="flex flex-wrap items-center justify-end gap-2">
+              <Combobox value="" onChange={(id) => includeExisting('task', id)} className="flex-1 min-w-[200px]" placeholder={t('attach.addExistingTask')}
+                options={attachable(allTasksQ.data?.tasks).map((x) => ({ value: x.id, label: x.name }))} />
+              <Button size="sm" variant="ghost" icon="plus" onClick={() => setEditTask('new')}>{t('pol.addTask')}</Button>
+            </div>}
             {tasks.length ? <div className="space-y-2">{tasks.map((task) => (
               <div key={task.id} className="flex items-center gap-3 rounded-xl border border-line bg-card px-3.5 py-3">
                 <Icon name="tasks" size={15} className="text-muted" />
-                <div className="flex-1 min-w-0"><div className="text-[13px] text-ink font-medium truncate">{task.name}</div><div className="text-[11px] text-faint">{window.taskSchedule(task)}</div></div>
+                <div className="flex-1 min-w-0"><div className="flex items-center gap-2"><span className="text-[13px] text-ink font-medium truncate">{task.name}</span>{sharedBadge(task)}</div><div className="text-[11px] text-faint">{window.taskSchedule(task)}</div></div>
                 <Toggle checked={task.enabled} onChange={() => (!task.enabled && awaitingReview(task) ? setReviewTask(task) : setConfirmToggleTask(task))} disabled={!canTasks} />
                 {canTasks && <Button size="sm" variant="ghost" icon="edit" onClick={() => setEditTask(task)}>{t('action.edit')}</Button>}
               </div>))}</div>
