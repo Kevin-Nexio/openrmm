@@ -278,6 +278,10 @@ interactive session as the last heartbeat reported it, and
 `agents.logged_in_user_since` when it last changed. Since migration 035
 `agents.last_logged_in_user` keeps the last non-empty user after they log off,
 and `agents.last_logged_in_user_at` is when a heartbeat last reported them.
+Since migration 036 `agents.last_boot_at` is when the device last booted: the
+time the server stored its latest inventory minus the `uptime_sec` in it (NULL
+until the first inventory). It moves only when it changes by more than two
+minutes, so the few seconds each snapshot drifts do not rewrite the row.
 
 ### `checks`
 A monitoring check, owned **either** by an agent **or** a policy — exactly one of

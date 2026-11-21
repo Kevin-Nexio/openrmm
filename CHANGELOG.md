@@ -6,6 +6,18 @@ tag.
 
 ## [Unreleased]
 
+### Added
+
+- **Devices ▸ Last boot.** An optional column shows when each device last
+  booted, with the exact time on hover, and sorts the devices that have run
+  longest first. It starts hidden: turn it on from **Columns**. The server works
+  it out from the uptime the agent already reports in its inventory, so agents
+  do not need an update. Devices that reported an inventory before the upgrade
+  get it at once (migration 036).
+- **A device's Jobs tab shows each job's output.** A row expands in place to
+  show the output and exit code, or why there is none yet; **Open in Jobs** still
+  leads to the full job.
+
 ### Security
 
 - **pgx 5.13.0** (`github.com/jackc/pgx/v5`, #278). It fixes GHSA-w9rp-vfrh-q8vv:
@@ -14,6 +26,12 @@ tag.
   count. The release also stops retrying a query after the connection closed
   mid-response. Its change to client certificates does not apply: OpenRMM
   configures none (`sslcert`, `sslkey` or `TLSConfig`).
+
+### Changed
+
+- **Run script ▸ From library is searchable.** The picker on a device's Run
+  script tab filters as you type and groups scripts by category, instead of one
+  long list.
 
 ## [0.11.4] - 2026-11-17
 

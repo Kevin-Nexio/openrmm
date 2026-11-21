@@ -101,7 +101,7 @@ func scanAgent(row pgx.Row) (*models.Agent, error) {
 	var a models.Agent
 	err := row.Scan(&a.ID, &a.Hostname, &a.Description, &a.Note, &a.OS, &a.Arch, &a.Version, &a.Status,
 		&a.SiteID, &a.GroupID, &a.Tags, &a.MeshID, &a.LastSeen, &a.RevokedAt, &a.CreatedAt, &a.EnrollTokenID, &a.MonitoringScopeSince,
-		&a.OSRole, &a.RoleOverride, &a.LoggedInUser, &a.LoggedInUserSince, &a.LastLoggedInUser, &a.LastLoggedInUserAt)
+		&a.OSRole, &a.RoleOverride, &a.LoggedInUser, &a.LoggedInUserSince, &a.LastLoggedInUser, &a.LastLoggedInUserAt, &a.LastBootAt)
 	if errors.Is(err, pgx.ErrNoRows) {
 		return nil, ErrNotFound
 	}
@@ -112,7 +112,7 @@ func scanAgent(row pgx.Row) (*models.Agent, error) {
 	return &a, nil
 }
 
-const agentCols = `id, hostname, description, note, os, arch, version, status, site_id, group_id, tags, mesh_id, last_seen, revoked_at, created_at, enroll_token_id, monitoring_scope_since, os_role, role_override, logged_in_user, logged_in_user_since, last_logged_in_user, last_logged_in_user_at`
+const agentCols = `id, hostname, description, note, os, arch, version, status, site_id, group_id, tags, mesh_id, last_seen, revoked_at, created_at, enroll_token_id, monitoring_scope_since, os_role, role_override, logged_in_user, logged_in_user_since, last_logged_in_user, last_logged_in_user_at, last_boot_at`
 
 // SetAgentMeta updates the operator-editable identification fields: description
 // (shown in the device list) and note (a private observation, detail-only).
@@ -742,6 +742,16 @@ func (s *Store) UpsertInventory(ctx context.Context, agentID string, data []byte
 		agentID, data)
 	if err != nil {
 		return err
+	}
+	// The boot time is the server's clock minus the reported uptime, so a
+	// device whose own clock is wrong still gets the right one.
+	if up, ok := reportedUptime(data); ok {
+		if _, err := s.pool.Exec(ctx, `UPDATE agents SET last_boot_at = now() - make_interval(secs => $2::double precision)
+			WHERE id=$1 AND (last_boot_at IS NULL
+				OR abs(extract(epoch FROM (now() - make_interval(secs => $2::double precision)) - last_boot_at)) > $3::double precision)`,
+			agentID, up.Seconds(), bootJitter.Seconds()); err != nil {
+			return err
+		}
 	}
 	// The detected role (policy targeting) is set once, from the OS the device
 	// enrolled with and the first snapshot that implies a role; an
