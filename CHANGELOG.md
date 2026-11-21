@@ -6,6 +6,8 @@ tag.
 
 ## [Unreleased]
 
+## [0.12.0] - 2026-11-21
+
 ### Added
 
 - **The AI can propose edits to existing objects.** AI Chat and MCP can propose
