@@ -215,9 +215,13 @@ func sanitizeHeader(v string) string {
 }
 
 // normalizeBody applies CRLF line endings and dot-stuffing, so a body line that
-// happens to be "." cannot terminate the DATA command early.
+// happens to be "." cannot terminate the DATA command early. A bare CR counts
+// as a line break too: left in place, "\r.\r\n" in text an endpoint reported
+// (a hostname, check output) reaches the relay, and a server that ends lines
+// on a lone CR would read it as the end of the message ("SMTP smuggling").
 func normalizeBody(body string) string {
 	body = strings.ReplaceAll(body, "\r\n", "\n")
+	body = strings.ReplaceAll(body, "\r", "\n")
 	lines := strings.Split(body, "\n")
 	for i, line := range lines {
 		if strings.HasPrefix(line, ".") {

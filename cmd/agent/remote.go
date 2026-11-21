@@ -12,6 +12,7 @@ import (
 	"os/exec"
 	"path/filepath"
 	"runtime"
+	"strings"
 	"sync"
 	"time"
 
@@ -114,10 +115,30 @@ func (a *agent) relayForStart(rs protocol.RemoteStartMsg) (relay, ticket string)
 	if rs.Token == "" {
 		return a.relayURL(rs.SessionID), ""
 	}
+	// A pre-ticket server names the relay itself. The screen and the elevated
+	// shell go wherever this URL points, so it must be this agent's own server:
+	// a relay on any other host is ignored for the one derived from it.
 	if rs.RelayURL != "" {
-		return rs.RelayURL, ""
+		if a.onOwnServer(rs.RelayURL) {
+			return rs.RelayURL, ""
+		}
+		log.Printf("remote: ignoring a relay URL that is not on this agent's server")
 	}
 	return a.legacyRelayURL(rs.Token), ""
+}
+
+// onOwnServer reports whether raw is a WebSocket URL on the host (and port)
+// this agent connects to for /ws/agent, with the same scheme.
+func (a *agent) onOwnServer(raw string) bool {
+	own, err := url.Parse(a.wsURL)
+	if err != nil {
+		return false
+	}
+	u, err := url.Parse(raw)
+	if err != nil || u.User != nil || (u.Scheme != "ws" && u.Scheme != "wss") {
+		return false
+	}
+	return strings.EqualFold(u.Scheme, own.Scheme) && strings.EqualFold(u.Host, own.Host)
 }
 
 // relayURL points the sidecar at the relay on the SAME host the agent dials for

@@ -71,6 +71,17 @@ tag.
   count. The release also stops retrying a query after the connection closed
   mid-response. Its change to client certificates does not apply: OpenRMM
   configures none (`sslcert`, `sslkey` or `TLSConfig`).
+- **Alert mail treats a lone carriage return as a line break.** Text an
+  endpoint reports (a hostname, check output) goes into the body of alert
+  mail. A bare CR in it reached the mail relay, so `\r.\r\n` could end the
+  message early on a server that splits lines on CR ("SMTP smuggling"). The
+  body now has no CR outside a CRLF, and a dot after one is stuffed like any
+  other line. Headers were already safe.
+- **The agent uses only its own server's relay for remote sessions.** During
+  a rolling upgrade, a pre-ticket server names the relay URL for the screen
+  and the elevated shell. The agent now uses that URL only when it has the
+  scheme, host and port of the server the agent connects to. Any other is
+  replaced by the relay derived from that server. Needs the agent update.
 
 ### Changed
 
