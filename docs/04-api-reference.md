@@ -187,6 +187,21 @@ remains approval-gated. AI proposal tools never use this bypass.
 { "agent_ids": ["..."], "site_id": "...", "group_id": "...",
   "shell": "bash", "script": "...", "description": "..." }
 ```
+or, to deploy a saved library script:
+```json
+{ "agent_ids": ["..."], "script_id": "...", "params": { "site": "hq" }, "description": "..." }
+```
+A library script runs **by id** on every device, as **Run script ▸ From
+library** does on one: `params` take values only from the script's declared
+parameters, and its script variables go with it, resolved for each device (its
+own value, its department's, site's, client's or the global one) when its batch
+is approved and sent. `description` defaults to `library: <name>`. Send either
+`script` or `script_id`, not both; `params` need a `script_id`. A proposal
+awaiting review answers 409. Every device is checked first, and the whole
+request is refused (400), naming the devices, if any of them could not run it: a
+variable with no value for that device, or an agent too old for the shell, the
+parameters or the variables.
+
 Targets are the **union** of `agent_ids` + a `site_id` + a `group_id`
 (department), intersected with the caller's access scope. The targets are then
 **split by company** — a deployment never spans companies — into **one

@@ -24,7 +24,12 @@ const extraVariables = Array.from({ length: 199 }, (_, i) => ({ id: 'variable-ex
   ...(i === 198 ? { pending: true, proposed_by: 'mcp:claude' } : {}) }));
 const libraryScripts = [{ id: 'script-e2e', name: 'Variable installer', description: '', category: 'Tests', shell: 'sh', body: 'printf \'%s\' "$customerKey"', params: [], variables: [] },
   // Proposed by an assistant over MCP: reviewed and approved in the console.
-  { id: 'script-proposal', name: 'Proposed cleanup', description: 'Removes stale temp files', category: 'AI proposals', shell: 'sh', body: 'find /tmp -mtime +7 -delete', params: [], variables: [], pending: true, proposed_by: 'mcp:claude' }];
+  { id: 'script-proposal', name: 'Proposed cleanup', description: 'Removes stale temp files', category: 'AI proposals', shell: 'sh', body: 'find /tmp -mtime +7 -delete', params: [], variables: [], pending: true, proposed_by: 'mcp:claude' },
+  // Deployed to many devices from the library, with a parameter and a variable.
+  { id: 'script-bulk', name: 'Bulk installer', description: '', category: 'Tests', shell: 'sh', body: 'install --site "$OPENRMM_PARAM_SITE" --key "$customerKey"',
+    params: [{ name: 'site', description: 'Which office', kind: 'enum', values: ['hq', 'branch'] }], variables: ['customerKey'] },
+  // An assistant's script nobody reviews in these flows: never deployable.
+  { id: 'script-unreviewed', name: 'Unreviewed deploy', description: '', category: 'AI proposals', shell: 'sh', body: 'echo unreviewed', params: [], variables: [], pending: true, proposed_by: 'mcp:claude' }];
 
 // An assistant's policy, patch policy and device task, all switched off and
 // awaiting review. The first activation of the policy is refused as stale (the
@@ -227,6 +232,9 @@ const server = createServer(async (req, res) => {
       }
       if (pathname === '/api/devices') return json(res, 200, { devices: fleet });
       if (pathname === '/api/reports/hardware') return json(res, 200, { rows: hardwareRows });
+      if (pathname === '/api/jobs/bulk' && req.method === 'POST') {
+        return json(res, 201, { batches: [{ client_id: 'client-a', batch_id: 'batch-a', count: 1 }, { client_id: 'client-b', batch_id: 'batch-b', count: 1 }], companies: 2, count: 2 });
+      }
       if (pathname === '/api/jobs') return json(res, 200, { jobs: url.searchParams.get('agent_id') === 'dev-1' ? deviceJobs : [] });
       if (pathname === '/api/audit') {
         const entries = Number(url.searchParams.get('limit')) >= 50 ? [
@@ -819,6 +827,35 @@ async function deviceJobsAndBootBrowserFlow() {
   return true;
 }
 
+async function bulkLibraryDeployBrowserFlow() {
+  const wait = async (fn) => {
+    for (let i = 0; i < 150; i++) { const value = fn(); if (value) return value; await new Promise((r) => setTimeout(r, 50)); }
+    throw new Error('Bulk library deploy E2E timed out: ' + fn.toString());
+  };
+  const button = (text, root = document) => [...root.querySelectorAll('button')].find((el) => el.textContent.trim() === text);
+  (await wait(() => button('Devices'))).click();
+  (await wait(() => button('Deploy to many'))).click();
+  const modal = await wait(() => [...document.querySelectorAll('div')].find((el) => el.textContent.startsWith('Deploy to many devices') && el.querySelector('input[type="checkbox"]')));
+  for (const host of ['SMOKE-PC', 'ALPHA-WS']) {
+    (await wait(() => [...modal.querySelectorAll('label')].find((l) => l.textContent.includes(host)))).querySelector('input[type="checkbox"]').click();
+  }
+  (await wait(() => button('From the library', modal))).click();
+  (await wait(() => button('Choose a saved script…', modal))).click();
+  await wait(() => button('Bulk installer', modal));
+  if (button('Unreviewed deploy', modal)) throw new Error('A script awaiting review is offered for deployment');
+  button('Bulk installer', modal).click();
+  const library = await wait(() => modal.querySelector('[data-deploy="library"]'));
+  await wait(() => library.textContent.includes('customerKey'));
+  const site = await wait(() => [...library.querySelectorAll('select')].find((el) => [...el.options].some((o) => o.value === 'branch')));
+  if (site.value !== 'hq') throw new Error('The parameter does not start on its first value');
+  Object.getOwnPropertyDescriptor(HTMLSelectElement.prototype, 'value').set.call(site, 'branch');
+  site.dispatchEvent(new Event('change', { bubbles: true }));
+  (await wait(() => { const b = button('Create deployment (2)', modal); return b && !b.disabled && b; })).click();
+  await wait(() => !document.body.contains(modal) || !button('Create deployment (2)'));
+  document.documentElement.dataset.bulkLibraryE2e = 'passed';
+  return true;
+}
+
 // Devices ▸ Logged-in user: the column, sorting by it (no user last either
 // way), the user filter, search by user, and hiding the column (remembered).
 async function devicesUserBrowserFlow() {
@@ -1148,6 +1185,10 @@ try {
     assert.equal(approvedTask?.script, 'find /var/tmp -mtime +30 -delete');
     const deviceJobsFlow = await runMobileChrome(chrome, baseURL + '/authenticated/', { width: 1280, flow: deviceJobsAndBootBrowserFlow });
     assertBrowser(deviceJobsFlow, /data-device-jobs-e2e="passed"/);
+    const bulkFlow = await runMobileChrome(chrome, baseURL + '/authenticated/', { width: 1280, flow: bulkLibraryDeployBrowserFlow });
+    assertBrowser(bulkFlow, /data-bulk-library-e2e="passed"/);
+    assert.deepEqual(apiRequests.filter((r) => r.method === 'POST' && r.pathname === '/api/jobs/bulk').map((r) => r.payload),
+      [{ agent_ids: ['dev-1', 'dev-2'], script_id: 'script-bulk', params: { site: 'branch' } }], 'the saved script went by id, with the parameter chosen');
     const usersFlow = await runMobileChrome(chrome, baseURL + '/authenticated/', { width: 1280, flow: devicesUserBrowserFlow });
     assertBrowser(usersFlow, /data-devices-user-e2e="passed"/);
     const hardwareFlow = await runMobileChrome(chrome, baseURL + '/authenticated/', { width: 1280, flow: hardwareLastUserBrowserFlow });
