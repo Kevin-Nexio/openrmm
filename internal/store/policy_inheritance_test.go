@@ -73,12 +73,12 @@ func (f *policyFixture) policyWithContents(name string) *models.Policy {
 		f.t.Fatal(err)
 	}
 	if _, err := f.store.CreateCheck(f.ctx, &models.Check{
-		PolicyID: &p.ID, Type: "diskspace", Name: name + " disk", IntervalSec: 300, Enabled: true,
+		Attachments: models.OnPolicy(&p.ID), Type: "diskspace", Name: name + " disk", IntervalSec: 300, Enabled: true,
 	}); err != nil {
 		f.t.Fatal(err)
 	}
 	if _, err := f.store.CreateTask(f.ctx, &models.Task{
-		PolicyID: &p.ID, Name: name + " nightly", Shell: "bash", ScheduleKind: "interval",
+		Attachments: models.OnPolicy(&p.ID), Name: name + " nightly", Shell: "bash", ScheduleKind: "interval",
 		IntervalSec: 3600, Enabled: true,
 	}); err != nil {
 		f.t.Fatal(err)

@@ -38,7 +38,7 @@ func TestServerRuleEvaluationLifecycleIntegration(t *testing.T) {
 	if len(alerts()) != 0 {
 		t.Fatal("upgrade enabled a new rule without opt-in")
 	}
-	c := &models.Check{AgentID: &a.ID, Name: "outdated", Type: models.CheckAgentOutdated, Config: json.RawMessage(`{"behind":"minor"}`), Enabled: true}
+	c := &models.Check{Attachments: models.OnAgent(&a.ID), Name: "outdated", Type: models.CheckAgentOutdated, Config: json.RawMessage(`{"behind":"minor"}`), Enabled: true}
 	if err := models.ValidateCheck(c); err != nil {
 		t.Fatal(err)
 	}

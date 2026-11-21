@@ -172,6 +172,9 @@ type Agent struct {
 	// after they log off; LastLoggedInUserAt is when it last reported them.
 	LastLoggedInUser   string     `json:"last_logged_in_user"`
 	LastLoggedInUserAt *time.Time `json:"last_logged_in_user_at,omitempty"`
+	// LastBootAt is when the device last booted: when the server stored its
+	// latest inventory minus the uptime reported in it. Nil until then.
+	LastBootAt *time.Time `json:"last_boot_at,omitempty"`
 }
 
 // Job is a unit of work targeted at an agent (currently: run a script).

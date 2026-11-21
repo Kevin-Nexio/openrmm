@@ -5,7 +5,10 @@ import (
 	"encoding/json"
 	"errors"
 	"io"
+	"math"
+	"strconv"
 	"strings"
+	"time"
 )
 
 const (
@@ -13,6 +16,33 @@ const (
 	maxInventoryDepth      = 32
 	maxInventoryJSONTokens = 50000 // keys, values, and opening/closing containers
 )
+
+const (
+	// maxReportedUptime bounds the uptime an inventory may report. A negative
+	// value, a longer one or anything but a JSON number gives no boot time.
+	maxReportedUptime = 20 * 365 * 24 * time.Hour
+	// bootJitter is how far a new boot time must move before it is stored.
+	// Each snapshot measures the uptime a little before the server receives
+	// it, which would otherwise rewrite the row every few minutes. A real
+	// reboot moves it by at least the uptime the device had before.
+	bootJitter = 2 * time.Minute
+)
+
+// reportedUptime reads the uptime_sec an agent reports in its inventory.
+func reportedUptime(data []byte) (time.Duration, bool) {
+	var inv struct {
+		UptimeSec json.RawMessage `json:"uptime_sec"`
+	}
+	if json.Unmarshal(data, &inv) != nil || len(inv.UptimeSec) == 0 {
+		return 0, false
+	}
+	// A JSON number only: ParseFloat refuses a quoted string or null.
+	sec, err := strconv.ParseFloat(string(inv.UptimeSec), 64)
+	if err != nil || math.IsNaN(sec) || sec < 0 || sec > maxReportedUptime.Seconds() {
+		return 0, false
+	}
+	return time.Duration(sec * float64(time.Second)), true
+}
 
 // prepareInventory removes actual NUL characters from collected text before
 // PostgreSQL JSONB rejects the entire snapshot. Do this on the server so agents

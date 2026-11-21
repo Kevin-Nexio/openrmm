@@ -1,6 +1,7 @@
 package models
 
 import (
+	"encoding/json"
 	"strings"
 	"testing"
 )
@@ -77,6 +78,36 @@ func TestValidateScheduleMasksDaysOfWeek(t *testing.T) {
 
 // The check counterpart, in the same place for the same reason: both are the
 // shared validation the REST handlers and the AI tools go through.
+func TestValidateCheckTimeoutPolicy(t *testing.T) {
+	base := func() Check {
+		return Check{Type: CheckPing, Name: "Ping", Config: json.RawMessage(`{"host":"10.0.0.1"}`), IntervalSec: 300, TimeoutSec: 30, FailureCount: 2, RecoveryCount: 2}
+	}
+	c := base()
+	if err := ValidateCheck(&c); err != nil {
+		t.Fatal(err)
+	}
+	if c.TimeoutPolicy != TimeoutPolicyCount {
+		t.Fatalf("default policy = %q", c.TimeoutPolicy)
+	}
+	c = base()
+	c.TimeoutPolicy = TimeoutPolicyIgnore
+	if err := ValidateCheck(&c); err != nil {
+		t.Fatal(err)
+	}
+	c = base()
+	c.TimeoutPolicy = "alert"
+	if err := ValidateCheck(&c); err == nil {
+		t.Fatal("alert-immediately was accepted")
+	}
+	rule := Check{Type: CheckConnectivity, Name: "Offline", Config: json.RawMessage(`{"after_min":15}`), TimeoutPolicy: TimeoutPolicyIgnore}
+	if err := ValidateCheck(&rule); err != nil {
+		t.Fatal(err)
+	}
+	if rule.TimeoutPolicy != TimeoutPolicyCount {
+		t.Fatalf("server rule policy = %q, want count", rule.TimeoutPolicy)
+	}
+}
+
 func TestValidateCheckRejectsUnsupportedTypes(t *testing.T) {
 	if SupportedCheckType("quantum") {
 		t.Error("an unknown check type was reported supported")

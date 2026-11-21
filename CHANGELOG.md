@@ -6,6 +6,78 @@ tag.
 
 ## [Unreleased]
 
+### Added
+
+- **The AI can propose edits to existing objects.** AI Chat and MCP can propose
+  an edit to a library script, check, scheduled task, policy or patch policy:
+  its fields, where a check or task applies, and a policy's assignments and
+  excluded devices.
+  - **Nothing changes until a person applies it** in the object's screen. The
+    review shows each changed field before and after.
+  - **Applying makes the edit as that person**, through the same checks as an
+    edit by hand. Those checks also run when the edit is proposed, so an
+    invalid value is refused at once and the assistant can correct it.
+  - **A proposal is stale if its reviewed state changed.** A reviewer must
+    have authority over the whole object. The edit, decision and audit commit
+    together. A newer proposal can replace an open one before a decision starts.
+  - **No autonomy setting applies an edit**, and a policy is switched on only
+    through its activation review.
+  - **An object still awaiting review cannot be edited this way.** It is
+    reviewed whole on its own screen.
+  - New tools: `list_scripts`, `get_editable_object` and `propose_*_edit`.
+    New endpoints: `/api/edit-proposals`. Migration 038.
+- **Checks and scheduled tasks in any number of policies and devices.** A check
+  or task is no longer owned by one policy or device: it is attached to as many
+  as needed, and a device gets it once whichever of them reach it. Policies
+  organised by function ("File server", "Backup server") can share a check and
+  edit it once.
+  - The editors take several policies and devices as chips.
+  - A policy's drawer has **Add an existing check** and **Add an existing task**.
+  - Inside a policy, a shared item offers **Make a copy for this policy** and
+    **Remove from this policy**.
+  - The lists show where each item applies, or **Not in use**, and the device
+    page lists every source.
+  - Migration 037 attaches every existing check and task to its policy or device.
+  - A restricted user changes a shared item only when every attachment is a
+    device in their scope, and sees only those attachments.
+  - An AI proposal awaiting review stays on its one attachment, and a check
+    silence never widens to where the check is attached later.
+  - API: `attachments` on checks and tasks, and `/attachments` and `/copy`
+    endpoints. `agent_id` and `policy_id` keep working for one target.
+- **Devices ▸ Last boot.** An optional column shows when each device last
+  booted, with the exact time on hover, and sorts the devices that have run
+  longest first. It starts hidden: turn it on from **Columns**. The server works
+  it out from the uptime the agent already reports in its inventory, so agents
+  do not need an update. Devices that reported an inventory before the upgrade
+  get it at once (migration 036).
+- **Deploy to many runs saved library scripts.** Devices ▸ Deploy to many has
+  a **From the library** option: pick a saved script, fill in its parameters,
+  and it runs by id on every selected device, with its script variables. Each
+  device gets the value set for it, its department, site or client, resolved
+  when its company's batch is approved. Before, a deployment sent typed text
+  only, without variables or parameters. Every device is checked first; if
+  any could not run the script (no value for a variable, an agent too old),
+  the deployment is refused and names them. `POST /api/jobs/bulk` takes
+  `script_id` and `params`.
+- **A device's Jobs tab shows each job's output.** A row expands in place to
+  show the output and exit code, or why there is none yet; **Open in Jobs** still
+  leads to the full job.
+
+### Security
+
+- **pgx 5.13.0** (`github.com/jackc/pgx/v5`, #278). It fixes GHSA-w9rp-vfrh-q8vv:
+  a malformed server response could panic `Rows.Values`. OpenRMM does not
+  call `Rows.Values`; it reads rows with `Scan`, which already checked the
+  count. The release also stops retrying a query after the connection closed
+  mid-response. Its change to client certificates does not apply: OpenRMM
+  configures none (`sslcert`, `sslkey` or `TLSConfig`).
+
+### Changed
+
+- **Run script ▸ From library is searchable.** The picker on a device's Run
+  script tab filters as you type and groups scripts by category, instead of one
+  long list.
+
 ### Fixed
 
 - **Ping and Windows service checks keep accented characters.** On Windows,
@@ -14,6 +86,28 @@ tag.
   decodes them as it already did for cmd and PowerShell scripts. Linux and
   macOS output, already UTF-8, is unchanged. Needs the agent update; results
   stored before it keep the "?".
+- **A check timeout counts as one failure.** The server deadline was exactly
+  `timeout_sec`, while the agent starts its own timer only when the order
+  arrives. The server recorded the timeout, then counted the agent's late
+  result for the same run again, so "Failures to alert" of 2 fired on a single
+  timeout. The server now waits 30 seconds past the agent's timeout. A late
+  result replaces that timeout instead of adding another failure, and a late
+  success still clears the streak. A check can set Timeouts to "Count as a
+  failure" (the default) or "Ignore". The choice also covers a run the agent
+  stops at the timeout itself, with the device awake: agent 0.12.0 reports it as
+  a timeout, and an older agent as an ordinary failure. The review that approves
+  a check, including a policy activation, shows that choice (migration 040).
+- **A script that starts something in the background no longer keeps a job
+  or check running.** On Linux and macOS, a job or script check whose script
+  started a process in the background (`service &` without redirecting its
+  output) ran until that process exited, past its timeout. At the timeout the
+  agent killed only the shell, and the process it left kept the output open.
+  - At a timeout or a cancel, the agent now stops the script's whole process
+    group, as it already stopped the process tree on Windows.
+  - A script that exits while something it started still holds its output
+    finishes 5 seconds later, with its own exit status and a note that output
+    after it exited is not included.
+  - Needs the agent update.
 
 ## [0.11.4] - 2026-11-17
 

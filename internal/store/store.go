@@ -2,6 +2,7 @@
 package store
 
 import (
+	"bytes"
 	"context"
 	"encoding/json"
 	"errors"
@@ -30,9 +31,13 @@ var (
 	ErrRateLimited = errors.New("rate limited")
 )
 
-// Store wraps a pgx connection pool.
+// Store uses a connection pool, or the transaction for a configuration write.
 type Store struct {
-	pool *pgxpool.Pool
+	pool        dbSession
+	connections *pgxpool.Pool
+	// Set only on a configuration transaction. Flush these entries after
+	// configuration writes to keep the audit chain lock last.
+	configAudits []configAudit
 }
 
 // New opens a connection pool.
@@ -44,17 +49,17 @@ func New(ctx context.Context, url string) (*Store, error) {
 	if err := pool.Ping(ctx); err != nil {
 		return nil, err
 	}
-	return &Store{pool: pool}, nil
+	return &Store{pool: pool, connections: pool}, nil
 }
 
 // Close releases the pool.
-func (s *Store) Close() { s.pool.Close() }
+func (s *Store) Close() { s.connections.Close() }
 
 // Ping verifies database connectivity. Backs the readiness probe.
-func (s *Store) Ping(ctx context.Context) error { return s.pool.Ping(ctx) }
+func (s *Store) Ping(ctx context.Context) error { return s.connections.Ping(ctx) }
 
 // PoolStat exposes connection-pool counters for the metrics endpoint.
-func (s *Store) PoolStat() *pgxpool.Stat { return s.pool.Stat() }
+func (s *Store) PoolStat() *pgxpool.Stat { return s.connections.Stat() }
 
 func newID() string { return uuid.NewString() }
 
@@ -101,7 +106,7 @@ func scanAgent(row pgx.Row) (*models.Agent, error) {
 	var a models.Agent
 	err := row.Scan(&a.ID, &a.Hostname, &a.Description, &a.Note, &a.OS, &a.Arch, &a.Version, &a.Status,
 		&a.SiteID, &a.GroupID, &a.Tags, &a.MeshID, &a.LastSeen, &a.RevokedAt, &a.CreatedAt, &a.EnrollTokenID, &a.MonitoringScopeSince,
-		&a.OSRole, &a.RoleOverride, &a.LoggedInUser, &a.LoggedInUserSince, &a.LastLoggedInUser, &a.LastLoggedInUserAt)
+		&a.OSRole, &a.RoleOverride, &a.LoggedInUser, &a.LoggedInUserSince, &a.LastLoggedInUser, &a.LastLoggedInUserAt, &a.LastBootAt)
 	if errors.Is(err, pgx.ErrNoRows) {
 		return nil, ErrNotFound
 	}
@@ -112,7 +117,7 @@ func scanAgent(row pgx.Row) (*models.Agent, error) {
 	return &a, nil
 }
 
-const agentCols = `id, hostname, description, note, os, arch, version, status, site_id, group_id, tags, mesh_id, last_seen, revoked_at, created_at, enroll_token_id, monitoring_scope_since, os_role, role_override, logged_in_user, logged_in_user_since, last_logged_in_user, last_logged_in_user_at`
+const agentCols = `id, hostname, description, note, os, arch, version, status, site_id, group_id, tags, mesh_id, last_seen, revoked_at, created_at, enroll_token_id, monitoring_scope_since, os_role, role_override, logged_in_user, logged_in_user_since, last_logged_in_user, last_logged_in_user_at, last_boot_at`
 
 // SetAgentMeta updates the operator-editable identification fields: description
 // (shown in the device list) and note (a private observation, detail-only).
@@ -743,6 +748,16 @@ func (s *Store) UpsertInventory(ctx context.Context, agentID string, data []byte
 	if err != nil {
 		return err
 	}
+	// The boot time is the server's clock minus the reported uptime, so a
+	// device whose own clock is wrong still gets the right one.
+	if up, ok := reportedUptime(data); ok {
+		if _, err := s.pool.Exec(ctx, `UPDATE agents SET last_boot_at = now() - make_interval(secs => $2::double precision)
+			WHERE id=$1 AND (last_boot_at IS NULL
+				OR abs(extract(epoch FROM (now() - make_interval(secs => $2::double precision)) - last_boot_at)) > $3::double precision)`,
+			agentID, up.Seconds(), bootJitter.Seconds()); err != nil {
+			return err
+		}
+	}
 	// The detected role (policy targeting) is set once, from the OS the device
 	// enrolled with and the first snapshot that implies a role; an
 	// administrator's override is kept apart and wins over it. Later
@@ -921,7 +936,20 @@ func (s *Store) AddAuditAt(ctx context.Context, actor, action, target string, de
 	return err
 }
 
+type configAudit struct {
+	actor, action, target string
+	detail                []byte
+}
+
 func (s *Store) AddAudit(ctx context.Context, actor, action, target string, detail []byte) error {
+	if s.configAudits != nil {
+		s.configAudits = append(s.configAudits, configAudit{actor, action, target, bytes.Clone(detail)})
+		return nil
+	}
+	return s.writeAudit(ctx, actor, action, target, detail)
+}
+
+func (s *Store) writeAudit(ctx context.Context, actor, action, target string, detail []byte) error {
 	if detail == nil {
 		detail = []byte("{}")
 	}

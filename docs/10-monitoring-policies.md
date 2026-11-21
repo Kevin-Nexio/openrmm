@@ -63,7 +63,8 @@ are kept. All three are audited (`script.category.create` / `.rename` /
 
 ## Monitoring checks
 
-A **check** is owned by an agent (direct) **or** a policy (inherited). Types:
+A **check** is attached to any number of policies and devices (see
+[Shared checks and tasks](#shared-checks-and-tasks)). Types:
 
 | Type | Measures | Threshold semantics |
 |------|----------|---------------------|
@@ -113,9 +114,11 @@ agent returns a raw value/output; the server computes `passing`/`warning`/
 
 ### A dispatch is tracked, not fired and forgotten
 
-Each `run_check` becomes a row in `check_executions` with a deadline
-(`timeout_sec`, default 180s). A partial unique index allows only **one pending
-execution per (check, agent)**, so an agent that is slow or has dropped is never
+Each `run_check` becomes a row in `check_executions` with a deadline of
+`timeout_sec` plus 30 seconds (default 180s on the agent, 210s on the server).
+The extra 30 seconds is there so the agent's own result, which starts counting
+only when the order arrives, can land before the server records a timeout.
+A partial unique index allows only **one pending execution per (check, agent)**, so an agent that is slow or has dropped is never
 sent the same check again while the first is still owed. Passing the deadline
 marks the execution `timed_out` — counted by `rmm_check_timeouts_total` — rather
 than leaving it pending forever.
@@ -131,6 +134,7 @@ streak and the check declares its own flap policy:
 | `recovery_count` | 2 | consecutive successes before it clears |
 | `hysteresis` | 2 | band a recovering value must clear the threshold by |
 | `cooldown_sec` | 300 | quiet period before the same condition may raise again |
+| `timeout_policy` | `count` | `count` records one failure when a run times out; `ignore` leaves the streak unchanged. A late result never adds a second failure for the same run. It covers both timeouts: the server's, when no result arrives, and a run the agent stopped at `timeout_sec` (agent 0.12.0 marks it `timed_out`; an older agent reports an ordinary failure) |
 
 A value oscillating on its threshold therefore produces **one** alert instead of
 one per reading. `GET /api/checks/{id}/instances` shows this state per agent.
@@ -141,7 +145,7 @@ A **task** runs a script (from the library via `script_id`, or inline) on a
 schedule. The scheduler dispatches due tasks as **pre-approved** jobs
 (`tasks.manage` automation — distinct from AI-proposed scripts, which always
 require human approval). Each run is linked via `jobs.task_id`. Tasks may be
-owned by an agent or a policy.
+attached, like checks, to any number of policies and devices.
 
 That pre-approved dispatch is exactly why a task the AI wrote does not simply
 start running. `propose_task` and `propose_check` create the row **disabled** and
@@ -178,6 +182,40 @@ immediately on all its current target agents, outside the schedule (offline
 agents get it on reconnect); `GET /api/tasks/{id}/targets` returns the agent
 count so the UI can confirm before firing. Both resolve a policy task's agents
 via `AgentIDsForPolicy` and are narrowed to the caller's access scope.
+
+## Shared checks and tasks
+
+A check or scheduled task is not owned by one policy or device: it is
+**attached** to any number of them (`check_attachments`, `task_attachments`,
+migration 037). A device gets it when one attachment reaches it: the device
+itself, or a switched-on policy whose assignment reaches the device and does
+not exclude it. It runs there **once**, however many attachments reach the
+device, and its history stays with the check and the device. One "Disk D:"
+check attached to both "File server" and "Backup server" is edited once and
+watches every server either policy reaches.
+
+- **Not in use.** A check or task with no attachment is kept, listed as Not in
+  use, ready to attach again. Removing a policy or a device removes its
+  attachments, never a check or task the attachment pointed at.
+- **Make a copy for this policy.** For different thresholds or schedules in one
+  policy, `POST /api/checks/{id}/copy` (or the editor's button inside a policy)
+  moves that attachment to a new copy and leaves the original everywhere else.
+- **Who may change it.** Seeing a shared item takes one attachment the caller
+  may see. Changing, attaching, detaching, copying, deleting or silencing it
+  takes every attachment: each device in the caller's scope and, for a
+  restricted user, no policy at all. A restricted user sees only the
+  attachments in their scope.
+- **AI proposals.** A check or task the AI proposed, not yet approved, has one
+  attachment only. A policy's activation approves only the proposals attached
+  to it alone, so approving one policy never makes anything live through
+  another. A policy's review lists every check and task attached to it; editing
+  a shared one makes every open review of its policies stale.
+- **Silences.** A check-scoped silence records what it covered when it was
+  made: the devices the check was attached to directly, each with its scope,
+  and whether it had a policy attachment, which only an unrestricted
+  administrator may silence. Attaching the check somewhere later never widens a
+  silence. A policy-scoped silence covers the policy's checks on the devices
+  that policy reaches, not on devices only another policy reaches.
 
 ## Policies (inheritance)
 

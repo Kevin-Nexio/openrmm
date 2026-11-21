@@ -35,7 +35,7 @@ func TestTaskTargetsResolveThroughThePolicyIntegration(t *testing.T) {
 		t.Fatal(err)
 	}
 	task, err := f.store.CreateTask(ctx, &models.Task{
-		PolicyID: &policy.ID, Name: "nightly", Shell: "bash", ScheduleKind: "interval",
+		Attachments: models.OnPolicy(&policy.ID), Name: "nightly", Shell: "bash", ScheduleKind: "interval",
 		IntervalSec: 3600, Enabled: true,
 	})
 	if err != nil {

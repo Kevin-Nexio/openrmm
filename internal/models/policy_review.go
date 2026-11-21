@@ -57,6 +57,7 @@ func (r *PolicyReview) Seal() {
 		RecoveryCount                          int
 		Hysteresis                             float64
 		CooldownSec, TimeoutSec                int
+		TimeoutPolicy                          string
 		Enabled                                bool
 	}
 	tasks := make([]task, 0, len(r.Tasks))
@@ -78,7 +79,7 @@ func (r *PolicyReview) Seal() {
 		}
 		checks = append(checks, check{c.ID, c.Type, c.Name, c.ProposedBy, c.ApprovedBy, canonicalJSON(c.Config),
 			threshold(c.WarnThreshold), threshold(c.ErrThreshold), c.IntervalSec, c.FailureCount,
-			c.RecoveryCount, c.Hysteresis, c.CooldownSec, c.TimeoutSec, c.Enabled})
+			c.RecoveryCount, c.Hysteresis, c.CooldownSec, c.TimeoutSec, c.TimeoutPolicy, c.Enabled})
 	}
 	sort.Slice(tasks, func(i, j int) bool { return tasks[i].ID < tasks[j].ID })
 	sort.Slice(checks, func(i, j int) bool { return checks[i].ID < checks[j].ID })
