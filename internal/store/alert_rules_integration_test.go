@@ -15,9 +15,9 @@ func TestServerRulePrecedenceAndAgentBoundaryIntegration(t *testing.T) {
 	ctx := context.Background()
 	create := func(policyID *string, cfg string, proposal bool) *models.Check {
 		t.Helper()
-		c := &models.Check{PolicyID: policyID, Type: models.CheckConnectivity, Name: "connectivity", Config: json.RawMessage(cfg), Enabled: !proposal}
+		c := &models.Check{Attachments: models.OnPolicy(policyID), Type: models.CheckConnectivity, Name: "connectivity", Config: json.RawMessage(cfg), Enabled: !proposal}
 		if policyID == nil {
-			c.AgentID = &f.agent.ID
+			c.Attachments = models.OnAgent(&f.agent.ID)
 		}
 		if proposal {
 			c.ProposedBy = "ai:test"
@@ -225,9 +225,10 @@ func TestAlertRuleMigrationFromPreviousSchemaIntegration(t *testing.T) {
 	if _, err := st.pool.Exec(ctx, `INSERT INTO policies (id, name) VALUES ($1, 'old policy')`, policy.ID); err != nil {
 		t.Fatal(err)
 	}
-	check, err := st.CreateCheck(ctx, &models.Check{PolicyID: &policy.ID, Name: "legacy", Type: models.CheckMemory,
-		Config: json.RawMessage(`{}`), IntervalSec: 300, TimeoutSec: 30, FailureCount: 2, RecoveryCount: 2, Enabled: true})
-	if err != nil {
+	// The check too: before migration 037 a check had one owner column.
+	check := &models.Check{ID: newID()}
+	if _, err := st.pool.Exec(ctx, `INSERT INTO checks (id, policy_id, type, name, config, interval_sec, timeout_sec, failure_count, recovery_count, enabled)
+		VALUES ($1,$2,'memory','legacy','{}',300,30,2,2,true)`, check.ID, policy.ID); err != nil {
 		t.Fatal(err)
 	}
 	if _, err := st.pool.Exec(ctx, `INSERT INTO alerts (id,source_type,source_id,condition_key,severity,message,first_seen_at,last_seen_at,updated_at)

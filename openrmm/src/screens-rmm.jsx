@@ -400,7 +400,9 @@ function ChecksScreen({ route } = {}) {
   checks.forEach((c) => { if (c.enabled && !checkType(c.type).server) { const x = c.summary || {}; summary.passing += x.passing || 0; summary.warning += x.warning || 0; summary.failing += x.failing || 0; summary.unknown += x.unknown || 0; } });
   const toggle = async (c) => {
     try {
-      await api.updateCheck(c.id, { ...c, enabled: !c.enabled });
+      // Where a check applies changes through its attachments, not this PUT.
+      const { attachments, agent_id, policy_id, ...fields } = c;
+      await api.updateCheck(c.id, { ...fields, enabled: !c.enabled });
       toast.success(c.enabled ? t('checks.disabled') : t('checks.enabled'));
     } catch (e) {
       toast.error(t('checks.updateFailed'), e.message);
@@ -411,6 +413,7 @@ function ChecksScreen({ route } = {}) {
       <Page wide>
         <PageHeader title={t('title.checks')} subtitle={t('checks.subtitle')}
         actions={<div className="flex gap-2"><Button variant="secondary" icon="settings" onClick={() => setShowDefaults(true)}>{t('rules.defaults')}</Button>{can('checks.manage') && <Button variant="primary" icon="plus" onClick={() => setEditing('new')}>{t('checks.new')}</Button>}</div>} />
+      <EditProposalsPanel kind="check" />
 
       <div className="grid grid-cols-2 sm:grid-cols-4 gap-3 mb-4 max-w-3xl">
         <div className="rounded-xl border border-ok/25 bg-oksoft px-3.5 py-3"><div className="text-[11px] text-muted">{t('status.passing')}</div><div className="text-[22px] font-semibold text-ok tabular">{summary.passing}</div></div>
@@ -428,12 +431,12 @@ function ChecksScreen({ route } = {}) {
           </tr></thead>
           <tbody className="divide-y divide-line">
             {checks.map((c) => {
-              const ct = checkType(c.type); const dev = devMap[c.agent_id]; const pol = polMap[c.policy_id];
+              const ct = checkType(c.type);
               return (
                 <tr key={c.id} onClick={() => setDetail(c)} className="cursor-pointer hover:bg-elevated/40 transition">
                   <td className="px-4 py-3">{ct.server ? <span className="text-[11px] text-muted">{t('rules.server')}</span> : <StatusPill status={checkAggregateStatus(c)} size="sm" />}</td>
                   <td className="px-3 py-3"><div className="flex items-center gap-2"><Icon name={ct.icon} size={15} className="text-muted" /><div><div className="flex items-center gap-2"><span className="text-[13px] text-ink font-medium">{c.name}</span>{awaitingReview(c) && <ProposalBadge />}</div><div className="text-[11px] text-faint">{ct.label}{!c.enabled && ' ' + t('checks.disabledSuffix')}</div></div></div></td>
-                  <td className="px-3 py-3 hidden md:table-cell text-[12.5px] text-muted">{dev ? <span className="flex items-center gap-1.5"><OsIcon os={dev.os} size={13} />{dev.hostname}</span> : pol ? <span className="flex items-center gap-1.5 text-brandhi"><Icon name="policy" size={13} />{pol.name}</span> : '—'}</td>
+                  <td className="px-3 py-3 hidden md:table-cell text-[12.5px] text-muted"><AppliesTo item={c} devMap={devMap} policies={policiesQ.data?.policies || []} /></td>
                   <td className="px-3 py-3 hidden lg:table-cell text-[11.5px] text-faint mono">{c.warn_threshold != null ? t('checks.thresholds', { warn: c.warn_threshold, err: c.err_threshold }) : '—'}</td>
                   <td className="px-3 py-3 text-[12px] text-muted">{ct.server ? t(c.config?.mode === 'ignore' ? 'rules.ignore' : 'rules.alert') : fmtInterval(c.interval_sec)}</td>
                   <td className="px-3 py-3" onClick={(e) => e.stopPropagation()}><Toggle checked={c.enabled} onChange={() => (!c.enabled && awaitingReview(c) ? setReviewCheck(c) : setConfirmToggle(c))} disabled={!can('checks.manage')} /></td>
@@ -529,7 +532,9 @@ function CheckEditor({ check, onClose, devMap, policies, defaultPolicyId }) {
   const { can } = useAuth();
   const [type, setType] = useState(check?.type || 'diskspace');
   const [name, setName] = useState(check?.name || '');
-  const [target, setTarget] = useState(check?.policy_id ? 'pol:' + check.policy_id : check?.agent_id ? 'dev:' + check.agent_id : defaultPolicyId ? 'pol:' + defaultPolicyId : '');
+  // Where it applies: kept as the editor opened, so saving sends only the change.
+  const [initialAtts] = useState(() => (check ? attachmentTargets(check.attachments) : defaultPolicyId ? [{ policy_id: defaultPolicyId }] : []));
+  const [atts, setAtts] = useState(initialAtts);
   const initialType = check?.type || 'diskspace';
   const [ruleCfg, setRuleCfg] = useState(() => serverRuleConfig(initialType, check?.config));
   const [cfgVal, setCfgVal] = useState(check?.config?.[checkType(initialType).cfg] || '');
@@ -546,7 +551,6 @@ function CheckEditor({ check, onClose, devMap, policies, defaultPolicyId }) {
   const [enabled, setEnabled] = useState(check?.enabled ?? true);
   const [busy, setBusy] = useState(false);
   const ct = checkType(type);
-  const devices = Object.values(devMap);
 
   const save = async () => {
     setBusy(true);
@@ -554,8 +558,11 @@ function CheckEditor({ check, onClose, devMap, policies, defaultPolicyId }) {
     const body = { type, name: name || ct.label, config, interval_sec: Number(interval), enabled,
       failure_count: Number(failureCount), recovery_count: Number(recoveryCount), hysteresis: Number(hysteresis), cooldown_sec: Number(cooldown), timeout_sec: Number(timeout) };
     if (!ct.server && ct.dir !== 'state' && ct.dir !== 'script') { body.warn_threshold = Number(warn); body.err_threshold = Number(err); }
-    if (target.startsWith('dev:')) body.agent_id = target.slice(4); else if (target.startsWith('pol:')) body.policy_id = target.slice(4);
-    try { if (check) await api.updateCheck(check.id, body); else await api.createCheck(body); toast.success(check ? t('checks.updated') : t('checks.created')); onClose(); }
+    try {
+      if (check) { await api.updateCheck(check.id, body); await syncAttachments('check', check.id, initialAtts, atts); }
+      else await api.createCheck({ ...body, attachments: atts });
+      toast.success(check ? t('checks.updated') : t('checks.created')); onClose();
+    }
     catch (e) { toast.error(t('common.failed'), e.message); } finally { setBusy(false); }
   };
   // Asked in a console dialog, not the browser's confirm over the tab.
@@ -572,11 +579,8 @@ function CheckEditor({ check, onClose, devMap, policies, defaultPolicyId }) {
           <Field label={t('checks.type')}><Select value={type} onChange={(e) => { const next = e.target.value; setType(next); setServiceState(check?.type === next ? check?.config?.state || 'running' : 'running'); setRuleCfg(serverRuleConfig(next, check?.type === next ? check.config : undefined)); setCfgVal(check?.type === next ? check?.config?.[checkType(next).cfg] || '' : ''); if (next === 'cpuload' && Number(err) <= Number(warn)) { setWarn(80); setErr(90); } if ((next === 'diskspace' || next === 'memory') && Number(err) >= Number(warn)) { setWarn(20); setErr(10); } }}>{Object.keys(CHECK_TYPES).map((k) => <option key={k} value={k}>{checkType(k).label}</option>)}</Select></Field>
           <Field label={t('checks.name')}><Input value={name} onChange={(e) => setName(e.target.value)} placeholder={ct.label} /></Field>
         </div>
-        <Field label={t('checks.applyTo')}><Combobox value={target} onChange={setTarget} placeholder={t('checks.selectTarget')}
-          options={[
-            ...devices.map((d) => ({ value: 'dev:' + d.id, label: d.hostname, group: t('sup.group.agent') })),
-            ...policies.map((p) => ({ value: 'pol:' + p.id, label: t('checks.policySuffix', { name: p.name }), group: t('sup.group.policy') })),
-          ]} /></Field>
+        <PolicyAttachmentActions kind="check" item={check} policyId={defaultPolicyId} onDone={onClose} />
+        <Field label={t('checks.applyTo')}><AttachmentsField value={atts} onChange={setAtts} devMap={devMap} policies={policies} /></Field>
         {ct.server && <ServerRuleFields type={type} value={ruleCfg} onChange={setRuleCfg} />}
         {type === 'script' && <Field label={t('deploy.shell')}><Select value={shell} onChange={(e) => setShell(e.target.value)}><option value="bash">bash</option><option value="sh">sh</option><option value="powershell">powershell</option><option value="cmd">cmd</option><option value="python">python</option></Select></Field>}
         {ct.cfg && <Field label={ct.cfgLabel}>{ct.cfg === 'script' ? <CodeEditor value={cfgVal} onChange={setCfgVal} shell={shell} minHeight={120} /> : <Input value={cfgVal} onChange={(e) => setCfgVal(e.target.value)} placeholder={ct.cfgPh} className="mono" />}</Field>}
@@ -595,10 +599,236 @@ function CheckEditor({ check, onClose, devMap, policies, defaultPolicyId }) {
         <label className="flex items-center gap-2.5"><Toggle checked={enabled} onChange={(next) => { setEnabled(next); toast.info(next ? t('checks.willEnable') : t('checks.willDisable')); }} /><span className="text-[13px] text-ink">{t('checks.enabledLabel')}</span></label>
         <div className="flex items-start gap-2 rounded-lg border border-line bg-elevated/40 px-3 py-2 text-[11.5px] text-muted"><Icon name="info" size={14} className="mt-0.5 shrink-0 text-faint" />{ct.server ? t('rules.serverHelp') : type === 'linuxservice' ? t('check.service.linuxHint') : type === 'macservice' ? t('check.service.macHint') : ct.dir === 'low' ? t('checks.help.low') : ct.dir === 'high' ? t('checks.help.high') : type === 'ping' ? t('checks.help.ping') : ct.dir === 'state' ? t('checks.help.state') : t('checks.help.script')}</div>
       </div>
-      <div className="px-5 py-3.5 border-t border-line flex items-center gap-2">{check && can('checks.manage') && <Button variant="danger" icon="trash" onClick={del}>{t('action.delete')}</Button>}<div className="flex-1" /><Button variant="ghost" onClick={onClose}>{t('action.cancel')}</Button><Button variant="primary" loading={busy} onClick={save} disabled={!target}>{check ? t('checks.save') : t('checks.create')}</Button></div>
+      <div className="px-5 py-3.5 border-t border-line flex items-center gap-2">{check && can('checks.manage') && <Button variant="danger" icon="trash" onClick={del}>{t('action.delete')}</Button>}<div className="flex-1" /><Button variant="ghost" onClick={onClose}>{t('action.cancel')}</Button><Button variant="primary" loading={busy} onClick={save}>{check ? t('checks.save') : t('checks.create')}</Button></div>
     </Modal>
     <ConfirmDialog open={confirmDel} onClose={() => setConfirmDel(false)} onConfirm={doDelete} danger title={t('checks.deletePrompt')} body="" confirmLabel={t('action.delete')} />
     </>
+  );
+}
+
+// ---- where a check or task applies: any number of policies and devices ----
+
+// attachmentKey identifies an attachment's target.
+function attachmentKey(a) { return a.policy_id ? 'pol:' + a.policy_id : 'dev:' + a.agent_id; }
+
+// attachmentTargets keeps only the target ids of an item's attachments, the
+// shape the API takes.
+function attachmentTargets(atts) { return (atts || []).map((a) => (a.policy_id ? { policy_id: a.policy_id } : { agent_id: a.agent_id })); }
+
+// attachmentLabel names an attachment: the policy's name or the device's
+// hostname, as the server sent it, else as this console knows it.
+function attachmentLabel(a, devMap, policies) {
+  if (a.policy_id) return a.name || policies.find((p) => p.id === a.policy_id)?.name || a.policy_id;
+  return a.name || devMap[a.agent_id]?.hostname || a.agent_id;
+}
+
+// syncAttachments applies the difference between where an item applied when
+// the editor opened and where it should apply now, one attachment at a time.
+async function syncAttachments(kind, id, before, after) {
+  const was = new Set(before.map(attachmentKey)), now = new Set(after.map(attachmentKey));
+  for (const a of before) {
+    if (now.has(attachmentKey(a))) continue;
+    const target = a.policy_id ? ['policy', a.policy_id] : ['device', a.agent_id];
+    await (kind === 'check' ? api.detachCheck(id, ...target) : api.detachTask(id, ...target));
+  }
+  for (const a of after) {
+    if (was.has(attachmentKey(a))) continue;
+    await (kind === 'check' ? api.attachCheck(id, a) : api.attachTask(id, a));
+  }
+}
+
+// AttachmentsField edits where a check or task applies: each policy or device
+// is a removable chip, and the searchable picker adds more.
+function AttachmentsField({ value, onChange, devMap, policies, disabled }) {
+  const keys = new Set(value.map(attachmentKey));
+  const options = [
+    ...Object.values(devMap).filter((d) => !keys.has('dev:' + d.id)).map((d) => ({ value: 'dev:' + d.id, label: d.hostname, group: t('sup.group.agent') })),
+    ...policies.filter((p) => !keys.has('pol:' + p.id)).map((p) => ({ value: 'pol:' + p.id, label: t('checks.policySuffix', { name: p.name }), group: t('sup.group.policy') })),
+  ];
+  const add = (v) => { if (v) onChange([...value, v.startsWith('pol:') ? { policy_id: v.slice(4) } : { agent_id: v.slice(4) }]); };
+  return (
+    <div className="space-y-2" data-attachments="">
+      {value.length > 0 && <div className="flex flex-wrap gap-1.5">{value.map((a) => { const label = attachmentLabel(a, devMap, policies); return (
+        <span key={attachmentKey(a)} className="inline-flex items-center gap-1.5 rounded-lg border border-line bg-elevated px-2 py-1 text-[12px] text-ink">
+          <Icon name={a.policy_id ? 'policy' : 'devices'} size={12} className={a.policy_id ? 'text-brandhi' : 'text-faint'} />
+          <span className="truncate max-w-[200px]">{label}</span>
+          {!disabled && <button type="button" aria-label={t('action.remove') + ': ' + label} onClick={() => onChange(value.filter((x) => attachmentKey(x) !== attachmentKey(a)))} className="text-faint hover:text-ink"><Icon name="close" size={12} /></button>}
+        </span>); })}</div>}
+      {!disabled && <Combobox value="" onChange={add} placeholder={t('attach.add')} options={options} />}
+      {value.length === 0 && <p className="text-[11.5px] text-faint">{t('attach.noneHint')}</p>}
+      {value.length > 1 && <p className="text-[11.5px] text-muted flex items-center gap-1.5"><Icon name="info" size={13} className="text-faint" />{t('attach.sharedNote', { n: value.length })}</p>}
+    </div>
+  );
+}
+
+// AppliesTo is the list cell: the one place an item applies, the first of
+// several with how many more, or Not in use.
+function AppliesTo({ item, devMap, policies }) {
+  const atts = item.attachments || [];
+  if (!atts.length) return <span className="text-faint">{t('attach.notInUse')}</span>;
+  const first = atts[0];
+  const dev = first.agent_id && devMap[first.agent_id];
+  const label = attachmentLabel(first, devMap, policies);
+  const all = atts.map((a) => attachmentLabel(a, devMap, policies)).join(', ');
+  return (
+    <span className="flex items-center gap-1.5" title={atts.length > 1 ? all : undefined}>
+      {first.policy_id ? <Icon name="policy" size={13} className="text-brandhi" /> : dev ? <OsIcon os={dev.os} size={13} /> : <Icon name="devices" size={13} className="text-faint" />}
+      <span className={cx('truncate max-w-[180px]', first.policy_id && 'text-brandhi')}>{label}</span>
+      {atts.length > 1 && <span className="rounded-md border border-line bg-elevated px-1.5 text-[10.5px] text-muted">{t('attach.more', { n: atts.length - 1 })}</span>}
+    </span>
+  );
+}
+
+// PolicyAttachmentActions are what an editor opened from inside a policy
+// offers for an item that policy shares with other places: take it out of this
+// policy only, or give this policy a copy of its own to change.
+function PolicyAttachmentActions({ kind, item, policyId, onDone }) {
+  const toast = useToast();
+  const [busy, setBusy] = useState(false);
+  const atts = item?.attachments || [];
+  if (!policyId || atts.length < 2 || !atts.some((a) => a.policy_id === policyId)) return null;
+  const run = async (fn, message) => {
+    setBusy(true);
+    try { await fn(); toast.success(message); onDone(); } catch (e) { toast.error(t('common.failed'), e.message); } finally { setBusy(false); }
+  };
+  return (
+    <div className="flex flex-wrap items-center gap-2 rounded-xl border border-line bg-elevated/40 px-3 py-2.5" data-policy-actions="">
+      <span className="text-[12px] text-muted flex-1 min-w-[180px]">{t('attach.policyShared', { n: atts.length - 1 })}</span>
+      <Button size="sm" variant="secondary" icon="copy" disabled={busy}
+        onClick={() => run(() => (kind === 'check' ? api.copyCheck(item.id, { policy_id: policyId }) : api.copyTask(item.id, { policy_id: policyId })), t('attach.copied'))}>{t('attach.copyForPolicy')}</Button>
+      <Button size="sm" variant="ghost" icon="close" disabled={busy}
+        onClick={() => run(() => (kind === 'check' ? api.detachCheck(item.id, 'policy', policyId) : api.detachTask(item.id, 'policy', policyId)), t('attach.removed'))}>{t('attach.removeFromPolicy')}</Button>
+    </div>
+  );
+}
+
+// ---- edits the AI proposed ----
+
+// EDIT_MANAGE is the permission deciding an edit of each kind takes, the one
+// an edit by hand takes; the server checks it again.
+const EDIT_MANAGE = { script: 'scripts.manage', check: 'checks.manage', task: 'tasks.manage', policy: 'policies.manage', patch_policy: 'patches.policies.manage' };
+// EDIT_REFRESH is what to reload once an edit of each kind is applied.
+const EDIT_REFRESH = { script: 'scripts', check: 'checks', task: 'tasks', policy: 'policies', patch_policy: 'patch-policies' };
+
+// EditProposalsPanel lists the edits the assistant proposed to this screen's
+// kind of object that wait for review, and opens each one's review. Nothing in
+// them has happened.
+function EditProposalsPanel({ kind }) {
+  const q = useQuery(['edit-proposals', kind], () => api.listEditProposals({ kind, status: 'pending' }), { invalidateOn: ['edit-proposals', EDIT_REFRESH[kind]] });
+  const [open, setOpen] = useState(null);
+  const list = q.data?.proposals || [];
+  if (!list.length) return null;
+  return (
+    <div data-edit-proposals={kind} className="mb-4 rounded-xl border border-brand/25 bg-brandsoft px-3.5 py-3 space-y-2">
+      <div className="flex items-center gap-2 text-[12.5px] text-ink font-medium"><Icon name="sparkle" size={14} className="text-brandhi" />{t('edits.pending', { n: list.length })}</div>
+      {list.map((p) => (
+        <div key={p.id} className="flex items-center gap-3 rounded-lg bg-card border border-line px-3 py-2">
+          <div className="flex-1 min-w-0"><div className="text-[13px] text-ink truncate">{p.target_name || p.target_id}</div><div className="text-[11.5px] text-faint truncate">{p.reason}</div></div>
+          <Button size="sm" variant="secondary" onClick={() => setOpen(p.id)}>{t('edits.review')}</Button>
+        </div>
+      ))}
+      {open && <EditProposalReview id={open} onClose={() => setOpen(null)} />}
+    </div>
+  );
+}
+
+// editValue shows one field's value: text as it is, anything else as JSON.
+function editValue(v) {
+  if (v === null || v === undefined) return '—';
+  return typeof v === 'string' ? v : JSON.stringify(v, null, 2);
+}
+
+// editDiff lists what a proposal changes between the object now and after:
+// the fields that differ, and the attachments, assignments and exclusions it
+// adds or removes.
+function editDiff(current, proposed) {
+  const fields = [];
+  const keys = new Set([...Object.keys(current?.fields || {}), ...Object.keys(proposed?.fields || {})]);
+  keys.forEach((k) => {
+    const before = current?.fields?.[k], after = proposed?.fields?.[k];
+    if (JSON.stringify(before) !== JSON.stringify(after)) fields.push({ key: k, before, after });
+  });
+  const listDiff = (a, b, key) => {
+    const was = new Set((a || []).map(key)), now = new Set((b || []).map(key));
+    return { added: (b || []).filter((x) => !was.has(key(x))), removed: (a || []).filter((x) => !now.has(key(x))) };
+  };
+  const asg = (x) => [x.scope_type, x.scope_id || '', x.os || '', x.role || ''].join('|');
+  return {
+    fields,
+    attachments: listDiff(current?.attachments, proposed?.attachments, (x) => x),
+    assignments: listDiff(current?.assignments, proposed?.assignments, asg),
+    exclusions: listDiff(current?.exclusions, proposed?.exclusions, (x) => x),
+  };
+}
+
+// EditProposalReview shows one proposal: why, who, the object now against
+// what the proposal would leave, and Apply or Reject for whoever could make the
+// edit by hand. A proposal whose object changed since cannot be applied.
+function EditProposalReview({ id, onClose }) {
+  const { can } = useAuth();
+  const toast = useToast();
+  const q = useQuery(['edit-proposal', id], () => api.getEditProposal(id), {});
+  const [busy, setBusy] = useState(false);
+  const d = q.data;
+  const p = d?.proposal;
+  const names = d?.names || {};
+  const label = (key) => names[key] || key.slice(key.indexOf(':') + 1);
+  const asgLabel = (a) => (a.scope_type === 'global' ? t('pol.scope.global') : t('sup.group.' + (a.scope_type === 'group' ? 'group' : a.scope_type)) + ': ' + label(a.scope_type + ':' + a.scope_id))
+    + (a.os ? ' · ' + a.os : '') + (a.role ? ' · ' + a.role : '');
+  const diff = d && !d.gone ? editDiff(d.current, d.proposed) : null;
+  const canDecide = p && can(EDIT_MANAGE[p.kind]) && p.status === 'pending';
+  const decide = async (apply) => {
+    setBusy(true);
+    try {
+      if (apply) await api.applyEditProposal(id); else await api.rejectEditProposal(id);
+      toast.success(apply ? t('edits.applied') : t('edits.rejected'));
+      window.dataBus.emit('edit-proposals'); window.dataBus.emit(EDIT_REFRESH[p.kind]);
+      onClose();
+    } catch (e) { toast.error(t('common.failed'), e.message); window.dataBus.emit('edit-proposals'); }
+    finally { setBusy(false); }
+  };
+  const changeList = (title, items, render) => (items.length > 0 && (
+    <div className="space-y-1"><div className="text-[11px] uppercase tracking-wide text-faint">{title}</div>
+      <div className="flex flex-wrap gap-1.5">{items.map((x, i) => <span key={i} className="rounded-md border border-line bg-elevated px-2 py-0.5 text-[12px] text-ink">{render(x)}</span>)}</div></div>));
+  return (
+    <Modal open onClose={onClose} width="max-w-3xl">
+      <div className="px-5 py-4 border-b border-line flex items-center justify-between">
+        <div className="text-[15px] font-semibold text-ink">{t('edits.title', { name: p?.target_name || p?.target_id || '' })}</div>
+        <button onClick={onClose} className="text-faint hover:text-ink"><Icon name="close" size={18} /></button>
+      </div>
+      <div className="p-5 space-y-4 max-h-[70vh] overflow-y-auto scroll-area" data-edit-review="">
+        {p && <div className="rounded-xl border border-line bg-elevated/40 px-3.5 py-3 text-[12.5px] text-ink space-y-1">
+          <div>{p.reason}</div>
+          <div className="text-[11.5px] text-faint">{t('edits.by', { who: p.proposed_by, when: timeAgo(p.created_at) })}</div>
+        </div>}
+        {d?.gone && <div className="text-[12.5px] text-bad">{t('edits.gone')}</div>}
+        {d?.stale && <div className="flex items-start gap-2 rounded-xl border border-warn/25 bg-warnsoft px-3.5 py-3 text-[12.5px] text-ink"><Icon name="info" size={15} className="text-warn mt-0.5 shrink-0" />{t('edits.stale')}</div>}
+        {d?.pending_target && <div className="flex items-start gap-2 rounded-xl border border-warn/25 bg-warnsoft px-3.5 py-3 text-[12.5px] text-ink" data-edit-blocked="pending"><Icon name="info" size={15} className="text-warn mt-0.5 shrink-0" />{t('edits.pendingTarget')}</div>}
+        {diff && diff.fields.map((f) => (
+          <div key={f.key} className="space-y-1.5" data-edit-field={f.key}>
+            <div className="text-[12px] font-semibold text-ink mono">{f.key}</div>
+            <div className="grid md:grid-cols-2 gap-2">
+              <div><div className="text-[10.5px] uppercase tracking-wide text-faint mb-1">{t('edits.before')}</div><CodeBlock code={editValue(f.before)} shell="text" maxHeight={220} showCopy={false} wrap /></div>
+              <div><div className="text-[10.5px] uppercase tracking-wide text-faint mb-1">{t('edits.after')}</div><CodeBlock code={editValue(f.after)} shell="text" maxHeight={220} showCopy={false} wrap /></div>
+            </div>
+          </div>
+        ))}
+        {diff && <>
+          {changeList(t('edits.attachAdded'), diff.attachments.added, label)}
+          {changeList(t('edits.attachRemoved'), diff.attachments.removed, label)}
+          {changeList(t('edits.assignAdded'), diff.assignments.added, asgLabel)}
+          {changeList(t('edits.assignRemoved'), diff.assignments.removed, asgLabel)}
+          {changeList(t('edits.excluded'), diff.exclusions.added, (x) => label('agent:' + x))}
+          {changeList(t('edits.included'), diff.exclusions.removed, (x) => label('agent:' + x))}
+        </>}
+      </div>
+      <div className="px-5 py-3.5 border-t border-line flex items-center gap-2">
+        <div className="flex-1 text-[11.5px] text-faint">{t('edits.applyHint')}</div>
+        <Button variant="ghost" onClick={onClose}>{t('action.cancel')}</Button>
+        {canDecide && <Button variant="ghost" icon="close" disabled={busy} onClick={() => decide(false)}>{t('edits.reject')}</Button>}
+        {canDecide && <Button variant="primary" icon="approve" loading={busy} disabled={!!d?.stale || !!d?.gone || !!d?.pending_target} onClick={() => decide(true)}>{t('edits.apply')}</Button>}
+      </div>
+    </Modal>
   );
 }
 
@@ -744,9 +974,11 @@ function TasksScreen() {
 
   const toggle = async (task) => {
     // Task updates use PUT, so the server validates the entire schedule. Keep
-    // the current task fields when changing just the enabled state.
+    // the current task fields when changing just the enabled state. Where it
+    // applies changes through its attachments, so those stay out.
     try {
-      await api.updateTask(task.id, { ...task, enabled: !task.enabled });
+      const { attachments, agent_id, policy_id, ...fields } = task;
+      await api.updateTask(task.id, { ...fields, enabled: !task.enabled });
       toast.success(task.enabled ? t('tasks.disabled') : t('tasks.enabled'));
     } catch (e) {
       toast.error(t('tasks.updateFailed'), e.message);
@@ -766,6 +998,7 @@ function TasksScreen() {
       <Page wide>
         <PageHeader title={t('title.tasks')} subtitle={t('tasks.subtitle')}
         actions={can('tasks.manage') && <Button variant="primary" icon="plus" onClick={() => setEditing('new')}>{t('tasks.new')}</Button>} />
+      <EditProposalsPanel kind="task" />
       <Card className="overflow-hidden">
         <table className="w-full text-left">
           <thead><tr className="text-[11px] uppercase tracking-wide text-faint border-b border-line">
@@ -775,15 +1008,15 @@ function TasksScreen() {
           </tr></thead>
           <tbody className="divide-y divide-line">
             {tasks.map((task) => {
-              const dev = devMap[task.agent_id]; const pol = polMap[task.policy_id]; const sc = scriptMap[task.script_id];
+              const sc = scriptMap[task.script_id];
               return (
                 <tr key={task.id} className="hover:bg-elevated/40 transition">
                   <td className="px-4 py-3"><div className="flex items-center gap-2"><Icon name="tasks" size={15} className="text-muted" /><span className="text-[13px] text-ink font-medium">{task.name}</span>{awaitingReview(task) && <ProposalBadge />}</div></td>
-                  <td className="px-3 py-3 hidden md:table-cell text-[12.5px] text-muted">{dev ? <span className="flex items-center gap-1.5"><OsIcon os={dev.os} size={13} />{dev.hostname}</span> : pol ? <span className="flex items-center gap-1.5 text-brandhi"><Icon name="policy" size={13} />{pol.name}</span> : '—'}</td>
+                  <td className="px-3 py-3 hidden md:table-cell text-[12.5px] text-muted"><AppliesTo item={task} devMap={devMap} policies={policiesQ.data?.policies || []} /></td>
                   <td className="px-3 py-3 text-[12.5px] text-muted flex items-center gap-1.5"><Icon name="clock" size={13} className="text-faint" />{taskSchedule(task)}</td>
                   <td className="px-3 py-3 hidden lg:table-cell text-[12px] text-faint">{sc?.name || t('tasks.inline')}</td>
                   <td className="px-3 py-3"><Toggle checked={task.enabled} onChange={() => (!task.enabled && awaitingReview(task) ? setReviewTask(task) : setConfirmToggleTask(task))} disabled={!can('tasks.manage')} /></td>
-                  <td className="px-4 py-3 text-right">{can('tasks.manage') && <div className="flex items-center justify-end gap-1"><Button size="sm" variant="ghost" icon="play" onClick={() => askRun(task)}>{t('action.runNow')}</Button><Button size="sm" variant="ghost" icon="edit" onClick={() => setEditing(task)}>{t('action.edit')}</Button></div>}</td>
+                  <td className="px-4 py-3 text-right">{can('tasks.manage') && <div className="flex items-center justify-end gap-1">{!awaitingReview(task) && <Button size="sm" variant="ghost" icon="play" onClick={() => askRun(task)}>{t('action.runNow')}</Button>}<Button size="sm" variant="ghost" icon="edit" onClick={() => setEditing(task)}>{t('action.edit')}</Button></div>}</td>
                 </tr>
               );
             })}
@@ -819,7 +1052,8 @@ function TaskEditor({ task, onClose, devMap, policies, scripts, defaultPolicyId 
   const toast = useToast();
   const { can } = useAuth();
   const [name, setName] = useState(task?.name || '');
-  const [target, setTarget] = useState(task?.policy_id ? 'pol:' + task.policy_id : task?.agent_id ? 'dev:' + task.agent_id : defaultPolicyId ? 'pol:' + defaultPolicyId : '');
+  const [initialAtts] = useState(() => (task ? attachmentTargets(task.attachments) : defaultPolicyId ? [{ policy_id: defaultPolicyId }] : []));
+  const [atts, setAtts] = useState(initialAtts);
   const [scriptId, setScriptId] = useState(task?.script_id || '');
   const [kind, setKind] = useState(task?.schedule_kind || 'interval');
   const [intervalSec, setIntervalSec] = useState(task?.interval_sec || 3600);
@@ -831,15 +1065,17 @@ function TaskEditor({ task, onClose, devMap, policies, scripts, defaultPolicyId 
   const [timezone, setTimezone] = useState(task ? scheduleZone(task.timezone) : browserTimezone());
   const [enabled, setEnabled] = useState(task?.enabled ?? true);
   const [busy, setBusy] = useState(false);
-  const devices = Object.values(devMap);
 
   const save = async () => {
     if (kind === 'weekly' && (daysOfWeek === 0 || times.length === 0)) { toast.error(t('tasks.pickWeekday')); return; }
     setBusy(true);
     const sc = scripts.find((s) => s.id === scriptId);
     const body = { name: name || t('tasks.defaultName'), script_id: scriptId || undefined, shell: sc?.shell || 'bash', schedule_kind: kind, interval_sec: Number(intervalSec), run_at_minute: Number(minute), days_of_week: kind === 'weekly' ? daysOfWeek : 0, run_at_minutes: kind === 'weekly' ? times : [], timezone, enabled };
-    if (target.startsWith('dev:')) body.agent_id = target.slice(4); else if (target.startsWith('pol:')) body.policy_id = target.slice(4);
-    try { if (task) await api.updateTask(task.id, body); else await api.createTask(body); toast.success(task ? t('tasks.updated') : t('tasks.created')); onClose(); }
+    try {
+      if (task) { await api.updateTask(task.id, body); await syncAttachments('task', task.id, initialAtts, atts); }
+      else await api.createTask({ ...body, attachments: atts });
+      toast.success(task ? t('tasks.updated') : t('tasks.created')); onClose();
+    }
     catch (e) { toast.error(t('common.failed'), e.message); } finally { setBusy(false); }
   };
   // Asked in a console dialog, not the browser's confirm over the tab.
@@ -853,15 +1089,10 @@ function TaskEditor({ task, onClose, devMap, policies, scripts, defaultPolicyId 
       <div className="px-5 py-4 border-b border-line flex items-center justify-between"><div className="text-[15px] font-semibold text-ink">{task ? t('tasks.editTitle') : t('tasks.newTitle')}</div><button onClick={onClose} className="text-faint hover:text-ink"><Icon name="close" size={18} /></button></div>
       <div className="p-5 space-y-4">
         <Field label={t('checks.name')}><Input value={name} onChange={(e) => setName(e.target.value)} placeholder={t('tasks.namePlaceholder')} /></Field>
-        <div className="grid grid-cols-2 gap-3">
-          <Field label={t('checks.col.target')}><Combobox value={target} onChange={setTarget} placeholder={t('tasks.select')}
-            options={[
-              ...devices.map((d) => ({ value: 'dev:' + d.id, label: d.hostname, group: t('sup.group.agent') })),
-              ...policies.map((p) => ({ value: 'pol:' + p.id, label: p.name, group: t('sup.group.policy') })),
-            ]} /></Field>
-          <Field label={t('tasks.col.script')}><Combobox value={scriptId} onChange={setScriptId} placeholder={t('tasks.chooseScript')}
-            options={scripts.map((s) => ({ value: s.id, label: s.name }))} /></Field>
-        </div>
+        <PolicyAttachmentActions kind="task" item={task} policyId={defaultPolicyId} onDone={onClose} />
+        <Field label={t('checks.applyTo')}><AttachmentsField value={atts} onChange={setAtts} devMap={devMap} policies={policies} /></Field>
+        <Field label={t('tasks.col.script')}><Combobox value={scriptId} onChange={setScriptId} placeholder={t('tasks.chooseScript')}
+          options={scripts.map((s) => ({ value: s.id, label: s.name }))} /></Field>
         <Field label={t('tasks.schedule')}>
           <div className="flex gap-1 p-0.5 bg-app rounded-lg border border-line2 w-fit mb-2">
             {['interval', 'daily', 'weekly'].map((v) => [v, t('tasks.kind.' + v)]).map(([v, l]) => <button key={v} onClick={() => setKind(v)} className={cx('h-7 px-3 rounded-md text-[12px] font-medium transition', kind === v ? 'bg-elevated text-ink' : 'text-faint hover:text-muted')}>{l}</button>)}
@@ -897,7 +1128,7 @@ function TaskEditor({ task, onClose, devMap, policies, scripts, defaultPolicyId 
         {kind !== 'interval' && <Field label={t('schedule.timezone')} hint={t('schedule.timezoneHint')}><TimezoneSelect value={timezone} onChange={setTimezone} /></Field>}
         <label className="flex items-center gap-2.5"><Toggle checked={enabled} onChange={setEnabled} /><span className="text-[13px] text-ink">{t('checks.enabledLabel')}</span></label>
       </div>
-      <div className="px-5 py-3.5 border-t border-line flex items-center gap-2">{task && can('tasks.manage') && <Button variant="danger" icon="trash" onClick={del}>{t('action.delete')}</Button>}<div className="flex-1" /><Button variant="ghost" onClick={onClose}>{t('action.cancel')}</Button><Button variant="primary" loading={busy} onClick={save} disabled={!target}>{task ? t('tasks.save') : t('tasks.create')}</Button></div>
+      <div className="px-5 py-3.5 border-t border-line flex items-center gap-2">{task && can('tasks.manage') && <Button variant="danger" icon="trash" onClick={del}>{t('action.delete')}</Button>}<div className="flex-1" /><Button variant="ghost" onClick={onClose}>{t('action.cancel')}</Button><Button variant="primary" loading={busy} onClick={save}>{task ? t('tasks.save') : t('tasks.create')}</Button></div>
     </Modal>
     <ConfirmDialog open={confirmDel} onClose={() => setConfirmDel(false)} onConfirm={doDelete} danger title={t('tasks.deletePrompt')} body="" confirmLabel={t('action.delete')} />
     </>
@@ -927,6 +1158,8 @@ window.SEV = SEV;
 // checks and tasks a policy owns with the same editors this screen uses, rather
 // than a second, drifting copy of the same forms.
 window.CheckEditor = CheckEditor;
+window.EditProposalsPanel = EditProposalsPanel;
+window.AppliesTo = AppliesTo;
 // The device drawer (screens-devices.jsx) describes checks and tasks the same way.
 window.checkType = checkType;
 window.taskSchedule = taskSchedule;

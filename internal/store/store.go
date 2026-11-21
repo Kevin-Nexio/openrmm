@@ -2,6 +2,7 @@
 package store
 
 import (
+	"bytes"
 	"context"
 	"encoding/json"
 	"errors"
@@ -30,9 +31,13 @@ var (
 	ErrRateLimited = errors.New("rate limited")
 )
 
-// Store wraps a pgx connection pool.
+// Store uses a connection pool, or the transaction for a configuration write.
 type Store struct {
-	pool *pgxpool.Pool
+	pool        dbSession
+	connections *pgxpool.Pool
+	// Set only on a configuration transaction. Flush these entries after
+	// configuration writes to keep the audit chain lock last.
+	configAudits []configAudit
 }
 
 // New opens a connection pool.
@@ -44,17 +49,17 @@ func New(ctx context.Context, url string) (*Store, error) {
 	if err := pool.Ping(ctx); err != nil {
 		return nil, err
 	}
-	return &Store{pool: pool}, nil
+	return &Store{pool: pool, connections: pool}, nil
 }
 
 // Close releases the pool.
-func (s *Store) Close() { s.pool.Close() }
+func (s *Store) Close() { s.connections.Close() }
 
 // Ping verifies database connectivity. Backs the readiness probe.
-func (s *Store) Ping(ctx context.Context) error { return s.pool.Ping(ctx) }
+func (s *Store) Ping(ctx context.Context) error { return s.connections.Ping(ctx) }
 
 // PoolStat exposes connection-pool counters for the metrics endpoint.
-func (s *Store) PoolStat() *pgxpool.Stat { return s.pool.Stat() }
+func (s *Store) PoolStat() *pgxpool.Stat { return s.connections.Stat() }
 
 func newID() string { return uuid.NewString() }
 
@@ -931,7 +936,20 @@ func (s *Store) AddAuditAt(ctx context.Context, actor, action, target string, de
 	return err
 }
 
+type configAudit struct {
+	actor, action, target string
+	detail                []byte
+}
+
 func (s *Store) AddAudit(ctx context.Context, actor, action, target string, detail []byte) error {
+	if s.configAudits != nil {
+		s.configAudits = append(s.configAudits, configAudit{actor, action, target, bytes.Clone(detail)})
+		return nil
+	}
+	return s.writeAudit(ctx, actor, action, target, detail)
+}
+
+func (s *Store) writeAudit(ctx context.Context, actor, action, target string, detail []byte) error {
 	if detail == nil {
 		detail = []byte("{}")
 	}

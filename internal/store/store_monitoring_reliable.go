@@ -26,8 +26,9 @@ const serviceCheckPlatformSQL = `(c.type NOT IN ('linuxservice','macservice')
  OR (c.type='macservice' AND lower(a.os) IN ('darwin','macos')))`
 
 // CheckAppliesToAgent is the server-side trust boundary for inbound results.
-// A device may only report a currently enabled direct check or one inherited
-// through a policy assigned to that device, its site, or its client.
+// A device may only report a currently enabled, reviewed check that one of its
+// attachments makes apply to it: attached to the device, or to a switched-on
+// policy that reaches it (checkReachesSQL).
 func (s *Store) CheckAppliesToAgent(ctx context.Context, checkID, agentID string) (bool, error) {
 	var applies bool
 	err := s.pool.QueryRow(ctx, `
@@ -39,9 +40,7 @@ func (s *Store) CheckAppliesToAgent(ctx context.Context, checkID, agentID string
 			WHERE c.id=$1 AND c.enabled AND a.revoked_at IS NULL
 			  AND NOT (c.type=ANY($3::text[]))
  AND `+serviceCheckPlatformSQL+`
-			  AND (c.proposed_by='' OR c.approved_by<>'') AND (
-				c.agent_id=a.id OR c.policy_id IN `+policiesReachingSQL("a")+`
-			)
+			  AND (c.proposed_by='' OR c.approved_by<>'') AND `+checkReachesSQL("c", "a")+`
 		)`, checkID, agentID, models.ServerRuleTypes).Scan(&applies)
 	return applies, err
 }
@@ -466,16 +465,14 @@ func (s *Store) TryMarkCheckStateReconciled(ctx context.Context, checkID, agentI
 	return tag.RowsAffected() == 1, nil
 }
 
-// CheckInstances returns every effective target of a direct or policy check.
+// CheckInstances returns every device a check reaches through any attachment.
 // Missing state is explicit "unknown" rather than being reported as healthy.
 func (s *Store) CheckInstances(ctx context.Context, checkID, userID string, scoped bool) ([]models.CheckInstance, error) {
 	rows, err := s.pool.Query(ctx, `
 		SELECT a.id, a.hostname, COALESCE(cs.status, 'unknown'), cs.last_value,
 		       COALESCE(cs.last_output, ''), cs.last_result_at
 		FROM checks c
-		JOIN agents a ON (
-			c.agent_id=a.id OR c.policy_id IN `+policiesReachingSQL("a")+`
-		)
+		JOIN agents a ON `+checkReachesSQL("c", "a")+`
 		LEFT JOIN check_states cs ON cs.check_id=c.id AND cs.agent_id=a.id
 		WHERE c.id=$1 AND a.revoked_at IS NULL AND `+serviceCheckPlatformSQL+` AND (
 			NOT $3 OR NOT EXISTS (SELECT 1 FROM user_scopes WHERE user_id=NULLIF($2,'')::uuid)

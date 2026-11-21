@@ -35,7 +35,7 @@ func TestPlatformServiceCheckApplicabilityIntegration(t *testing.T) {
 		if kind == models.CheckPing {
 			raw = `{"host":"localhost"}`
 		}
-		c := &models.Check{PolicyID: &policy.ID, Type: kind, Name: kind, Config: json.RawMessage(raw), IntervalSec: 300, TimeoutSec: 30, FailureCount: 2, RecoveryCount: 2, Enabled: true}
+		c := &models.Check{Attachments: models.OnPolicy(&policy.ID), Type: kind, Name: kind, Config: json.RawMessage(raw), IntervalSec: 300, TimeoutSec: 30, FailureCount: 2, RecoveryCount: 2, Enabled: true}
 		if err := models.ValidateCheck(c); err != nil {
 			t.Fatal(err)
 		}

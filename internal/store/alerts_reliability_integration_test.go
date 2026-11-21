@@ -58,7 +58,7 @@ func newAlertReliabilityFixture(t *testing.T, prefix string) alertReliabilityFix
 		t.Fatal(err)
 	}
 	check, err := st.CreateCheck(ctx, &models.Check{
-		AgentID: &agent.ID, Type: models.CheckScript, Name: prefix + " check",
+		Attachments: models.OnAgent(&agent.ID), Type: models.CheckScript, Name: prefix + " check",
 		Config:      json.RawMessage(`{"shell":"bash","script":"exit 1"}`),
 		IntervalSec: 30, FailureCount: 2, RecoveryCount: 2,
 		CooldownSec: 300, TimeoutSec: 30, Enabled: true,

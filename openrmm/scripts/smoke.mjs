@@ -12,6 +12,13 @@ const types = { '.css': 'text/css', '.html': 'text/html', '.js': 'text/javascrip
 const permissions = ['ai_chat.use', 'alerts.view', 'alerts.manage', 'jobs.view', 'jobs.create', 'jobs.manage', 'checks.view', 'checks.manage', 'tasks.view', 'tasks.manage', 'policies.view', 'policies.manage', 'scripts.view', 'scripts.manage', 'scripts.variables', 'patches.view', 'patches.manage', 'patches.policies.manage', 'devices.view', 'devices.manage', 'devices.delete', 'devices.remote', 'devices.files', 'devices.terminal', 'clients.view', 'clients.manage', 'reports.view', 'audit.view', 'settings.manage', 'enrollment.manage', 'api_tokens.manage', 'users.manage', 'roles.manage'];
 const user = { id: 'user-1', username: 'smoke-admin', role: 'admin', permissions, created_at: '2026-01-01T00:00:00Z' };
 const apiRequests = [];
+// A pre-existing direct check to edit and then share through a policy.
+const sharedPolicy = { id: 'pol-shared-e2e', name: 'Backup coverage', enabled: true, description: '' };
+const sharedCheck = { id: 'check-share-e2e', name: 'Existing memory check', type: 'memory', config: {}, enabled: true,
+  interval_sec: 300, attachments: [{ agent_id: 'dev-1', name: 'SMOKE-PC' }] };
+const editProposal = { id: 'edit-check-e2e', kind: 'check', target_id: sharedCheck.id, target_name: sharedCheck.name,
+  status: 'pending', reason: 'Make the memory check easier to identify', proposed_by: 'ai:smoke', created_at: '2026-11-12T00:00:00Z' };
+
 const ruleChecks = [];
 const extraChecks = Array.from({ length: 60 }, (_, i) => ({ id: 'sample-rule-' + (i + 1), name: 'Monitor ' + String(i + 1).padStart(2, '0'), type: 'ping', agent_id: 'dev-1', config: { host: '127.0.0.1' }, enabled: true, interval_sec: 300 }));
 const ruleDefaults = Object.fromEntries(['connectivity', 'job_failure', 'patch_failure', 'reboot_pending', 'agent_outdated'].map((type) => [type, { type, config: type === 'connectivity' ? { mode: 'alert', severity: 'error', after_min: 3 } : { mode: 'ignore', severity: 'warning' } }]));
@@ -158,9 +165,32 @@ const server = createServer(async (req, res) => {
           ruleChecks.push(check);
           return json(res, 201, check);
         }
-        return json(res, 200, { checks: [...ruleChecks, ...extraChecks] });
+        const policy = url.searchParams.get('policy_id');
+        const checks = [...ruleChecks, ...extraChecks, sharedCheck];
+        return json(res, 200, { checks: policy ? checks.filter((c) => c.attachments?.some((a) => a.policy_id === policy)) : checks });
       }
-      if (pathname === '/api/policies') return json(res, 200, { policies: [aiPolicy] });
+      if (pathname === '/api/edit-proposals') {
+        return json(res, 200, { proposals: url.searchParams.get('kind') === 'check' && editProposal.status === 'pending' ? [editProposal] : [] });
+      }
+      if (pathname === '/api/edit-proposals/edit-check-e2e') {
+        return json(res, 200, { proposal: editProposal, current: { fields: { name: sharedCheck.name, interval_sec: 300 } },
+          proposed: { fields: { name: 'Reviewed memory check', interval_sec: 300 } }, stale: false });
+      }
+      if (pathname === '/api/edit-proposals/edit-check-e2e/apply' && req.method === 'POST') {
+        if (editProposal.status !== 'pending') return json(res, 409, { error: 'already decided' });
+        editProposal.status = 'applied';
+        sharedCheck.name = 'Reviewed memory check';
+        return json(res, 200, { status: 'applied', steps: ['update'] });
+      }
+      if (pathname === '/api/checks/check-share-e2e/attachments' && req.method === 'POST') {
+        if (payload?.policy_id !== sharedPolicy.id) return json(res, 400, { error: 'unexpected target' });
+        if (sharedCheck.attachments.some((a) => a.policy_id === sharedPolicy.id)) return json(res, 409, { error: 'already attached' });
+        sharedCheck.attachments.push({ policy_id: sharedPolicy.id, name: sharedPolicy.name });
+        return json(res, 200, sharedCheck);
+      }
+      if (pathname === '/api/policies') return json(res, 200, { policies: [aiPolicy, sharedPolicy] });
+      if (pathname === '/api/policies/pol-shared-e2e/assignments') return json(res, 200, { assignments: [] });
+      if (pathname === '/api/policies/pol-shared-e2e/exclusions') return json(res, 200, { exclusions: [] });
       if (pathname === '/api/policies/pol-ai/assignments') {
         if (req.method === 'POST') {
           const a = { id: 'asg-' + (policyAssignments.length + 1), policy_id: 'pol-ai', ...payload };
@@ -402,7 +432,7 @@ async function alertRulesBrowserFlow() {
   (await wait(() => button('New check'))).click();
   const type = await wait(() => [...document.querySelectorAll('select')].find((el) => [...el.options].some((o) => o.value === 'connectivity')));
   choose(type, 'connectivity');
-  (await wait(() => button('Select target…'))).click();
+  (await wait(() => button('Add a policy or device…'))).click();
   (await wait(() => button('SMOKE-PC'))).click();
   const mode = await wait(() => [...document.querySelectorAll('select')].find((el) => [...el.options].some((o) => o.value === 'ignore')));
   choose(mode, 'ignore');
@@ -606,7 +636,7 @@ async function servicesAndRemoteSettingsBrowserFlow() {
       const state = await wait(() => [...document.querySelectorAll('select')].find((el) => [...el.options].some((o) => o.value === 'loaded')));
       change(state, 'loaded');
     }
-    (await wait(() => button('Select target…'))).click();
+    (await wait(() => button('Add a policy or device…'))).click();
     (await wait(() => button('SMOKE-PC'))).click();
     (await wait(() => button('Create check') && !button('Create check').disabled && button('Create check'))).click();
     await wait(() => !button('Create check'));
@@ -853,6 +883,36 @@ async function bulkLibraryDeployBrowserFlow() {
   (await wait(() => { const b = button('Create deployment (2)', modal); return b && !b.disabled && b; })).click();
   await wait(() => !document.body.contains(modal) || !button('Create deployment (2)'));
   document.documentElement.dataset.bulkLibraryE2e = 'passed';
+  return true;
+}
+
+async function sharedMonitoringBrowserFlow() {
+  const wait = async (fn) => {
+    for (let i = 0; i < 150; i++) { const value = fn(); if (value) return value; await new Promise((r) => setTimeout(r, 50)); }
+    throw new Error('Shared monitoring E2E timed out: ' + fn.toString());
+  };
+  const button = (text, root = document) => [...root.querySelectorAll('button')].find((el) => el.textContent.trim() === text);
+  (await wait(() => button('Checks'))).click();
+  const proposals = await wait(() => document.querySelector('[data-edit-proposals="check"]'));
+  (await wait(() => button('Review', proposals))).click();
+  const field = await wait(() => document.querySelector('[data-edit-review] [data-edit-field="name"]'));
+  if (!field.textContent.includes('Existing memory check') || !field.textContent.includes('Reviewed memory check')) {
+    throw new Error('The review must show the old and proposed values');
+  }
+  if (document.querySelector('[data-edit-review] [data-edit-field="interval_sec"]')) throw new Error('An unchanged field appeared in the review');
+  (await wait(() => button('Apply edit') && !button('Apply edit').disabled && button('Apply edit'))).click();
+  await wait(() => !document.querySelector('[data-edit-proposals="check"]'));
+  await wait(() => [...document.querySelectorAll('tbody tr')].some((tr) => tr.textContent.includes('Reviewed memory check')));
+
+  (await wait(() => button('Policies'))).click();
+  (await wait(() => [...document.querySelectorAll('button')].find((el) => el.textContent.trim().startsWith('Backup coverage')))).click();
+  (await wait(() => button('Add an existing check…'))).click();
+  (await wait(() => button('Reviewed memory check'))).click();
+  await wait(() => document.body.textContent.includes('Reviewed memory check'));
+  (await wait(() => button('Add an existing check…'))).click();
+  await wait(() => document.activeElement?.tagName === 'INPUT');
+  if (button('Reviewed memory check')) throw new Error('The already attached check is still offered');
+  document.documentElement.dataset.sharedMonitoringE2e = 'passed';
   return true;
 }
 
@@ -1189,6 +1249,12 @@ try {
     assertBrowser(bulkFlow, /data-bulk-library-e2e="passed"/);
     assert.deepEqual(apiRequests.filter((r) => r.method === 'POST' && r.pathname === '/api/jobs/bulk').map((r) => r.payload),
       [{ agent_ids: ['dev-1', 'dev-2'], script_id: 'script-bulk', params: { site: 'branch' } }], 'the saved script went by id, with the parameter chosen');
+    const sharedFlow = await runMobileChrome(chrome, baseURL + '/authenticated/', { width: 1280, flow: sharedMonitoringBrowserFlow });
+    assertBrowser(sharedFlow, /data-shared-monitoring-e2e="passed"/);
+    assert.equal(apiRequests.filter((r) => r.method === 'POST' && r.pathname === '/api/edit-proposals/edit-check-e2e/apply').length, 1);
+    assert.deepEqual(apiRequests.filter((r) => r.method === 'POST' && r.pathname === '/api/checks/check-share-e2e/attachments').map((r) => r.payload),
+      [{ policy_id: 'pol-shared-e2e' }], 'the console attaches the reviewed check by id');
+    assert.equal(sharedCheck.attachments.length, 2, 'sharing preserves the direct device attachment');
     const usersFlow = await runMobileChrome(chrome, baseURL + '/authenticated/', { width: 1280, flow: devicesUserBrowserFlow });
     assertBrowser(usersFlow, /data-devices-user-e2e="passed"/);
     const hardwareFlow = await runMobileChrome(chrome, baseURL + '/authenticated/', { width: 1280, flow: hardwareLastUserBrowserFlow });
