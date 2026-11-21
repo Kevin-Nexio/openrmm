@@ -138,8 +138,9 @@ test('the settings screen edits only the alerts SMTP profile', async () => {
 test('the task toggle keeps the complete task when changing enabled state', async () => {
   const screens = await readFile(path.join(root, 'src', 'screens-rmm.jsx'), 'utf8');
 
+  // Every field but where it applies: those change through the attachments.
   assert.match(screens,
-    /api\.updateTask\(task\.id,\s*\{\s*\.\.\.task,\s*enabled:\s*!task\.enabled\s*\}\)/);
+    /const \{ attachments, agent_id, policy_id, \.\.\.fields \} = task;\s*await api\.updateTask\(task\.id,\s*\{\s*\.\.\.fields,\s*enabled:\s*!task\.enabled\s*\}\)/);
   assert.match(screens, /const \[confirmToggleTask, setConfirmToggleTask\] = useState\(null\)/);
   // A person's task toggles through the confirmation; an AI proposal that is
   // still off is switched on only through its review (TaskReview).
@@ -156,7 +157,7 @@ test('checks can be enabled or disabled from the list and editor', async () => {
   const ui = await readFile(path.join(root, 'src', 'ui.jsx'), 'utf8');
 
   assert.match(screens,
-    /api\.updateCheck\(c\.id,\s*\{\s*\.\.\.c,\s*enabled:\s*!c\.enabled\s*\}\)/);
+    /const \{ attachments, agent_id, policy_id, \.\.\.fields \} = c;\s*await api\.updateCheck\(c\.id,\s*\{\s*\.\.\.fields,\s*enabled:\s*!c\.enabled\s*\}\)/);
   assert.match(screens,
     /onClick=\{\(e\) => e\.stopPropagation\(\)\}\s*>\s*<Toggle checked=\{c\.enabled\}/);
   assert.match(screens, /const \[confirmToggle, setConfirmToggle\] = useState\(null\)/);

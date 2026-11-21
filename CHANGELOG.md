@@ -13,11 +13,153 @@ tag.
   sample delivery. Hostname remains the default; existing recipient scope and
   deduplication rules are preserved.
 
+- **The AI can propose edits to existing objects.** AI Chat and MCP can propose
+  an edit to a library script, check, scheduled task, policy or patch policy:
+  its fields, where a check or task applies, and a policy's assignments and
+  excluded devices.
+  - **Nothing changes until a person applies it** in the object's screen. The
+    review shows each changed field before and after.
+  - **Applying makes the edit as that person**, through the same checks as an
+    edit by hand. Those checks also run when the edit is proposed, so an
+    invalid value is refused at once and the assistant can correct it.
+  - **A proposal is stale if its reviewed state changed.** A reviewer must
+    have authority over the whole object. The edit, decision and audit commit
+    together. A newer proposal can replace an open one before a decision starts.
+  - **No autonomy setting applies an edit**, and a policy is switched on only
+    through its activation review.
+  - **An object still awaiting review cannot be edited this way.** It is
+    reviewed whole on its own screen.
+  - New tools: `list_scripts`, `get_editable_object` and `propose_*_edit`.
+    New endpoints: `/api/edit-proposals`. Migration 038.
+- **Checks and scheduled tasks in any number of policies and devices.** A check
+  or task is no longer owned by one policy or device: it is attached to as many
+  as needed, and a device gets it once whichever of them reach it. Policies
+  organised by function ("File server", "Backup server") can share a check and
+  edit it once.
+  - The editors take several policies and devices as chips.
+  - A policy's drawer has **Add an existing check** and **Add an existing task**.
+  - Inside a policy, a shared item offers **Make a copy for this policy** and
+    **Remove from this policy**.
+  - The lists show where each item applies, or **Not in use**, and the device
+    page lists every source.
+  - Migration 037 attaches every existing check and task to its policy or device.
+  - A restricted user changes a shared item only when every attachment is a
+    device in their scope, and sees only those attachments.
+  - An AI proposal awaiting review stays on its one attachment, and a check
+    silence never widens to where the check is attached later.
+  - API: `attachments` on checks and tasks, and `/attachments` and `/copy`
+    endpoints. `agent_id` and `policy_id` keep working for one target.
+- **Devices ▸ Last boot.** An optional column shows when each device last
+  booted, with the exact time on hover, and sorts the devices that have run
+  longest first. It starts hidden: turn it on from **Columns**. The server works
+  it out from the uptime the agent already reports in its inventory, so agents
+  do not need an update. Devices that reported an inventory before the upgrade
+  get it at once (migration 036).
+- **Deploy to many runs saved library scripts.** Devices ▸ Deploy to many has
+  a **From the library** option: pick a saved script, fill in its parameters,
+  and it runs by id on every selected device, with its script variables. Each
+  device gets the value set for it, its department, site or client, resolved
+  when its company's batch is approved. Before, a deployment sent typed text
+  only, without variables or parameters. Every device is checked first; if
+  any could not run the script (no value for a variable, an agent too old),
+  the deployment is refused and names them. `POST /api/jobs/bulk` takes
+  `script_id` and `params`.
+- **A device's Jobs tab shows each job's output.** A row expands in place to
+  show the output and exit code, or why there is none yet; **Open in Jobs** still
+  leads to the full job.
+
+### Security
+
+- **pgx 5.13.0** (`github.com/jackc/pgx/v5`, #278). It fixes GHSA-w9rp-vfrh-q8vv:
+  a malformed server response could panic `Rows.Values`. OpenRMM does not
+  call `Rows.Values`; it reads rows with `Scan`, which already checked the
+  count. The release also stops retrying a query after the connection closed
+  mid-response. Its change to client certificates does not apply: OpenRMM
+  configures none (`sslcert`, `sslkey` or `TLSConfig`).
+- **Alert mail treats a lone carriage return as a line break.** Text an
+  endpoint reports (a hostname, check output) goes into the body of alert
+  mail. A bare CR in it reached the mail relay, so `\r.\r\n` could end the
+  message early on a server that splits lines on CR ("SMTP smuggling"). The
+  body now has no CR outside a CRLF, and a dot after one is stuffed like any
+  other line. Headers were already safe.
+- **The agent uses only its own server's relay for remote sessions.** During
+  a rolling upgrade, a pre-ticket server names the relay URL for the screen
+  and the elevated shell. The agent now uses that URL only when it has the
+  scheme, host and port of the server the agent connects to. Any other is
+  replaced by the relay derived from that server. Needs the agent update.
+
+### Changed
+
+- **Run script ▸ From library is searchable.** The picker on a device's Run
+  script tab filters as you type and groups scripts by category, instead of one
+  long list.
+
 ### Fixed
 
 - Notification links can use `RMM_CONSOLE_PUBLIC_URL` on split-ingress deployments,
   instead of sending operators to the agents origin. An unset value retains the
   existing `RMM_PUBLIC_URL` fallback.
+
+- **Ping and Windows service checks keep accented characters.** On Windows,
+  `ping` and `sc query` write in the console's OEM code page. The agent sent
+  those bytes undecoded, so accented characters showed as "?". The agent now
+  decodes them as it already did for cmd and PowerShell scripts. Linux and
+  macOS output, already UTF-8, is unchanged. Needs the agent update; results
+  stored before it keep the "?".
+- **A check timeout counts as one failure.** The server deadline was exactly
+  `timeout_sec`, while the agent starts its own timer only when the order
+  arrives. The server recorded the timeout, then counted the agent's late
+  result for the same run again, so "Failures to alert" of 2 fired on a single
+  timeout. The server now waits 30 seconds past the agent's timeout. A late
+  result replaces that timeout instead of adding another failure, and a late
+  success still clears the streak. A check can set Timeouts to "Count as a
+  failure" (the default) or "Ignore". The choice also covers a run the agent
+  stops at the timeout itself, with the device awake: agent 0.12.0 reports it as
+  a timeout, and an older agent as an ordinary failure. The review that approves
+  a check, including a policy activation, shows that choice (migration 040).
+- **A script that starts something in the background no longer keeps a job
+  or check running.** On Linux and macOS, a job or script check whose script
+  started a process in the background (`service &` without redirecting its
+  output) ran until that process exited, past its timeout. At the timeout the
+  agent killed only the shell, and the process it left kept the output open.
+  - At a timeout or a cancel, the agent now stops the script's whole process
+    group, as it already stopped the process tree on Windows.
+  - A script that exits while something it started still holds its output
+    finishes 5 seconds later, with its own exit status and a note that output
+    after it exited is not included.
+  - Needs the agent update.
+- **Restoring a backup works with the published images.** The ops scripts read
+  only `docker-compose.prod.yml` and ignored the `COMPOSE_FILE` that
+  `deploy/QUICKSTART.md` sets in `deploy/.env`.
+  - The cause: they gave it a default before reading `deploy/.env`, and passed
+    a list of files as a single one.
+  - The effect on `restore.sh` and `restore-pitr.sh`: after restoring the
+    database, they tried to build the server from source instead of starting
+    the published images. That failed, the automatic rollback failed the same
+    way, and the application was left stopped.
+  - The scripts now take `COMPOSE_FILE` from the environment or `deploy/.env`
+    and pass one `-f` per file, relative to `deploy/`.
+  - `scripts/test-ops-compose-files.sh` runs in CI.
+- **Point-in-time recovery no longer replaces the database before it knows the
+  recovery will work.**
+  - **What went wrong:** `restore-pitr.sh` deleted the data volume first, then
+    replayed. If PostgreSQL could not reach the target, the database was down
+    and the old data was gone. That happened, for example, when a recovery to
+    the same instant was repeated with nothing written since.
+  - **Rehearsal:** the script now stops the writers and archives the WAL
+    segment in progress, so the last writes are replayable. It then rehearses
+    the recovery on a throwaway copy. Only if the target is reached does it
+    replace the data volume. Otherwise the writers start again, nothing has
+    changed, and the error explains why, with the timelines in the archive.
+  - **Leftover settings:** a recovery's settings stayed in
+    `postgresql.auto.conf`, so every later base backup carried them, and a
+    recovery with no target stopped at the old target instead. They are now
+    removed after the cluster is promoted, and dropped from older base backups
+    before replaying.
+  - **New:** `PITR_TARGET_TIMELINE` (`latest`, `current` or a number) chooses
+    the branch of history to replay.
+  - **Tests:** `scripts/test-pitr.sh` runs these cases against a real
+    PostgreSQL in CI. The production guide (section 7.1) explains timelines.
 
 ## [0.11.4] - 2026-11-17
 

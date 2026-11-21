@@ -4,6 +4,9 @@ import path from 'node:path';
 import test from 'node:test';
 import { fileURLToPath } from 'node:url';
 
+// Every character a regular expression gives a meaning to, escaped.
+const escapeRegExp = (text) => text.replace(/[.*+?^${}()|[\]\\]/g, '\\$&');
+
 const root = path.resolve(path.dirname(fileURLToPath(import.meta.url)), '..');
 const src = (file) => readFile(path.join(root, 'src', file), 'utf8');
 
@@ -46,7 +49,7 @@ test('every language explains the support link and keeps its placeholders', asyn
   for (const locale of ['en', 'pt-BR', 'es', 'de', 'zh-CN', 'ja', 'ru', 'ko', 'ms']) {
     const table = await src(`locales/${locale}.jsx`);
     for (const [key, want] of Object.entries(holes)) {
-      const m = table.match(new RegExp(`'${key.replace(/\./g, '\\.')}': (['"])(.+?)\\1,`));
+      const m = table.match(new RegExp(`'${escapeRegExp(key)}': (['"])(.+?)\\1,`));
       assert.ok(m, `${locale}: ${key}`);
       const found = [...m[2].matchAll(/\{(\w+)\}/g)].map((h) => h[1]).sort().join(',');
       assert.equal(found, want, `${locale}: ${key} placeholders`);

@@ -3,8 +3,11 @@ set -Eeuo pipefail
 
 OPS_DIR=$(cd -- "$(dirname -- "${BASH_SOURCE[0]}")" && pwd)
 DEPLOY_DIR=$(cd -- "$OPS_DIR/.." && pwd)
-COMPOSE_FILE=${COMPOSE_FILE:-$DEPLOY_DIR/docker-compose.prod.yml}
 ENV_FILE=${ENV_FILE:-$DEPLOY_DIR/.env}
+# COMPOSE_FILE is not given a default here: deploy/.env may set it (the
+# published images are layered that way, deploy/QUICKSTART.md), and that file
+# is read later, by load_env_file. compose_files resolves it when it is used.
+DEFAULT_COMPOSE_FILE=docker-compose.prod.yml
 
 die() {
   printf 'error: %s\n' "$*" >&2
@@ -41,8 +44,29 @@ load_env_file() {
   done < "$ENV_FILE"
 }
 
+# Fills COMPOSE_ARGS with one -f per file in COMPOSE_FILE: from the
+# environment, from deploy/.env, or docker-compose.prod.yml. The list is split
+# the way Compose splits it (COMPOSE_PATH_SEPARATOR, ":" by default), and a
+# relative path is relative to deploy/, where `docker compose` reads it. Passing
+# the whole list as one -f, as before, dropped the published-images file: the
+# restore scripts then tried to build the server and stopped the application.
+compose_files() {
+  local spec=${COMPOSE_FILE:-$DEFAULT_COMPOSE_FILE} file
+  local -a list=()
+  IFS=${COMPOSE_PATH_SEPARATOR:-:} read -r -a list <<< "$spec"
+  COMPOSE_ARGS=()
+  for file in "${list[@]}"; do
+    [[ -n "$file" ]] || continue
+    [[ "$file" == /* ]] || file=$DEPLOY_DIR/$file
+    [[ -f "$file" ]] || die "compose file not found: $file (from COMPOSE_FILE=$spec)"
+    COMPOSE_ARGS+=(-f "$file")
+  done
+  ((${#COMPOSE_ARGS[@]} > 0)) || die "COMPOSE_FILE names no compose file"
+}
+
 compose() {
-  docker compose --env-file "$ENV_FILE" -f "$COMPOSE_FILE" "$@"
+  compose_files
+  docker compose --env-file "$ENV_FILE" "${COMPOSE_ARGS[@]}" "$@"
 }
 
 # The postgres image the stack runs, version and digest included, so a helper
@@ -51,8 +75,8 @@ compose() {
 # unpinned postgres:16-alpine instead.
 postgres_image() {
   local images
-  images=$(compose config --images postgres) || die "cannot resolve the postgres image from $COMPOSE_FILE"
-  [[ -n "$images" ]] || die "no postgres image in $COMPOSE_FILE"
+  images=$(compose config --images postgres) || die "cannot resolve the postgres image from ${COMPOSE_FILE:-$DEFAULT_COMPOSE_FILE}"
+  [[ -n "$images" ]] || die "no postgres image in ${COMPOSE_FILE:-$DEFAULT_COMPOSE_FILE}"
   printf '%s\n' "${images%%$'\n'*}"
 }
 

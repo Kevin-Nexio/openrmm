@@ -28,6 +28,21 @@ import (
 // offlineAfter is how long since last_seen before an agent is alerted offline.
 const offlineAfter = 3 * time.Minute
 
+// checkTimeoutGrace is how long the server waits after the agent's own timeout
+// before recording one. The agent starts its timer when the order arrives, so
+// a deadline of exactly timeout_sec often expires first and the late result
+// would be a second failure for the same run.
+const checkTimeoutGrace = 30 * time.Second
+
+// checkDispatchTimeout is the execution deadline: the check's timeout plus
+// checkTimeoutGrace. The agent still stops the check at timeout_sec.
+func checkDispatchTimeout(timeoutSec int) time.Duration {
+	if timeoutSec < 5 {
+		timeoutSec = 5
+	}
+	return time.Duration(timeoutSec)*time.Second + checkTimeoutGrace
+}
+
 // Patch cadence: how often the patch routine runs, and how stale a scan may be.
 const (
 	patchTickEvery    = 2 * time.Minute
@@ -431,7 +446,7 @@ func (s *Scheduler) dispatchChecks(ctx context.Context, agentID string, siteID, 
 			continue
 		}
 		execution, created, err := s.store.CreateCheckExecution(ctx, c.ID, agentID, now,
-			time.Duration(c.TimeoutSec)*time.Second)
+			checkDispatchTimeout(c.TimeoutSec))
 		if err != nil {
 			s.recordError("create check execution "+c.ID, err)
 			continue
@@ -584,7 +599,7 @@ func (s *Scheduler) OnCheckResult(ctx context.Context, agentID string, res proto
 	}
 	state, disposition, err := s.store.RecordCheckResult(ctx, &models.CheckResult{
 		CheckID: res.CheckID, AgentID: agentID, ExecutionID: executionID,
-		Status: status, Value: res.Value, Output: res.Output,
+		Status: status, Value: res.Value, Output: res.Output, TimedOut: res.TimedOut && !res.Success,
 	})
 	if err != nil {
 		if errors.Is(err, store.ErrNotFound) || errors.Is(err, store.ErrConflict) {
@@ -592,7 +607,7 @@ func (s *Scheduler) OnCheckResult(ctx context.Context, agentID string, res proto
 		}
 		return false, err
 	}
-	if disposition == store.CheckResultStale {
+	if disposition == store.CheckResultStale || disposition == store.CheckResultUncounted {
 		return true, nil
 	}
 	if err := s.reconcileCheckState(ctx, check, state); err != nil {
@@ -712,7 +727,8 @@ func (s *Scheduler) evaluateTimedOutChecks(ctx context.Context, now time.Time) {
 				s.recordError("load timed out check "+e.CheckID, err)
 				continue
 			}
-			output := fmt.Sprintf("No result before the %s deadline.", time.Duration(check.TimeoutSec)*time.Second)
+			output := fmt.Sprintf("No result before the deadline (%s timeout plus %s for the agent's result to arrive).",
+				time.Duration(check.TimeoutSec)*time.Second, checkTimeoutGrace)
 			state, applied, err := s.store.RecordCheckTimeout(ctx, e, output)
 			if err != nil {
 				s.recordError("record check timeout "+e.CheckID, err)

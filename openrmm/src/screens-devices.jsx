@@ -31,8 +31,13 @@ function presenceSummary(viewers) {
 // The Devices grid's optional columns (shown or hidden per viewer) and the
 // localStorage key that remembers the choice.
 const DEVICE_COLUMNS_KEY = 'rmm-devices-hidden-columns';
-const DEVICE_OPTIONAL_COLUMNS = ['description', 'os', 'user', 'client', 'site', 'department', 'tags'];
-const DEVICE_COLUMN_LABELS = { description: 'common.description', os: 'devices.col.os', user: 'devices.col.user', client: 'devices.col.client', site: 'devices.col.site', department: 'devices.col.department', tags: 'devices.col.tags' };
+const DEVICE_OPTIONAL_COLUMNS = ['description', 'os', 'user', 'client', 'site', 'department', 'tags', 'last_boot'];
+const DEVICE_COLUMN_LABELS = { description: 'common.description', os: 'devices.col.os', user: 'devices.col.user', client: 'devices.col.client', site: 'devices.col.site', department: 'devices.col.department', tags: 'devices.col.tags', last_boot: 'devices.col.lastBoot' };
+// Columns that start hidden, so they do not appear unasked in a list someone
+// has already arranged. Showing one is remembered under its own key: the hidden
+// key only lists what a viewer turned off.
+const DEVICE_COLUMNS_HIDDEN_BY_DEFAULT = ['last_boot'];
+const DEVICE_COLUMNS_SHOWN_KEY = 'rmm-devices-shown-columns';
 
 // hiddenDeviceColumns reads the remembered choice, keeping only known optional
 // columns: anything else stored under the key (an older format, a hand edit)
@@ -41,6 +46,23 @@ function hiddenDeviceColumns(raw) {
   let parsed;
   try { parsed = JSON.parse(raw || '[]'); } catch (e) { return []; }
   return Array.isArray(parsed) ? parsed.filter((k) => DEVICE_OPTIONAL_COLUMNS.includes(k)) : [];
+}
+
+// deviceHiddenColumns is what a viewer does not see: the columns they hid, and
+// the columns hidden by default that they have not chosen to show.
+function deviceHiddenColumns(hiddenRaw, shownRaw) {
+  const shown = hiddenDeviceColumns(shownRaw);
+  return [
+    ...hiddenDeviceColumns(hiddenRaw).filter((k) => !DEVICE_COLUMNS_HIDDEN_BY_DEFAULT.includes(k)),
+    ...DEVICE_COLUMNS_HIDDEN_BY_DEFAULT.filter((k) => !shown.includes(k)),
+  ];
+}
+
+// saveDeviceColumns remembers hidden columns under the hidden key, and the
+// default-hidden ones shown under the shown key.
+function saveDeviceColumns(storage, hidden) {
+  storage.setItem(DEVICE_COLUMNS_KEY, JSON.stringify(hidden.filter((k) => !DEVICE_COLUMNS_HIDDEN_BY_DEFAULT.includes(k))));
+  storage.setItem(DEVICE_COLUMNS_SHOWN_KEY, JSON.stringify(DEVICE_COLUMNS_HIDDEN_BY_DEFAULT.filter((k) => !hidden.includes(k))));
 }
 
 // sortDevices sorts in place by a column value; empty values go last either
@@ -63,6 +85,13 @@ function LoggedInUser({ device }) {
   return <span className={cx('mono', device.status === 'online' ? 'text-ink' : 'text-faint')} title={since}>{device.logged_in_user}</span>;
 }
 
+// LastBoot shows when the device last booted, as the server worked it out from
+// the uptime in the latest inventory; the exact time is in the tooltip.
+function LastBoot({ device }) {
+  if (!device.last_boot_at) return <span className="text-faint">—</span>;
+  return <span className="text-muted tabular" title={fmtTime(device.last_boot_at)}>{timeAgo(device.last_boot_at)}</span>;
+}
+
 function DevicesScreen({ navigate }) {
   const devicesQ = useQuery(['devices'], () => api.listDevices(), { invalidateOn: ['devices'], poll: 10000 });
   const { can } = useAuth();
@@ -78,10 +107,12 @@ function DevicesScreen({ navigate }) {
   // Sorting by any column, and optional columns each viewer shows or hides
   // (kept in this browser only).
   const [sort, setSort] = useState({ key: 'hostname', dir: 'asc' });
-  const [hiddenCols, setHiddenCols] = useState(() => { try { return hiddenDeviceColumns(localStorage.getItem(DEVICE_COLUMNS_KEY)); } catch (e) { return []; } });
+  const [hiddenCols, setHiddenCols] = useState(() => {
+    try { return deviceHiddenColumns(localStorage.getItem(DEVICE_COLUMNS_KEY), localStorage.getItem(DEVICE_COLUMNS_SHOWN_KEY)); } catch (e) { return [...DEVICE_COLUMNS_HIDDEN_BY_DEFAULT]; }
+  });
   const toggleCol = (key) => setHiddenCols((h) => {
     const next = h.includes(key) ? h.filter((k) => k !== key) : [...h, key];
-    try { localStorage.setItem(DEVICE_COLUMNS_KEY, JSON.stringify(next)); } catch (e) {}
+    try { saveDeviceColumns(localStorage, next); } catch (e) {}
     return next;
   });
   const shows = (key) => !hiddenCols.includes(key);
@@ -122,6 +153,7 @@ function DevicesScreen({ navigate }) {
     client: (d) => clientName(d.site_id).replace('—', ''), site: (d) => siteName(d.site_id).replace('—', ''),
     department: (d) => departmentName(d.group_id).replace('—', ''),
     user: (d) => d.logged_in_user || '', status: (d) => d.status, last_seen: (d) => d.last_seen || '',
+    last_boot: (d) => d.last_boot_at || '',
   };
   sortDevices(filtered, sortValue[sort.key] || sortValue.hostname, sort.dir);
   const sortBy = (key) => setSort((s) => ({ key, dir: s.key === key && s.dir === 'asc' ? 'desc' : 'asc' }));
@@ -187,6 +219,7 @@ function DevicesScreen({ navigate }) {
               {shows('site') && sortTh('site', t('devices.col.site'), 'px-3 hidden md:table-cell')}
               {shows('department') && sortTh('department', t('devices.col.department'), 'px-3 hidden md:table-cell')}
               {shows('tags') && <th className="font-semibold px-3 py-2.5 hidden lg:table-cell">{t('devices.col.tags')}</th>}
+              {shows('last_boot') && sortTh('last_boot', t('devices.col.lastBoot'), 'px-3 hidden md:table-cell')}
               {sortTh('status', t('devices.col.status'))}
               {sortTh('last_seen', t('devices.col.lastSeen'), 'px-4 text-right')}
             </tr>
@@ -212,6 +245,7 @@ function DevicesScreen({ navigate }) {
                 {shows('tags') && <td className="px-3 py-3 hidden lg:table-cell">
                   <div className="flex gap-1 flex-wrap max-w-[200px]">{d.tags.slice(0, 3).map((tag) => <span key={tag} className="rounded-md bg-elevated border border-line text-[10.5px] text-muted px-1.5 py-0.5">{tag}</span>)}</div>
                 </td>}
+                {shows('last_boot') && <td className="px-3 py-3 hidden md:table-cell text-[12px] whitespace-nowrap"><LastBoot device={d} /></td>}
                 <td className="px-3 py-3"><StatusPill status={d.status} size="sm" /></td>
                 <td className="px-4 py-3 text-right text-[12px] text-muted tabular">{timeAgo(d.last_seen)}</td>
               </tr>
@@ -348,11 +382,29 @@ function BulkDeployModal({ open, onClose, devices, sites, clients, navigate }) {
   const [script, setScript] = useState('');
   const [desc, setDesc] = useState('');
   const [busy, setBusy] = useState(false);
-  useEffect(() => { if (open) { setSel({}); setQ(''); setCompanyF(''); setSiteF(''); setDeptF(''); setScript(''); setDesc(''); setShell('bash'); } }, [open]);
+  // The script is typed here ('text') or is a saved one run by id ('library'),
+  // which takes its parameters and script variables to every device.
+  const [source, setSource] = useState('text');
+  const [libId, setLibId] = useState('');
+  const [values, setValues] = useState({});
+  const canLibrary = can('scripts.view');
+  const scriptsQ = useQuery(['scripts-pick'], () => canLibrary ? api.listScripts() : Promise.resolve({ scripts: [] }), { invalidateOn: ['scripts'] });
+  // A proposal awaiting review cannot run; the server would refuse it.
+  const runnable = (scriptsQ.data?.scripts || []).filter((s) => !s.pending);
+  const lib = source === 'library' ? runnable.find((s) => s.id === libId) : null;
+  const declared = lib?.params || [];
+  const missing = declared.some((p) => !values[p.name]);
+  const pickScript = (id) => {
+    const s = runnable.find((x) => x.id === id);
+    setLibId(id);
+    setValues(Object.fromEntries(((s && s.params) || []).map((p) => [p.name, p.kind === 'enum' ? (p.values || [])[0] || '' : ''])));
+  };
+  useEffect(() => { if (open) { setSel({}); setQ(''); setCompanyF(''); setSiteF(''); setDeptF(''); setScript(''); setDesc(''); setShell('bash'); setSource('text'); setLibId(''); setValues({}); } }, [open]);
 
   const clientOfSite = (sid) => (sites.find((s) => s.id === sid) || {}).client_id;
   const companyOf = (d) => clientOfSite(d.site_id);
   const ids = Object.keys(sel).filter((k) => sel[k]);
+  const ready = ids.length > 0 && (source === 'library' ? !!lib && !missing : !!script.trim());
   const toggle = (id) => setSel((s) => ({ ...s, [id]: !s[id] }));
   const filtered = devices.filter((d) =>
     (!q || d.hostname.toLowerCase().includes(q.toLowerCase()) || (d.description || '').toLowerCase().includes(q.toLowerCase())) &&
@@ -363,10 +415,15 @@ function BulkDeployModal({ open, onClose, devices, sites, clients, navigate }) {
   const selCompanies = new Set(devices.filter((d) => sel[d.id]).map((d) => companyOf(d) || '∅')).size;
 
   const submit = async () => {
-    if (!ids.length || !script.trim()) return;
+    if (!ready) return;
     setBusy(true);
     try {
-      const r = await api.createBulkJob({ agent_ids: ids, shell, script, description: desc || t('deploy.defaultDesc', { devices: tn('bulk.devices', ids.length) }) });
+      // A saved script is described as "library: <name>" by the server unless
+      // the operator wrote something, as a run from one device is.
+      const body = lib
+        ? { agent_ids: ids, script_id: lib.id, ...(declared.length ? { params: values } : {}), ...(desc ? { description: desc } : {}) }
+        : { agent_ids: ids, shell, script, description: desc || t('deploy.defaultDesc', { devices: tn('bulk.devices', ids.length) }) };
+      const r = await api.createBulkJob(body);
       toast.success(t('deploy.created'), r.companies > 1 ? t('deploy.createdSplit', { jobs: tn('bulk.jobs', r.count), companies: r.companies }) : t('deploy.createdOne', { jobs: tn('bulk.jobs', r.count) }));
       onClose();
       navigate && navigate('jobs');
@@ -402,18 +459,52 @@ function BulkDeployModal({ open, onClose, devices, sites, clients, navigate }) {
             </div>
           </div>
           <div className="space-y-3">
-            <Field label={t('deploy.shell')}><Select value={shell} onChange={(e) => setShell(e.target.value)}><option value="bash">bash</option><option value="sh">sh</option><option value="powershell">powershell</option><option value="cmd">cmd</option><option value="python">python</option></Select></Field>
-            <Field label={t('common.description')}><Input value={desc} onChange={(e) => setDesc(e.target.value)} placeholder={t('deploy.descPlaceholder')} /></Field>
-            {/* A deployment sends this text only: no saved script's variables or
-                parameters go with it, and only the built-in RMM_* context arrives. */}
-            <Field label={t('deploy.script')} hint={t('deploy.noVariablesHint')}><CodeEditor value={script} onChange={setScript} shell={shell} minHeight={150} placeholder={t('deploy.scriptPlaceholder')} /></Field>
+            {canLibrary && (
+              <div role="group" aria-label={t('deploy.source')} className="flex gap-1 p-0.5 bg-app rounded-lg border border-line2 w-fit">
+                {['text', 'library'].map((v) => (
+                  <button key={v} type="button" aria-pressed={source === v} onClick={() => setSource(v)}
+                    className={cx('px-3 h-7 rounded-md text-[12px] font-medium transition', source === v ? 'bg-elevated text-ink shadow-sm' : 'text-muted hover:text-ink')}>{t('deploy.source.' + v)}</button>
+                ))}
+              </div>
+            )}
+            {source === 'library' ? (
+              <div className="space-y-3" data-deploy="library">
+                <Field label={t('deploy.libraryScript')}>
+                  <Combobox value={libId} onChange={pickScript} placeholder={t('deploy.pickScript')} options={libraryScriptOptions(runnable)} />
+                </Field>
+                {lib && <>
+                  {(lib.variables || []).length > 0 && (
+                    <div className="flex items-start gap-2 rounded-xl border border-line bg-elevated/50 px-3 py-2.5 text-[12px] text-ink">
+                      <Icon name="info" size={14} className="mt-0.5 shrink-0 text-brandhi" />
+                      <span>{t('deploy.libraryVars', { names: lib.variables.join(', ') })}</span>
+                    </div>
+                  )}
+                  {declared.map((p) => (
+                    <Field key={p.name} label={p.name} hint={p.description || undefined}>
+                      {p.kind === 'enum'
+                        ? <Select value={values[p.name]} onChange={(e) => setValues((v) => ({ ...v, [p.name]: e.target.value }))}>{(p.values || []).map((v) => <option key={v} value={v}>{v}</option>)}</Select>
+                        : <Input className="mono" value={values[p.name]} onChange={(e) => setValues((v) => ({ ...v, [p.name]: e.target.value }))} placeholder={p.pattern} />}
+                    </Field>
+                  ))}
+                  <Field label={t('common.description')}><Input value={desc} onChange={(e) => setDesc(e.target.value)} placeholder={'library: ' + lib.name /* i18n-ignore: the job description the server gives a saved script */} /></Field>
+                  <CodeBlock code={lib.body} shell={lib.shell} maxHeight={160} />
+                </>}
+              </div>
+            ) : <>
+              <Field label={t('deploy.shell')}><Select value={shell} onChange={(e) => setShell(e.target.value)}><option value="bash">bash</option><option value="sh">sh</option><option value="powershell">powershell</option><option value="cmd">cmd</option><option value="python">python</option></Select></Field>
+              <Field label={t('common.description')}><Input value={desc} onChange={(e) => setDesc(e.target.value)} placeholder={t('deploy.descPlaceholder')} /></Field>
+              {/* Typed text only: no saved script's variables or parameters go
+                  with it, and only the built-in RMM_* context arrives. A saved
+                  script that uses them is deployed from the library. */}
+              <Field label={t('deploy.script')} hint={t(canLibrary ? 'deploy.noVariablesHint' : 'deploy.noVariablesHintNoLibrary')}><CodeEditor value={script} onChange={setScript} shell={shell} minHeight={150} placeholder={t('deploy.scriptPlaceholder')} /></Field>
+            </>}
           </div>
         </div>
         <div className="flex items-center justify-between gap-3 pt-3 border-t border-line/60">
           <div className="text-[11.5px] text-faint flex items-center gap-1.5 max-w-[60%]"><Icon name="shield" size={13} className="shrink-0" />{t('deploy.companyNote')}</div>
           <div className="flex gap-2">
             <Button variant="ghost" onClick={onClose}>{t('action.cancel')}</Button>
-            <Button variant="primary" icon="flash" loading={busy} disabled={!ids.length || !script.trim()} onClick={submit}>{t('deploy.create', { n: ids.length })}</Button>
+            <Button variant="primary" icon="flash" loading={busy} disabled={!ready} onClick={submit}>{t('deploy.create', { n: ids.length })}</Button>
           </div>
         </div>
       </div>
@@ -1846,31 +1937,62 @@ function InstalledSoftware({ software }) {
 }
 
 /* device jobs tab */
+// What an expanded job shows before it has output: why there is none yet.
+const DEVICE_JOB_WAITING = { awaiting_approval: 'djobs.awaiting', rejected: 'djobs.rejected' };
+
+// The device's jobs, newest first. A row expands in place to show the job's
+// output, which the list already carries, so checking a result does not mean
+// leaving the device; "Open in Jobs" still leads to the full job.
 function DeviceJobs({ id, navigate, onClose }) {
+  const [expanded, setExpanded] = useState(null);
   const jobsQ = useQuery([id, 'jobs'], () => api.listJobs({ agent_id: id }), { invalidateOn: ['jobs'], poll: 3000 });
   const jobs = jobsQ.data?.jobs || [];
   if (jobsQ.loading) return <div className="space-y-2">{Array.from({ length: 3 }).map((_, i) => <Skeleton key={i} className="h-16 w-full rounded-xl" />)}</div>;
   if (!jobs.length) return <EmptyState icon="flash" title={t('djobs.empty')} msg={t('djobs.emptyMsg')} />;
   return (
     <div className="space-y-2">
-      {jobs.map((j) => (
-        <button key={j.id} onClick={() => { onClose(); navigate('jobs', { focus: j.id }); }} className="w-full text-left rounded-xl border border-line bg-card hover:border-line2 hover:bg-elevated/40 transition p-3.5 flex items-center gap-3">
-          <div className="min-w-0 flex-1">
-            <div className="flex items-center gap-2"><span className="text-[13px] text-ink font-medium truncate">{j.description}</span>{j.created_by.startsWith('ai:') && <Icon name="sparkle" size={12} className="text-brandhi" />}</div>
-            <div className="text-[11.5px] text-faint mt-0.5"><span title={j.created_by}>{window.jobCreator ? window.jobCreator(j) : j.created_by}</span> · {timeAgo(j.created_at)}{j.exit_code != null && <span className="mono"> · {t('djobs.exit', { code: j.exit_code })}</span>}</div>
+      {jobs.map((j) => {
+        const open = expanded === j.id;
+        const done = j.status === 'completed' || j.status === 'failed';
+        return (
+          <div key={j.id} data-job={j.id} className={cx('rounded-xl border bg-card transition', open ? 'border-line2' : 'border-line hover:border-line2')}>
+            <button type="button" aria-expanded={open} onClick={() => setExpanded(open ? null : j.id)} className="w-full text-left rounded-xl hover:bg-elevated/40 transition p-3.5 flex items-center gap-3">
+              <Icon name={open ? 'chevdown' : 'chevright'} size={14} className="text-faint shrink-0" />
+              <div className="min-w-0 flex-1">
+                <div className="flex items-center gap-2"><span className="text-[13px] text-ink font-medium truncate">{j.description}</span>{j.created_by.startsWith('ai:') && <Icon name="sparkle" size={12} className="text-brandhi" />}</div>
+                <div className="text-[11.5px] text-faint mt-0.5"><span title={j.created_by}>{window.jobCreator ? window.jobCreator(j) : j.created_by}</span> · {timeAgo(j.created_at)}{j.exit_code != null && <span className="mono"> · {t('djobs.exit', { code: j.exit_code })}</span>}</div>
+              </div>
+              <StatusPill status={j.status} size="sm" pulse />
+            </button>
+            {open && (
+              <div className="px-3.5 pb-3.5 space-y-2.5">
+                {done
+                  ? <OutputBlock stdout={j.stdout} stderr={j.stderr} exitCode={j.exit_code} />
+                  : <p className="text-[12px] text-faint">{t(DEVICE_JOB_WAITING[j.status] || 'djobs.inProgress')}</p>}
+                <div className="flex justify-end">
+                  <Button size="sm" variant="ghost" icon="arrowright" onClick={() => { onClose(); navigate('jobs', { focus: j.id }); }}>{t('djobs.openInJobs')}</Button>
+                </div>
+              </div>
+            )}
           </div>
-          <StatusPill status={j.status} size="sm" pulse />
-        </button>
-      ))}
+        );
+      })}
     </div>
   );
 }
 
-// Where a check or task on this device comes from: assigned to the device, or
-// a policy on its department, site or client.
+// Where a check or task on this device comes from: attached to the device,
+// and/or each policy that reaches it. A shared one lists every source and
+// still runs once. A server without sources sends one policy or none.
 function MonitoringSource({ row }) {
-  if (!row.policy_id) return <span>{t('dmon.direct')}</span>;
-  return <span className="inline-flex items-center gap-1 text-brandhi"><Icon name="policy" size={12} />{row.policy_name || t('dmon.policy')}</span>;
+  const sources = row.sources || (row.policy_id ? [{ policy_id: row.policy_id, name: row.policy_name }] : [{ direct: true }]);
+  return (
+    <span className="inline-flex flex-wrap items-center gap-x-2 gap-y-0.5">
+      {sources.map((s, i) => (s.direct
+        ? <span key={'direct-' + i}>{t('dmon.direct')}</span>
+        : <span key={s.policy_id} className="inline-flex items-center gap-1 text-brandhi"><Icon name="policy" size={12} />{s.name || t('dmon.policy')}</span>))}
+    </span>
+  );
 }
 
 // The link to the screen where these are created and changed: the drawer only
@@ -1952,6 +2074,16 @@ function DeviceTasks({ id, navigate, onClose }) {
 }
 
 /* run script form */
+
+// libraryScriptOptions lists saved scripts for the searchable picker: grouped
+// by category, categories and names in alphabetical order, uncategorized last.
+function libraryScriptOptions(scripts) {
+  const byName = (a, b) => a.localeCompare(b, undefined, { sensitivity: 'base', numeric: true });
+  return [...scripts]
+    .sort((a, b) => (!a.category - !b.category) || byName(a.category || '', b.category || '') || byName(a.name || '', b.name || ''))
+    .map((s) => ({ value: s.id, label: s.name || '', group: s.category || t('script.uncategorized') }));
+}
+
 function RunScriptForm({ device, onCreated }) {
   const { can } = useAuth();
   const toast = useToast();
@@ -2033,9 +2165,11 @@ function RunScriptForm({ device, onCreated }) {
             when the editor below was theirs to type in all along. A script
             without variables or parameters is submitted as its text; one with
             them runs by id while unedited (see lib above). */}
+        {/* Searchable and grouped by category: a library grows to hundreds of
+            scripts, too many to scroll through in a plain list. */}
         <Field label={t('run.fromLibrary')} className="flex-1" hint={t('run.fromLibraryHint')}>
-          <Select value="" onChange={(e) => {
-            const s = (scriptsQ.data?.scripts || []).find((x) => x.id === e.target.value);
+          <Combobox value="" placeholder={t('run.startFrom')} options={libraryScriptOptions(scriptsQ.data?.scripts || [])} onChange={(id) => {
+            const s = (scriptsQ.data?.scripts || []).find((x) => x.id === id);
             if (!s) return;
             setScript(s.body); setShell(s.shell); setDesc(s.name); setLib(s);
             // An edited copy keeps the script's names for whoever may pass them.
@@ -2043,10 +2177,7 @@ function RunScriptForm({ device, onCreated }) {
             setValues(Object.fromEntries((s.params || []).map((p) => [p.name, p.kind === 'enum' ? (p.values || [])[0] || '' : ''])));
             const carries = (s.variables || []).length > 0 || (s.params || []).length > 0;
             toast.info(t('run.loaded', { name: s.name }), carries ? t('run.loadedBoundHint') : t('run.loadedHint'));
-          }}>
-            <option value="">{t('run.startFrom')}</option>
-            {(scriptsQ.data?.scripts || []).map((s) => <option key={s.id} value={s.id}>{s.name}</option>)}
-          </Select>
+          }} />
         </Field>
       </div>
       <Field label={t('common.description')}><Input value={desc} onChange={(e) => setDesc(e.target.value)} placeholder={t('run.whatDoes')} /></Field>

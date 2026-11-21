@@ -24,6 +24,7 @@ import (
 
 	"github.com/p1ngu/rmm/internal/ai"
 	"github.com/p1ngu/rmm/internal/auth"
+	"github.com/p1ngu/rmm/internal/autonomy"
 	"github.com/p1ngu/rmm/internal/config"
 	"github.com/p1ngu/rmm/internal/hub"
 	"github.com/p1ngu/rmm/internal/jobs"
@@ -326,15 +327,33 @@ func (s *Server) Router() http.Handler {
 		r.With(s.requirePermission(models.PermChecksView)).Get("/alert-defaults", s.listAlertDefaults)
 		r.With(s.requirePermission(models.PermChecksManage)).Put("/alert-defaults/{type}", s.updateAlertDefault)
 		r.With(s.requirePermission(models.PermChecksManage)).Post("/checks", s.createCheck)
-		r.With(s.requirePermission(models.PermChecksManage)).Put("/checks/{id}", s.updateCheck)
-		r.With(s.requirePermission(models.PermChecksManage)).Delete("/checks/{id}", s.deleteCheck)
+		r.With(s.requirePermission(models.PermChecksManage)).Put("/checks/{id}", s.lockedMonitoringWrite(models.EditCheck, (*Server).updateCheck))
+		r.With(s.requirePermission(models.PermChecksManage)).Delete("/checks/{id}", s.lockedMonitoringWrite(models.EditCheck, (*Server).deleteCheck))
+		// Where a check applies: any number of policies and devices.
+		r.With(s.requirePermission(models.PermChecksView)).Get("/checks/{id}/attachments", s.listCheckAttachments)
+		r.With(s.requirePermission(models.PermChecksManage)).Post("/checks/{id}/attachments", s.lockedMonitoringWrite(models.EditCheck, (*Server).attachCheck))
+		r.With(s.requirePermission(models.PermChecksManage)).Delete("/checks/{id}/attachments/{kind}/{target}", s.lockedMonitoringWrite(models.EditCheck, (*Server).detachCheck))
+		r.With(s.requirePermission(models.PermChecksManage)).Post("/checks/{id}/copy", s.lockedMonitoringWrite(models.EditCheck, (*Server).copyCheck))
 
 		r.With(s.requirePermission(models.PermTasksView)).Get("/tasks", s.listTasks)
 		r.With(s.requirePermission(models.PermTasksView)).Get("/tasks/{id}/targets", s.taskTargets)
 		r.With(s.requirePermission(models.PermTasksManage)).Post("/tasks", s.createTask)
-		r.With(s.requirePermission(models.PermTasksManage)).Put("/tasks/{id}", s.updateTask)
+		r.With(s.requirePermission(models.PermTasksManage)).Put("/tasks/{id}", s.lockedMonitoringWrite(models.EditTask, (*Server).updateTask))
 		r.With(s.requirePermission(models.PermTasksManage)).Post("/tasks/{id}/run", s.runTask)
-		r.With(s.requirePermission(models.PermTasksManage)).Delete("/tasks/{id}", s.deleteTask)
+		r.With(s.requirePermission(models.PermTasksManage)).Delete("/tasks/{id}", s.lockedMonitoringWrite(models.EditTask, (*Server).deleteTask))
+		r.With(s.requirePermission(models.PermTasksView)).Get("/tasks/{id}/attachments", s.listTaskAttachments)
+		r.With(s.requirePermission(models.PermTasksManage)).Post("/tasks/{id}/attachments", s.lockedMonitoringWrite(models.EditTask, (*Server).attachTask))
+		r.With(s.requirePermission(models.PermTasksManage)).Delete("/tasks/{id}/attachments/{kind}/{target}", s.lockedMonitoringWrite(models.EditTask, (*Server).detachTask))
+		r.With(s.requirePermission(models.PermTasksManage)).Post("/tasks/{id}/copy", s.lockedMonitoringWrite(models.EditTask, (*Server).copyTask))
+
+		// Edits the AI proposed to scripts, checks, tasks, policies and patch
+		// policies. Each handler checks the kind's own permissions: seeing one
+		// takes the view permission of its object, deciding it the one an edit
+		// by hand takes.
+		r.Get("/edit-proposals", s.listEditProposals)
+		r.Get("/edit-proposals/{id}", s.getEditProposal)
+		r.Post("/edit-proposals/{id}/apply", s.applyEditProposal)
+		r.Post("/edit-proposals/{id}/reject", s.rejectEditProposal)
 
 		r.With(s.requirePermission(models.PermPoliciesView)).Get("/policies", s.listPolicies)
 		r.With(s.requirePermission(models.PermPoliciesView)).Get("/policies/{id}/assignments", s.listPolicyAssignments)
@@ -1617,21 +1636,55 @@ func (s *Server) mayRunUnapproved(r *http.Request) bool {
 // Targets are the union of explicit agent_ids + a device group + a site,
 // intersected with the caller's access scope. Every job lands in
 // awaiting_approval sharing a batch_id; nothing runs until the batch is approved.
+//
+// The script is either text (shell + script) or a saved library script
+// (script_id, with params for its declared parameters). A library script runs
+// by id on every device, so its script variables go with it, as they do when
+// it runs from one device's page.
 func (s *Server) createBulkJob(w http.ResponseWriter, r *http.Request) {
 	var in struct {
-		AgentIDs    []string `json:"agent_ids"`
-		GroupID     string   `json:"group_id"`
-		SiteID      string   `json:"site_id"`
-		Shell       string   `json:"shell"`
-		Script      string   `json:"script"`
-		Description string   `json:"description"`
+		AgentIDs    []string       `json:"agent_ids"`
+		GroupID     string         `json:"group_id"`
+		SiteID      string         `json:"site_id"`
+		Shell       string         `json:"shell"`
+		Script      string         `json:"script"`
+		ScriptID    string         `json:"script_id"`
+		Params      map[string]any `json:"params"`
+		Description string         `json:"description"`
 	}
 	if err := decode(r, &in); err != nil {
 		writeErr(w, http.StatusBadRequest, "invalid body")
 		return
 	}
-	if in.Script == "" {
+	var library *models.Script
+	var params map[string]string
+	switch {
+	case in.ScriptID != "" && in.Script != "":
+		writeErr(w, http.StatusBadRequest, "send script or script_id, not both")
+		return
+	case in.ScriptID != "":
+		sc, err := s.store.GetScript(r.Context(), in.ScriptID)
+		if err != nil {
+			writeErr(w, httpStatusFor(err), err.Error())
+			return
+		}
+		if sc.Pending {
+			writeErr(w, http.StatusConflict, store.ErrScriptPending.Error())
+			return
+		}
+		if params, err = autonomy.ValidateParamValues(sc.Params, in.Params); err != nil {
+			writeErr(w, http.StatusBadRequest, err.Error())
+			return
+		}
+		library = sc
+		if in.Description == "" {
+			in.Description = "library: " + sc.Name
+		}
+	case in.Script == "":
 		writeErr(w, http.StatusBadRequest, "script is required")
+		return
+	case len(in.Params) > 0:
+		writeErr(w, http.StatusBadRequest, "params need a script_id")
 		return
 	}
 	if in.Shell == "" {
@@ -1694,7 +1747,13 @@ func (s *Server) createBulkJob(w http.ResponseWriter, r *http.Request) {
 	// A deployment never spans companies: ProposeBulk splits the targets by
 	// company and creates ONE batch per company (so a "deploy to all companies"
 	// request fans out into one batch per company). Same engine as the AI tool.
-	batches, err := s.jobs.ProposeBulk(r.Context(), ids, in.Shell, in.Script, in.Description, actorOf(r))
+	var batches []jobs.BatchInfo
+	var err error
+	if library != nil {
+		batches, err = s.jobs.ProposeBulkScript(r.Context(), ids, library, params, in.Description, actorOf(r))
+	} else {
+		batches, err = s.jobs.ProposeBulk(r.Context(), ids, in.Shell, in.Script, in.Description, actorOf(r))
+	}
 	if err != nil {
 		writeErr(w, httpStatusFor(err), err.Error())
 		return

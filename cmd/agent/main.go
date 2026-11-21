@@ -10,6 +10,7 @@ import (
 	"bytes"
 	"context"
 	"encoding/json"
+	"errors"
 	"flag"
 	"fmt"
 	"log"
@@ -1226,6 +1227,13 @@ func runScriptCtxEnv(ctx context.Context, shell, script string, extraEnv []strin
 	return runScriptCtxEnvSecrets(ctx, shell, script, extraEnv, nil)
 }
 
+// scriptOutputWait is how long a script's output may stay open once the script
+// has exited or been stopped: something it left running in the background can
+// hold it. Past that the run ends with the output read so far.
+const scriptOutputWait = 5 * time.Second
+
+const scriptOutputHeldNote = "A process the script left running in the background kept its output open; output after the script exited is not included."
+
 func runScriptCtxEnvSecrets(ctx context.Context, shell, script string, extraEnv, secretValues []string) (int, string, string) {
 	var cmd *exec.Cmd
 	switch shell {
@@ -1276,20 +1284,21 @@ func runScriptCtxEnvSecrets(ctx context.Context, shell, script string, extraEnv,
 		}
 		cmd.Env = append(cmd.Env, extraEnv...)
 	}
-	if runtime.GOOS == "windows" {
-		// Default ctx-cancel only kills the direct child; kill the tree instead.
-		cmd.Cancel = func() error {
-			if cmd.Process != nil {
-				_ = exec.Command("taskkill", "/F", "/T", "/PID", strconv.Itoa(cmd.Process.Pid)).Run()
-			}
-			return nil
-		}
-	}
+	killTreeOnCancel(cmd)
+	// A process the script leaves in the background can hold its output open
+	// after the script itself has exited. Stop waiting for it shortly after.
+	cmd.WaitDelay = scriptOutputWait
 	var stdout, stderr bytes.Buffer
 	cmd.Stdout = &stdout
 	cmd.Stderr = &stderr
 	err := cmd.Run()
 	exitCode := 0
+	if errors.Is(err, exec.ErrWaitDelay) {
+		// The script exited successfully; only its output was still held open.
+		// Its exit status stands, and the note says why the output may be cut.
+		err = nil
+		stderr.WriteString("\n" + scriptOutputHeldNote)
+	}
 	if err != nil {
 		if ee, ok := err.(*exec.ExitError); ok {
 			exitCode = ee.ExitCode()
@@ -1404,9 +1413,18 @@ func (a *agent) runCheck(chk protocol.RunCheckMsg) {
 		output = "unknown check type: " + chk.Type
 	}
 
+	// Say so when this run was stopped at the check's timeout: the server
+	// applies the check's timeout policy to it (count it once, or ignore it).
+	timedOut := !success && errors.Is(checkCtx.Err(), context.DeadlineExceeded)
+	if timedOut {
+		if output = strings.TrimRight(output, "\r\n"); output != "" {
+			output += "\n"
+		}
+		output += fmt.Sprintf("Stopped at the check's %s timeout.", timeout)
+	}
 	a.reportCheckResult(protocol.CheckResultMsg{
 		CheckID: chk.CheckID, ExecutionID: chk.ExecutionID,
-		Value: value, Output: truncateRunes(output, 4000), Success: success,
+		Value: value, Output: truncateRunes(output, 4000), Success: success, TimedOut: timedOut,
 	})
 }
 
@@ -1438,7 +1456,16 @@ func doPing(ctx context.Context, host string) (bool, string) {
 		cmd = exec.CommandContext(ctx, "ping", "-c", "1", "-W", "3", host)
 	}
 	out, err := cmd.CombinedOutput()
-	return err == nil, string(out)
+	return pingResult(out, err, consoleCodePage())
+}
+
+// pingResult reads what ping printed. On Windows ping.exe writes in its
+// console's OEM page, like cmd: a pt-BR install prints "Estatísticas do Ping"
+// and "número" as cp850 bytes, which reached the console as "Estat?sticas"
+// until they were decoded here. Elsewhere the output is UTF-8 and passes
+// through unchanged.
+func pingResult(out []byte, err error, cp int) (bool, string) {
+	return err == nil, decodeOutputCP(out, cp)
 }
 
 func winServiceRunning(ctx context.Context, name string) (bool, string) {
@@ -1449,8 +1476,15 @@ func winServiceRunning(ctx context.Context, name string) (bool, string) {
 		return false, "no service configured"
 	}
 	out, _ := exec.CommandContext(ctx, "sc", "query", name).CombinedOutput()
-	running := strings.Contains(string(out), "RUNNING")
-	return running, string(out)
+	return serviceQueryResult(out, consoleCodePage())
+}
+
+// serviceQueryResult reads what sc query printed, in the console's OEM page
+// like ping's ("NOME_DO_SERVIÇO", "O serviço especificado não existe" on a
+// pt-BR install). The state keyword stays English in every language.
+func serviceQueryResult(out []byte, cp int) (bool, string) {
+	text := decodeOutputCP(out, cp)
+	return strings.Contains(text, "RUNNING"), text
 }
 
 // ---------- inventory ----------

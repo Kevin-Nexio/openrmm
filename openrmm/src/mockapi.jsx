@@ -445,6 +445,11 @@ const api = {
 
   /* ---- scripts ---- */
   listScripts() { return GET('/api/scripts'); },
+  // Edits the AI proposed to a script, check, task, policy or patch policy.
+  listEditProposals(params) { return GET('/api/edit-proposals' + qs(params || {})); },
+  getEditProposal(id) { return GET('/api/edit-proposals/' + id); },
+  applyEditProposal(id) { return POST('/api/edit-proposals/' + id + '/apply', {}); },
+  rejectEditProposal(id) { return POST('/api/edit-proposals/' + id + '/reject', {}); },
   createScript(body) { return POST('/api/scripts', body); },
   updateScript(id, body) { return PUT('/api/scripts/' + id, body); },
   // Release a library script for the AI to run without approval, or withdraw
@@ -487,6 +492,11 @@ const api = {
   createCheck(body) { return POST('/api/checks', body); },
   updateCheck(id, body) { return PUT('/api/checks/' + id, body); },
   deleteCheck(id) { return DELETE('/api/checks/' + id); },
+  // Where a check applies: any number of policies and devices. kind is 'policy' or 'device'.
+  checkAttachments(id) { return GET('/api/checks/' + id + '/attachments'); },
+  attachCheck(id, body) { return POST('/api/checks/' + id + '/attachments', body); },
+  detachCheck(id, kind, target) { return DELETE('/api/checks/' + id + '/attachments/' + kind + '/' + target); },
+  copyCheck(id, body) { return POST('/api/checks/' + id + '/copy', body); },
   getCheckResults(id, agent_id) { return GET('/api/checks/' + id + '/results' + qs({ agent_id })); },
   getCheckInstances(id) { return GET('/api/checks/' + id + '/instances'); },
   getCheckOverrides(id) { return GET('/api/checks/' + id + '/overrides'); },
@@ -502,6 +512,10 @@ const api = {
   createTask(body) { return POST('/api/tasks', body); },
   updateTask(id, body) { return PUT('/api/tasks/' + id, body); },
   deleteTask(id) { return DELETE('/api/tasks/' + id); },
+  taskAttachments(id) { return GET('/api/tasks/' + id + '/attachments'); },
+  attachTask(id, body) { return POST('/api/tasks/' + id + '/attachments', body); },
+  detachTask(id, kind, target) { return DELETE('/api/tasks/' + id + '/attachments/' + kind + '/' + target); },
+  copyTask(id, body) { return POST('/api/tasks/' + id + '/copy', body); },
   taskTargets(id) { return GET('/api/tasks/' + id + '/targets'); },
   runTask(id) { return POST('/api/tasks/' + id + '/run', {}); },
 

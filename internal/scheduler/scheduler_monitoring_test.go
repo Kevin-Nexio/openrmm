@@ -107,7 +107,7 @@ func TestFailureAndRecoveryCountsGateAlertTransitions(t *testing.T) {
 		t.Fatal(err)
 	}
 	check, err := st.CreateCheck(ctx, &models.Check{
-		AgentID: &agent.ID, Type: models.CheckScript, Name: "counted check",
+		Attachments: models.OnAgent(&agent.ID), Type: models.CheckScript, Name: "counted check",
 		Config:      json.RawMessage(`{"shell":"bash","script":"exit 1"}`),
 		IntervalSec: 30, FailureCount: 2, RecoveryCount: 2,
 		TimeoutSec: 30, Enabled: true,
@@ -189,7 +189,7 @@ func TestGroupPolicyCheckTargetsAndTrustBoundary(t *testing.T) {
 		t.Fatal(err)
 	}
 	check, err := st.CreateCheck(ctx, &models.Check{
-		PolicyID: &policy.ID, Type: models.CheckPing, Name: "group ping",
+		Attachments: models.OnPolicy(&policy.ID), Type: models.CheckPing, Name: "group ping",
 		Config: json.RawMessage(`{"host":"127.0.0.1"}`), IntervalSec: 30,
 		FailureCount: 1, RecoveryCount: 1, TimeoutSec: 30, Enabled: true,
 	})
