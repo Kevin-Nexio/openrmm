@@ -23,7 +23,7 @@ const alertCols = `al.id, al.agent_id, al.source_type, al.source_id, al.conditio
 	al.resolution_note, al.reopened_from, al.last_notified_at,
 	al.notification_pending, al.notification_kind, al.notification_seq,
 	al.silenced_until, al.silenced_by, al.silence_reason,
-	al.last_observation_id, al.rule_id`
+	al.last_observation_id, al.rule_id, al.agent_monitoring_scope_since`
 
 func scanAlert(row pgx.Row) (*models.Alert, error) {
 	var a models.Alert
@@ -36,7 +36,7 @@ func scanAlert(row pgx.Row) (*models.Alert, error) {
 		&a.ResolutionNote, &a.ReopenedFrom, &a.LastNotifiedAt,
 		&a.NotificationPending, &a.NotificationKind, &a.NotificationSeq,
 		&a.SilencedUntil, &a.SilencedBy, &a.SilenceReason,
-		&a.LastObservationID, &a.RuleID)
+		&a.LastObservationID, &a.RuleID, &a.AgentMonitoringScopeSince)
 	if errors.Is(err, pgx.ErrNoRows) {
 		return nil, ErrNotFound
 	}
@@ -249,11 +249,12 @@ func (s *Store) ObserveAlert(ctx context.Context, obs AlertObservation) (*AlertT
 
 	var snapshotID, siteID, clientID, groupID *string
 	var hostname string
+	var monitoringScopeSince *time.Time
 	if obs.AgentID != nil {
 		snapshotID = obs.AgentID
-		err = tx.QueryRow(ctx, `SELECT a.hostname, a.site_id, si.client_id, a.group_id
+		err = tx.QueryRow(ctx, `SELECT a.hostname, a.site_id, si.client_id, a.group_id, a.monitoring_scope_since
 			FROM agents a LEFT JOIN sites si ON si.id=a.site_id WHERE a.id=$1`, *obs.AgentID).
-			Scan(&hostname, &siteID, &clientID, &groupID)
+			Scan(&hostname, &siteID, &clientID, &groupID, &monitoringScopeSince)
 		if err != nil && !errors.Is(err, pgx.ErrNoRows) {
 			return nil, err
 		}
@@ -433,14 +434,15 @@ func (s *Store) ObserveAlert(ctx context.Context, obs AlertObservation) (*AlertT
 		severity, message, status, created_at, first_seen_at, last_seen_at,
 		updated_at, observed_value, threshold_value, output, reopened_from,
 		notification_pending, notification_kind, notification_seq,
-		silenced_until, silenced_by, silence_reason, last_observation_id, rule_id
+		silenced_until, silenced_by, silence_reason, last_observation_id, rule_id,
+		agent_monitoring_scope_since
 	) VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11,$12,$13,$14,$14,$14,$14,
-	          $15,$16,$17,$18,$19,$20,$21,$22,$23,$24,$25,$26)
+	          $15,$16,$17,$18,$19,$20,$21,$22,$23,$24,$25,$26,$27)
 	RETURNING `+alertCols, id, obs.AgentID, obs.SourceType, obs.SourceID,
 		obs.ConditionKey, snapshotID, hostname, siteID, clientID, groupID, obs.Severity,
 		obs.Message, status, obs.ObservedAt, obs.ObservedValue, obs.Threshold,
 		obs.Output, reopenedFrom, pending, notificationKind, notificationSeq,
-		silencedUntil, silencedBy, silenceReason, obs.ObservationID, obs.RuleID))
+		silencedUntil, silencedBy, silenceReason, obs.ObservationID, obs.RuleID, monitoringScopeSince))
 	if err != nil {
 		return nil, err
 	}

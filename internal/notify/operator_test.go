@@ -8,7 +8,7 @@ import (
 // The footer says which instance an alert came from and that its words are the
 // instance's: the sender domain is the operator's.
 func TestOperatorFooterNamesTheInstance(t *testing.T) {
-	f := operatorFooter("https://acme.openrmm.io")
+	f := OperatorAlertFooter("https://acme.openrmm.io")
 	if !strings.Contains(f, "acme.openrmm.io") || !strings.Contains(f, "comes from that instance") {
 		t.Fatalf("footer = %q", f)
 	}

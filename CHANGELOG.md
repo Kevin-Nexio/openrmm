@@ -10,6 +10,11 @@ tag.
 
 ### Added
 
+- Editable alert and recovery email subjects and plain-text bodies in Alert email
+  settings, with hostname/description selection, draft previews and saved-template
+  sample delivery. Hostname remains the default; existing recipient scope and
+  deduplication rules are preserved.
+
 - **The AI can propose edits to existing objects.** AI Chat and MCP can propose
   an edit to a library script, check, scheduled task, policy or patch policy:
   its fields, where a check or task applies, and a policy's assignments and
