@@ -253,7 +253,7 @@ func attachmentError(w http.ResponseWriter, err error) {
 	case errors.Is(err, models.ErrInvalidAttachment):
 		writeErr(w, http.StatusBadRequest, err.Error())
 	default:
-		writeErr(w, httpStatusFor(err), err.Error())
+		writeConfigError(w, err)
 	}
 }
 
