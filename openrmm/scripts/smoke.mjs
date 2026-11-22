@@ -204,7 +204,7 @@ const server = createServer(async (req, res) => {
       if (pathname === '/api/policies/pol-ai/review') {
         policyReviews++;
         return json(res, 200, { fingerprint: 'fp-' + policyReviews, policy: aiPolicy, assignments: [{ id: 'asg-1', policy_id: 'pol-ai', scope_type: 'agent', scope_id: 'dev-1' }],
-          tasks: policyReviews === 1 ? policyReviewTasks.slice(0, 1) : policyReviewTasks, checks: ruleChecks.filter((c) => c.policy_id === 'pol-ai'), pending_tasks: policyReviews === 1 ? 1 : 2, pending_checks: 0 });
+          tasks: policyReviews === 1 ? policyReviewTasks.slice(0, 1) : policyReviewTasks, checks: ruleChecks.filter((c) => c.attachments?.some((a) => a.policy_id === 'pol-ai')), pending_tasks: policyReviews === 1 ? 1 : 2, pending_checks: 0 });
       }
       if (pathname === '/api/policies/pol-ai/activate' && req.method === 'POST') {
         if (payload?.fingerprint !== 'fp-' + policyReviews || policyReviews < 2) return json(res, 409, { error: 'conflict: it changed after this review was opened; review it again' });
@@ -1335,6 +1335,7 @@ try {
     assertBrowser(overrideFlow, /data-parent-override-e2e="passed"/);
     const overrideRequest = apiRequests.find((r) => r.method === 'POST' && r.pathname === '/api/checks' && r.payload?.name === 'Site explicit exception');
     assert.equal(overrideRequest?.payload.config.override_parent, true);
+    assert.deepEqual(overrideRequest?.payload.attachments, [{policy_id:'pol-ai'}]);
     assert.equal(overrideRequest?.payload.enabled, false);
     assert.ok(apiRequests.some((r) => r.method === 'PUT' && r.pathname.startsWith('/api/checks/') && r.payload?.config.override_parent === true && r.payload?.enabled === false));
     overrideManager = false;
