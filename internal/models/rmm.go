@@ -484,6 +484,8 @@ type Alert struct {
 	// RuleID is the check or server rule that raised the alert; nil for a
 	// fleet default (docs/24-alert-rules.md).
 	RuleID *string `json:"rule_id,omitempty"`
+	// AgentMonitoringScopeSince is the scope revision captured with the incident.
+	AgentMonitoringScopeSince *time.Time `json:"-"`
 }
 
 type AlertEvent struct {
