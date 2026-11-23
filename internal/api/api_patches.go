@@ -33,8 +33,12 @@ func (s *Server) scanDevicePatches(w http.ResponseWriter, r *http.Request) {
 	if !s.requireAgent(w, r, id) {
 		return
 	}
-	if !s.patches.DispatchScan(id) {
-		writeErr(w, http.StatusServiceUnavailable, "device is offline")
+	if err := s.patches.DispatchScan(id); err != nil {
+		if errors.Is(err, patches.ErrOffline) {
+			writeCodedErr(w, http.StatusServiceUnavailable, "device_offline", "device is offline")
+		} else {
+			writeErr(w, http.StatusServiceUnavailable, err.Error())
+		}
 		return
 	}
 	_ = s.store.AddAudit(r.Context(), actorOf(r), "patch.scan", id, s.deviceAuditLabel(r, id))

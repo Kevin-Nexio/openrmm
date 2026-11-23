@@ -82,6 +82,7 @@ async function request(method, path, body, attempt = 0, invalidate = true) {
     let msg = res.statusText;
     let code;
     try { const j = await res.json(); msg = j.error || j.message || msg; code = j.code; } catch (e) {}
+    if (code === 'device_offline') msg = t('notify.agent_offline.title');
     const err = apiError(res.status, msg);
     if (code) err.code = code; // a reason the screen acts on, not only shows
     throw err;

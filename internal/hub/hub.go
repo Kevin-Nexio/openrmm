@@ -2,7 +2,15 @@
 // jobs and remote-session requests to online agents.
 package hub
 
-import "sync"
+import (
+	"errors"
+	"sync"
+)
+
+var (
+	ErrOffline   = errors.New("agent is offline")
+	ErrQueueFull = errors.New("agent outbound queue is full")
+)
 
 // Hub is a concurrency-safe registry of per-agent outbound channels.
 type Hub struct {
@@ -66,17 +74,23 @@ func (h *Hub) OnlineCount() int {
 // Send delivers a raw frame to an agent. Returns false if the agent is offline
 // or its buffer is full.
 func (h *Hub) Send(agentID string, msg []byte) bool {
+	return h.Enqueue(agentID, msg) == nil
+}
+
+// Enqueue delivers a frame and distinguishes a disconnected agent from a full
+// outbound queue while holding the same connection lock.
+func (h *Hub) Enqueue(agentID string, msg []byte) error {
 	h.mu.Lock()
 	defer h.mu.Unlock()
 	c, ok := h.clients[agentID]
 	if !ok {
-		return false
+		return ErrOffline
 	}
 	select {
 	case c.ch <- msg:
-		return true
+		return nil
 	default:
-		return false
+		return ErrQueueFull
 	}
 }
 

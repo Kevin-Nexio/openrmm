@@ -270,6 +270,9 @@ const server = createServer(async (req, res) => {
       }
       if (pathname === '/api/devices') return json(res, 200, { devices: fleet });
       if (pathname === '/api/reports/compliance') return json(res, 200, { rows: complianceRows });
+      if (pathname === '/api/devices/dev-3/patches/scan' && req.method === 'POST') {
+        return json(res, 503, { error: 'device is offline', code: 'device_offline' });
+      }
       if (/^\/api\/devices\/dev-[123]\/patches\/scan$/.test(pathname) && req.method === 'POST') return json(res, 200, { ok: true });
       if (pathname === '/api/reports/hardware') return json(res, 200, { rows: hardwareRows });
       if (pathname === '/api/jobs/bulk' && req.method === 'POST') {
@@ -772,11 +775,18 @@ async function patchComplianceBrowserFlow() {
   await sort('Last scan', 'ALPHA-WS,SMOKE-PC,BETA-SRV', 'ascending');
   await sort('Last scan', 'SMOKE-PC,ALPHA-WS,BETA-SRV', 'descending');
   const input = document.querySelector('input[placeholder="Filter devices…"]');
-  Object.getOwnPropertyDescriptor(HTMLInputElement.prototype, 'value').set.call(input, 'ROOM 2');
-  input.dispatchEvent(new Event('input', { bubbles: true }));
+  const filter = (text) => {
+    Object.getOwnPropertyDescriptor(HTMLInputElement.prototype, 'value').set.call(input, text);
+    input.dispatchEvent(new Event('input', { bubbles: true }));
+  };
+  filter('ROOM 2');
   await wait(() => order() === 'ALPHA-WS');
   button('Scan', rows()[0]).click();
   await wait(() => document.body.textContent.includes('Scan requested'));
+  filter('BETA-SRV');
+  await wait(() => order() === 'BETA-SRV');
+  button('Scan', rows()[0]).click();
+  await wait(() => document.body.textContent.includes('Device offline'));
   document.documentElement.dataset.patchComplianceE2e = 'passed';
   return true;
 }
@@ -1283,7 +1293,10 @@ try {
     assert.deepEqual(copies[0].payload.variables, ['customerKey'], 'the edited copy asked for the script variable');
     const complianceFlow = await runMobileChrome(chrome, baseURL + '/authenticated/', { width: 1280, flow: patchComplianceBrowserFlow });
     assertBrowser(complianceFlow, /data-patch-compliance-e2e="passed"/);
-    assert.deepEqual(apiRequests.filter((r) => r.method === 'POST' && /\/patches\/scan$/.test(r.pathname)).map((r) => r.pathname), ['/api/devices/dev-2/patches/scan'], 'the sorted and searched row scans only its own device');
+    assert.deepEqual(apiRequests.filter((r) => r.method === 'POST' && /\/patches\/scan$/.test(r.pathname)).map((r) => r.pathname), [
+      '/api/devices/dev-2/patches/scan',
+      '/api/devices/dev-3/patches/scan',
+    ], 'each filtered row scans only its own device');
     const targetingFlow = await runMobileChrome(chrome, baseURL + '/authenticated/', { width: 1280, flow: policyTargetingBrowserFlow });
     assertBrowser(targetingFlow, /data-policy-targeting-e2e="passed"/);
     assert.deepEqual(apiRequests.filter((r) => r.method === 'PUT' && r.pathname === '/api/devices/dev-1/role').map((r) => r.payload), [{ role: 'server' }, { role: '' }]);
