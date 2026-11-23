@@ -7,6 +7,22 @@ import (
 	"github.com/p1ngu/rmm/internal/models"
 )
 
+const SharedAlertTestHourlyLimit = 20
+
+// ReserveSharedAlertTest counts an attempted SMTP test against the current UTC
+// hour. The upsert reserves the slot atomically across concurrent requests.
+func (s *Store) ReserveSharedAlertTest(ctx context.Context) (bool, error) {
+	tag, err := s.pool.Exec(ctx, `
+		INSERT INTO shared_alert_test_budget AS budget (singleton, hour_start, attempts)
+		VALUES (TRUE, date_trunc('hour', statement_timestamp(), 'UTC'), 1)
+		ON CONFLICT (singleton) DO UPDATE SET
+			hour_start = EXCLUDED.hour_start,
+			attempts = CASE WHEN budget.hour_start < EXCLUDED.hour_start THEN 1 ELSE budget.attempts + 1 END
+		WHERE budget.hour_start < EXCLUDED.hour_start
+		   OR (budget.hour_start = EXCLUDED.hour_start AND budget.attempts < $1)`, SharedAlertTestHourlyLimit)
+	return tag.RowsAffected() == 1, err
+}
+
 // Event types an operator can subscribe to individually.
 const (
 	NotifyCheckFailed    = "check_failed"

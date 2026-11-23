@@ -14,6 +14,27 @@ tag.
   unchanged. Only unrestricted managers can change exception policies; scoped
   viewers can inspect the effective rule. All nine console locales are included.
 
+## [0.12.1] - 2026-11-22
+
+### Added
+
+- **Customize alert emails.** In **Users & Settings → Alert email**, edit the
+  subject and plain-text body for alerts and recoveries. Choose the hostname,
+  device description, or both. Preview the draft with sample data and send
+  yourself an example after saving. Thanks to Kevin-Nexio for the contribution
+  in [#284](https://github.com/openrmm-project/openrmm/pull/284).
+
+### Security
+
+- Alert emails use a device description only when the device is still in the
+  incident's original monitoring scope. Test emails on the shared SMTP service
+  use a separate hourly quota and include the instance footer.
+
+### Upgrade notes
+
+- Hostname remains the default. Existing recipient permissions and queued
+  messages are preserved. The server applies database migration 041 on upgrade.
+
 ## [0.12.0] - 2026-11-21
 
 ### Added

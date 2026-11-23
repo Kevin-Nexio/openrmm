@@ -546,8 +546,17 @@ function CheckEditor({ check, onClose, devMap, policies, defaultPolicyId }) {
     return { policy_key: overridePolicyKey, assignments: results.flatMap((result) => result.assignments || []) };
   }, { invalidateOn: ['policies'] });
   const overrideAssignments = overrideTargetsQ.data?.assignments;
-  const canOverride = !!overrideAccessQ.data?.can_manage && atts.length > 0 && atts.every((a) => !!a.policy_id) && overrideTargetsQ.data?.policy_key === overridePolicyKey && !!overrideAssignments && overrideAssignments.every((a) => a.scope_type === 'client' || a.scope_type === 'site');
-  const overrideLocked = !!check?.config?.override_parent && !overrideAccessQ.data?.can_manage;
+  const canManageOverrides = !!overrideAccessQ.data?.can_manage;
+  const savedOverride = !!check?.config?.override_parent;
+  const targetsChanged = initialAtts.length !== atts.length ||
+    initialAtts.some((initial) => !atts.some((draft) => attachmentKey(initial) === attachmentKey(draft)));
+  const overrideTargetsLoaded = overrideTargetsQ.data?.policy_key === overridePolicyKey && Array.isArray(overrideAssignments);
+  const eligibleOverrideTargets = atts.length > 0 && atts.every((a) => !!a.policy_id) &&
+    overrideTargetsLoaded && overrideAssignments.every((a) => a.scope_type === 'client' || a.scope_type === 'site');
+  // Existing checks save the rule before writing its attachment changes.
+  const saveTargetsFirst = !!check && !savedOverride && targetsChanged && eligibleOverrideTargets;
+  const canOverride = canManageOverrides && eligibleOverrideTargets && !saveTargetsFirst;
+  const overrideLocked = savedOverride && !canManageOverrides;
   const initialType = check?.type || 'diskspace';
   const [ruleCfg, setRuleCfg] = useState(() => serverRuleConfig(initialType, check?.config));
   const [cfgVal, setCfgVal] = useState(check?.config?.[checkType(initialType).cfg] || '');
@@ -565,9 +574,10 @@ function CheckEditor({ check, onClose, devMap, policies, defaultPolicyId }) {
   const [enabled, setEnabled] = useState(check?.enabled ?? true);
   const [busy, setBusy] = useState(false);
   const ct = checkType(type);
+  const overrideSaveBlocked = ct.server && !!ruleCfg.override_parent && !canOverride;
 
   const save = async () => {
-    if (overrideLocked || (ct.server && ruleCfg.override_parent && !canOverride)) return;
+    if (overrideLocked || overrideSaveBlocked) return;
     setBusy(true);
     const config = ct.server ? serverRuleConfig(type, ruleCfg) : {}; if (ct.cfg) config[ct.cfg] = cfgVal; if (type === 'script') config.shell = shell; if (type === 'macservice') config.state = serviceState;
     const body = { type, name: name || ct.label, config, interval_sec: Number(interval), enabled,
@@ -597,7 +607,9 @@ function CheckEditor({ check, onClose, devMap, policies, defaultPolicyId }) {
         <PolicyAttachmentActions kind="check" item={check} policyId={defaultPolicyId} onDone={onClose} />
         <Field label={t('checks.applyTo')}><AttachmentsField value={atts} onChange={setAtts} devMap={devMap} policies={policies} /></Field>
         {ct.server && <ServerRuleFields type={type} value={ruleCfg} onChange={setRuleCfg} disabled={overrideLocked} />}
-        {ct.server && canOverride && <label className="flex items-start gap-2.5"><Toggle checked={!!ruleCfg.override_parent} onChange={(next) => setRuleCfg((prev) => ({ ...prev, override_parent: next }))} /><span className="text-[13px] text-ink">{t('rules.overrideParent')}</span></label>}
+        {ct.server && canManageOverrides && (canOverride || (overrideTargetsLoaded && ruleCfg.override_parent)) &&
+          <label className="flex items-start gap-2.5"><Toggle checked={!!ruleCfg.override_parent} onChange={(next) => setRuleCfg((prev) => ({ ...prev, override_parent: next }))} /><span className="text-[13px] text-ink">{t('rules.overrideParent')}</span></label>}
+        {ct.server && canManageOverrides && saveTargetsFirst && <p className="text-[12px] text-muted">{t('rules.overrideSaveTargetsFirst')}</p>}
         {overrideLocked && <p className="text-[12px] text-muted">{t('rules.overrideRestricted')}</p>}
         {type === 'script' && <Field label={t('deploy.shell')}><Select value={shell} onChange={(e) => setShell(e.target.value)}><option value="bash">bash</option><option value="sh">sh</option><option value="powershell">powershell</option><option value="cmd">cmd</option><option value="python">python</option></Select></Field>}
         {ct.cfg && <Field label={ct.cfgLabel}>{ct.cfg === 'script' ? <CodeEditor value={cfgVal} onChange={setCfgVal} shell={shell} minHeight={120} /> : <Input value={cfgVal} onChange={(e) => setCfgVal(e.target.value)} placeholder={ct.cfgPh} className="mono" />}</Field>}
@@ -616,7 +628,7 @@ function CheckEditor({ check, onClose, devMap, policies, defaultPolicyId }) {
         <label className="flex items-center gap-2.5"><Toggle checked={enabled} onChange={(next) => { setEnabled(next); toast.info(next ? t('checks.willEnable') : t('checks.willDisable')); }} /><span className="text-[13px] text-ink">{t('checks.enabledLabel')}</span></label>
         <div className="flex items-start gap-2 rounded-lg border border-line bg-elevated/40 px-3 py-2 text-[11.5px] text-muted"><Icon name="info" size={14} className="mt-0.5 shrink-0 text-faint" />{ct.server ? t('rules.serverHelp') : type === 'linuxservice' ? t('check.service.linuxHint') : type === 'macservice' ? t('check.service.macHint') : ct.dir === 'low' ? t('checks.help.low') : ct.dir === 'high' ? t('checks.help.high') : type === 'ping' ? t('checks.help.ping') : ct.dir === 'state' ? t('checks.help.state') : t('checks.help.script')}</div>
       </fieldset>
-      <div className="px-5 py-3.5 border-t border-line flex items-center gap-2">{check && can('checks.manage') && !overrideLocked && <Button variant="danger" icon="trash" onClick={del}>{t('action.delete')}</Button>}<div className="flex-1" /><Button variant="ghost" onClick={onClose}>{t('action.cancel')}</Button><Button variant="primary" loading={busy} onClick={save} disabled={overrideLocked || (ct.server && ruleCfg.override_parent && !canOverride)}>{check ? t('checks.save') : t('checks.create')}</Button></div>
+      <div className="px-5 py-3.5 border-t border-line flex items-center gap-2">{check && can('checks.manage') && !overrideLocked && <Button variant="danger" icon="trash" onClick={del}>{t('action.delete')}</Button>}<div className="flex-1" /><Button variant="ghost" onClick={onClose}>{t('action.cancel')}</Button><Button variant="primary" loading={busy} onClick={save} disabled={overrideLocked || overrideSaveBlocked}>{check ? t('checks.save') : t('checks.create')}</Button></div>
     </Modal>
     <ConfirmDialog open={confirmDel} onClose={() => setConfirmDel(false)} onConfirm={doDelete} danger title={t('checks.deletePrompt')} body="" confirmLabel={t('action.delete')} />
     </>

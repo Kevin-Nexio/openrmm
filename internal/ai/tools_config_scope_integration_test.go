@@ -8,6 +8,7 @@ import (
 	"github.com/google/uuid"
 
 	"github.com/p1ngu/rmm/internal/models"
+	"github.com/p1ngu/rmm/internal/store"
 )
 
 // Targeting a POLICY rather than a device is the wider blast radius: a task on a
@@ -231,5 +232,37 @@ func TestScopedAIParentRuleOverridesIntegration(t *testing.T) {
 	normal := json.RawMessage(`{"policy_id":"` + policyID + `","type":"connectivity","name":"ordinary","config":{}}`)
 	if res := Execute(f.ctx, f.tc(), "propose_check", normal); !strings.Contains(res.Output, "outside your access scope") {
 		t.Fatalf("scoped check mutated exception policy: %s", res.Output)
+	}
+}
+
+func TestTargetProposalRechecksPolicyBeforeWritingIntegration(t *testing.T) {
+	f := newProposalFixture(t)
+	tc := f.tc()
+	policy := f.policyAssignedTo(t, f.mineClient)
+	_, policyID, err := tc.targetOwner(f.ctx, "", policy)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := tc.writeTargetProposal(f.ctx, policyID, func(*store.Store) error { return nil }); err != nil {
+		t.Fatalf("ordinary in-scope policy refused: %v", err)
+	}
+
+	// Authorization at the start of the request must not outlive a later
+	// policy change. An administrator installs an exception after that read.
+	check := &models.Check{
+		Type: models.CheckConnectivity, Name: "Site monitoring exception",
+		Config:      json.RawMessage(`{"override_parent":true,"mode":"ignore"}`),
+		Attachments: []models.Attachment{{PolicyID: policyID}},
+	}
+	if _, err := f.st.CreateCheck(f.ctx, check); err != nil {
+		t.Fatal(err)
+	}
+	called := false
+	err = tc.writeTargetProposal(f.ctx, policyID, func(*store.Store) error {
+		called = true
+		return nil
+	})
+	if err == nil || !strings.Contains(err.Error(), "outside your access scope") || called {
+		t.Fatalf("stale policy authorization was accepted: write called=%t, err=%v", called, err)
 	}
 }

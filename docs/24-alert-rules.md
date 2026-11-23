@@ -205,3 +205,32 @@ does not switch on a disabled rule or policy. AI proposals stay disabled until
 human review. The activation fingerprint and rule audit include the complete
 configuration, so changing the option invalidates an open activation review.
 The setting uses the existing JSON configuration; no database migration is needed.
+
+
+### Rollback to v0.12.1
+
+The v0.12.1 reader rejects the `override_parent` field in saved server rules.
+When one of those rules would win under the older precedence, the device can
+fall through to the fleet default instead. This can change alert coverage, even
+though the feature uses the existing schema.
+
+1. With the newer server still running, turn off **Replace the parent rule for
+   Client/Site** on every saved exception, including disabled rules, and save
+   each rule. Save removes the field from the stored configuration.
+2. Confirm no server rule still carries the field. The following read-only
+   query against the instance database must return zero.
+
+   ```sql
+   SELECT count(*) FROM checks
+   WHERE type IN ('connectivity', 'job_failure', 'patch_failure',
+                  'reboot_pending', 'agent_outdated')
+     AND config ? 'override_parent';
+   ```
+
+3. Switch back to v0.12.1. Confirm the expected rule and alert behavior on a
+   device that was covered by an exception.
+
+If the newer server cannot run safely enough to clear the settings, use the
+verified backup from before the upgrade and the
+[production rollback runbook](../deploy/README-production.md#8-upgrade-and-rollback-runbook).
+Restoring that backup discards changes made after it was taken.

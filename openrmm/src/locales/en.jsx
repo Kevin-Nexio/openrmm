@@ -3,6 +3,29 @@
  * Add a key here first; the tests then require every other locale to carry it.
  * Keys are grouped by screen, in the order the screen shows them. */
 (window.LOCALE_STRINGS = window.LOCALE_STRINGS || {})['en'] = {
+  'audit.action.config.mail.templates.update': 'Updated alert message templates',
+  // Alert email templates
+  "mailtpl.title": "Alert message templates",
+  "mailtpl.scope": "Applies to all check and connectivity alert emails on this instance, including recoveries. Existing queued messages keep their original content.",
+  "mailtpl.device": "Device name in {{device}}",
+  "mailtpl.fallback": "An empty description falls back to the hostname, then the device ID.",
+  "mailtpl.description": "Description",
+  "mailtpl.hostname": "Hostname",
+  "mailtpl.both": "Description (hostname)",
+  "mailtpl.kind": "Message type",
+  "mailtpl.alert": "Alert",
+  "mailtpl.recovery": "Recovery",
+  "mailtpl.subject": "Subject",
+  "mailtpl.body": "Message (plain text)",
+  "mailtpl.variables": "Click the subject or message, then a variable to insert it. Variables are replaced with the details of each alert.",
+  "mailtpl.preview": "Preview",
+  "mailtpl.reset": "Restore defaults",
+  "mailtpl.saved": "Message templates saved",
+  "mailtpl.send": "Send example to my email",
+  "mailtpl.testHint": "The example uses saved settings and sends to the email address on your account. Restoring defaults requires saving.",
+  "mailtpl.sharedTestLimit": "The shared email test limit has been reached. Try again next hour.",
+  "mailtpl.example": "Sample data only. Previewing does not save changes or send email.",
+
   // ---- navigation
   'nav.dashboard': 'Dashboard',
   'nav.chat': 'AI Chat',
@@ -2063,6 +2086,7 @@
   "rules.overrideActive": "Explicit parent rule replacement",
   "rules.overrideHelp": "Off by default. For this rule type, an explicit Site replacement takes priority over Client, then ordinary rules. Ignore also replaces the parent rule.",
   "rules.overrideRestricted": "Only managers with unrestricted access can change this exception.",
+  "rules.overrideSaveTargetsFirst": "Save the new targets first. Then reopen the rule to replace its parent.",
   "rules.effective": "Rule in effect on this device",
   "rules.notEffective": "Another rule takes priority on this device",
   "rules.priority": "Client → site → department → device policy → direct device rule. At the same level, the more sensitive rule wins.",

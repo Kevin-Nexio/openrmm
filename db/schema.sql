@@ -802,6 +802,12 @@ CREATE TABLE IF NOT EXISTS notification_subscriptions (
 -- Outbox. Delivery never happens inline with the scheduler tick: an SMTP server
 -- that hangs would stall check evaluation for the whole fleet. Rows survive a
 -- restart, which matters because restarts and outages correlate.
+CREATE TABLE IF NOT EXISTS shared_alert_test_budget (
+    singleton BOOLEAN PRIMARY KEY CHECK (singleton),
+    hour_start TIMESTAMPTZ NOT NULL,
+    attempts INTEGER NOT NULL CHECK (attempts > 0)
+);
+
 CREATE TABLE IF NOT EXISTS notifications (
     id              UUID PRIMARY KEY,
     event_type      TEXT        NOT NULL,
@@ -1070,6 +1076,8 @@ ON CONFLICT (type) DO NOTHING;
 -- Keep the historical rule id after deletion: it must never be mistaken for
 -- a fleet default by notification filters while the incident is reconciled.
 ALTER TABLE alerts ADD COLUMN IF NOT EXISTS rule_id UUID;
+-- Older incidents have no proven monitoring scope revision.
+ALTER TABLE alerts ADD COLUMN IF NOT EXISTS agent_monitoring_scope_since TIMESTAMPTZ;
 CREATE INDEX IF NOT EXISTS idx_alerts_rule ON alerts(rule_id) WHERE rule_id IS NOT NULL;
 UPDATE alerts al SET rule_id=al.source_id
 WHERE al.source_type='check' AND al.rule_id IS NULL

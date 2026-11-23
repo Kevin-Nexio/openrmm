@@ -33,3 +33,22 @@ func TestRuleOverrideValidationAndReviewFingerprint(t *testing.T) {
 		t.Fatal("string flag accepted")
 	}
 }
+
+func TestClearingRuleOverrideRestoresLegacyConfig(t *testing.T) {
+	for _, kind := range ServerRuleTypes {
+		legacy, err := ParseServerRuleConfig(kind, json.RawMessage(`{"mode":"alert"}`))
+		if err != nil {
+			t.Fatal(err)
+		}
+		override := legacy
+		override.OverrideParent = true
+		withOverride, err := ParseServerRuleConfig(kind, override.Raw())
+		if err != nil || !withOverride.OverrideParent {
+			t.Fatalf("%s: override configuration was not persisted: %v", kind, err)
+		}
+		withOverride.OverrideParent = false
+		if got, want := string(withOverride.Raw()), string(legacy.Raw()); got != want {
+			t.Fatalf("%s: cleared config = %s, want legacy shape %s", kind, got, want)
+		}
+	}
+}

@@ -179,6 +179,43 @@ with a sender of their own choosing, any tenant administrator could set
 If the alerts relay fails, alerts retry on it and are **never rerouted** through
 the account transport.
 
+### Alert and recovery templates
+
+Users & Settings > Alert email includes an instance-wide template editor for
+new alert and recovery notifications. An unrestricted user with
+`settings.manage` can choose whether `{{device}}` means the hostname (the
+backward-compatible default), the device description, or both. A missing
+description falls back to the hostname, then the agent ID.
+
+Alert and recovery messages each have a subject and a plain-text body. Available
+variables are `{{device}}`, `{{description}}`, `{{hostname}}`, `{{event}}`,
+`{{details}}`, `{{time}}`, `{{console_url}}`, `{{agent_id}}`, and `{{alert_id}}`.
+`{{time}}` is UTC in RFC 3339 format. Expressions, HTML rendering and recursive
+substitution are not supported. Unknown or malformed variables are rejected.
+Subjects accept at most 512 bytes and no line breaks; bodies accept at most
+16,384 bytes. Rendered subjects have whitespace normalized and are capped at
+200 characters. Rendered bodies are capped at 32 KiB before MIME encoding.
+
+Preview uses fictional device data and does not save settings or send mail.
+Restore defaults changes the draft until Save is pressed. Send example requires
+a saved configuration and uses the existing alerts test transport and recipient
+rules; the console sends to the current user's email address with a `[TEST]`
+prefix. It does not create an incident. Unsaved edits survive unrelated console
+refreshes.
+
+Templates are stored as one `notify.alert_templates` app setting. They apply
+when a new notification is queued. Already queued mail,
+password resets, job-failure mail and AI-release notifications are unchanged.
+SMTP settings, subscriptions, recipient scopes and shared-service footer rules
+remain independent of templates. Edits are audited as
+`config.mail.templates.update`, without logging the template text.
+
+A description is used only when the device's current monitoring scope revision
+matches the incident's saved revision. For a moved device or an incident without
+a saved revision, the template uses the historical hostname as the device name.
+Alert deduplication uses the incident and sequence. Renaming a device or editing
+a template does not resend the same incident.
+
 ### The operator's shared alert service
 
 A hosted operator can deliver alerts for instances whose administrators set no
@@ -221,7 +258,10 @@ relay does not need:
   is logged once each way.
 - **A footer** under each alert names the instance it came from and says the
   content is that instance's.
-- The alerts **test button** sends only to the caller's own confirmed address.
+- The alerts **test button** sends only to the caller's own confirmed address
+  and includes the same instance footer. Test mail has its own budget of 20
+  attempts per instance per UTC clock hour. Test attempts are outside the
+  notification outbox and do not use its hourly alert budget.
 
 Use a sending domain of its own for this service (for example
 `notify.example.com`), separate from the account transport's, so complaints
@@ -283,6 +323,9 @@ POST   /api/config/smtp/test        settings.manage   caller's own address only 
 GET    /api/config/smtp/alerts      settings.manage   alerts profile; "enabled" = alert mail will leave
 PUT    /api/config/smtp/alerts      settings.manage   blank host = alert mail off; sender without host = 400
 POST   /api/config/smtp/alerts/test settings.manage   tests the alerts transport
+GET    /api/config/mail/templates          settings.manage + unrestricted scope
+PUT    /api/config/mail/templates          settings.manage + unrestricted scope
+POST   /api/config/mail/templates/preview  settings.manage + unrestricted scope
 GET    /api/me/notifications        any user          address (read-only) + merged preferences
 PUT    /api/me/notifications        any user          {"subscriptions": {…}}
 PUT    /api/users/{id}/email        users.manage + users.email.manage
@@ -301,6 +344,10 @@ Address changes are audited (`user.email.update`), as are alerts-profile edits
 `config.smtp.alerts.test`); the SMTP audit records which fields were touched,
 never their values. There is no `config.smtp.update` action, because the account
 transport cannot be edited through the API at all.
+
+The alerts test endpoint also accepts `{"template_event":"alert"}` or
+`{"template_event":"recovery"}` to send an example using the saved templates.
+Omitting `template_event` preserves the existing SMTP transport test.
 
 ## Schema
 

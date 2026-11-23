@@ -247,3 +247,60 @@ test('parent replacement waits for assignment results for the current attachment
   assert.equal(ui.find(tree, (n) => n.type === 'label' && JSON.stringify(n).includes('rules.overrideParent')).length, 0);
   assert.equal(ui.find(tree, (n) => n.type === 'Button' && n.children.includes('checks.save'))[0].props.disabled, true);
 });
+
+test('moving an existing check requires saving the new targets before turning on replacement', async () => {
+  const calls = [];
+  const ui = harness({
+    useQuery: (key) => ({ data: key[0] === 'rule-override-access' ? { can_manage: true } :
+      { policy_key: key[0], assignments: [{ scope_type: 'site' }] } }),
+    api: {
+      updateCheck: async (_, body) => calls.push(['update', data(body.config)]),
+      attachCheck: async (_, attachment) => calls.push(['attach', data(attachment)]),
+      detachCheck: async (_, kind, id) => calls.push(['detach', kind, id]),
+    },
+  });
+  const props = {
+    check: { id: 'check', type: 'connectivity', attachments: [{ agent_id: 'device' }], config: {} },
+    onClose() {}, devMap: { device: { id: 'device', hostname: 'TEST-PC' } },
+    policies: [{ id: 'site-policy', name: 'Site policy' }],
+  };
+  let tree = ui.render('CheckEditor', props);
+  ui.find(tree, (n) => n.type === 'Combobox')[0].props.onChange('pol:site-policy');
+  tree = ui.render('CheckEditor', props);
+  ui.find(tree, (n) => n.type === 'button' && n.props['aria-label'] === 'action.remove: TEST-PC')[0].props.onClick();
+  tree = ui.render('CheckEditor', props);
+  assert.equal(ui.find(tree, (n) => n.children.includes('rules.overrideParent')).length, 0);
+  assert.equal(ui.find(tree, (n) => n.children.includes('rules.overrideSaveTargetsFirst')).length, 1);
+  const save = ui.find(tree, (n) => n.type === 'Button' && n.children.includes('checks.save'))[0];
+  assert.equal(save.props.disabled, false);
+  await save.props.onClick();
+  assert.equal(Object.hasOwn(calls[0][1], 'override_parent'), false);
+  assert.deepEqual(calls.slice(1), [['detach', 'device', 'device'], ['attach', { policy_id: 'site-policy' }]]);
+});
+
+test('an existing replacement can be cleared when its previous target is removed', async () => {
+  const calls = [];
+  const ui = harness({
+    useQuery: (key) => ({ data: key[0] === 'rule-override-access' ? { can_manage: true } :
+      { policy_key: key[0], assignments: [{ scope_type: 'site' }] } }),
+    api: {
+      updateCheck: async (_, body) => calls.push(['update', data(body.config)]),
+      detachCheck: async (_, kind, id) => calls.push(['detach', kind, id]),
+    },
+  });
+  const props = {
+    check: { id: 'check', type: 'connectivity', attachments: [{ policy_id: 'site-policy' }], config: { override_parent: true } },
+    onClose() {}, devMap: {}, policies: [{ id: 'site-policy', name: 'Site policy' }],
+  };
+  let tree = ui.render('CheckEditor', props);
+  ui.find(tree, (n) => n.type === 'button' && n.props['aria-label']?.startsWith('action.remove'))[0].props.onClick();
+  tree = ui.render('CheckEditor', props);
+  const label = ui.find(tree, (n) => n.type === 'label' && JSON.stringify(n).includes('rules.overrideParent'))[0];
+  ui.find(label, (n) => n.type === 'Toggle')[0].props.onChange(false);
+  tree = ui.render('CheckEditor', props);
+  const save = ui.find(tree, (n) => n.type === 'Button' && n.children.includes('checks.save'))[0];
+  assert.equal(save.props.disabled, false);
+  await save.props.onClick();
+  assert.equal(Object.hasOwn(calls[0][1], 'override_parent'), false);
+  assert.deepEqual(calls[1], ['detach', 'policy', 'site-policy']);
+});
