@@ -549,3 +549,27 @@ test('template preview does not invalidate drafts and the example sends a select
   await api.testAlertSMTP('', 'recovery');
   assert.deepEqual(JSON.parse(last().body), { to: '', template_event: 'recovery' });
 });
+
+test('patch scans report a disconnected device in the current language', async () => {
+  const { api, sandbox } = await loadApi();
+  sandbox.t = (key) => {
+    assert.equal(key, 'notify.agent_offline.title');
+    return 'Dispositivo offline';
+  };
+  let body = { error: 'device is offline', code: 'device_offline' };
+  sandbox.fetch = async () => ({
+    ok: false,
+    status: 503,
+    statusText: 'Service Unavailable',
+    async json() { return body; },
+  });
+
+  await assert.rejects(api.scanDevicePatches('offline'), {
+    status: 503, code: 'device_offline', message: 'Dispositivo offline',
+  });
+
+  body = { error: 'internal server error' };
+  await assert.rejects(api.scanDevicePatches('other-error'), {
+    status: 503, message: 'internal server error',
+  });
+});

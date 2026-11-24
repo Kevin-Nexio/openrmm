@@ -18,7 +18,7 @@ import (
 
 var (
 	// ErrOffline is returned when a dispatch targets an agent that isn't connected.
-	ErrOffline = errors.New("agent is offline")
+	ErrOffline = hub.ErrOffline
 	// ErrNoApproved is returned when none of the requested patches are currently
 	// approved for the endpoint. This is intentionally not treated as "install all".
 	ErrNoApproved = errors.New("no approved patches available for this device")
@@ -33,14 +33,14 @@ type Service struct {
 // New builds the patch service.
 func New(s *store.Store, h *hub.Hub) *Service { return &Service{store: s, hub: h} }
 
-func (s *Service) send(agentID, typ string, payload any) bool {
+func (s *Service) send(agentID, typ string, payload any) error {
 	data, _ := json.Marshal(payload)
 	frame, _ := json.Marshal(protocol.Envelope{Type: typ, Data: data})
-	return s.hub.Send(agentID, frame)
+	return s.hub.Enqueue(agentID, frame)
 }
 
 // DispatchScan asks an online agent to scan for missing patches.
-func (s *Service) DispatchScan(agentID string) bool {
+func (s *Service) DispatchScan(agentID string) error {
 	return s.send(agentID, protocol.MsgPatchScan, protocol.PatchScanMsg{})
 }
 
@@ -55,9 +55,9 @@ func (s *Service) DispatchInstall(ctx context.Context, agentID string, identifie
 	if len(claimed) == 0 {
 		return ErrNoApproved
 	}
-	if !s.send(agentID, protocol.MsgPatchInstall, protocol.PatchInstallMsg{
+	if err := s.send(agentID, protocol.MsgPatchInstall, protocol.PatchInstallMsg{
 		RequestID: uuid.NewString(), Identifiers: claimed,
-	}) {
+	}); err != nil {
 		_ = s.store.RequeueClaimedPatches(ctx, agentID, claimed)
 		return ErrOffline
 	}
@@ -66,7 +66,7 @@ func (s *Service) DispatchInstall(ctx context.Context, agentID string, identifie
 
 // DispatchReboot reboots an online agent and clears its pending-reboot flag.
 func (s *Service) DispatchReboot(ctx context.Context, agentID string, delaySeconds int) error {
-	if !s.send(agentID, protocol.MsgReboot, protocol.RebootMsg{DelaySeconds: delaySeconds}) {
+	if err := s.send(agentID, protocol.MsgReboot, protocol.RebootMsg{DelaySeconds: delaySeconds}); err != nil {
 		return ErrOffline
 	}
 	return s.store.SetRebootPending(ctx, agentID, false)
