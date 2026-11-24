@@ -5,14 +5,12 @@
 
 ## Why this exists
 
-OpenRMM is released under the GNU Affero General Public License v3.0. The Owner
-also offers the same software to customers under separate commercial terms.
-
-Doing both requires that one party hold the rights to the whole codebase. If a
-contribution arrives under the AGPL alone, the Owner cannot include it in a
-commercially licensed build without that contributor's individual permission —
-and a project that has to chase down every past contributor to change anything
-is a project that can no longer change.
+OpenRMM is released under the GNU Affero General Public License v3.0. Its terms
+may one day need to change, and changing them requires that one party hold the
+rights to the whole codebase. If a contribution arrives under the AGPL alone,
+the Owner cannot release it under any other terms without that contributor's
+individual permission — and a project that has to chase down every past
+contributor to change anything is a project that can no longer change.
 
 This agreement solves that **without taking your work away from you**. You keep
 the copyright in what you write. You grant the Owner a broad licence to use it,
