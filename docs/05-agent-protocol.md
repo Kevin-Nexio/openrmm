@@ -60,8 +60,10 @@ physical console session when someone is logged in there, else the first
 active remote desktop session (disconnected sessions do not count), as
 `DOMAIN\user` — `AzureAD\user` for an Entra ID account, the computer name for a
 local one. On macOS it is the owner of `/dev/console` (no one at the login
-window). On Linux it is a user from utmp at a local terminal or graphical seat,
-else one connected over SSH.
+window). On Linux it is the user of a systemd-logind session: the active one on a
+seat (the console or the graphical login) first, then another local session,
+else one connected over SSH. The login screen, the lock screen and the
+service managers do not count. Without logind, utmp is read the same way.
 
 ### Inventory diagnostics
 
