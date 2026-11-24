@@ -67,6 +67,14 @@ const deviceJobs = [
   { id: 'djob-wait', agent_id: 'dev-1', status: 'awaiting_approval', description: 'Reboot', created_by: 'smoke-admin', created_at: '2026-01-01T00:00:00Z', exit_code: null, stdout: '', stderr: '' },
 ];
 
+// Patches > Compliance: descriptions belong to devices, counts sort as
+// numbers, and dates with offsets must be compared by their actual instant.
+const complianceRows = [
+  { agent_id: 'dev-1', hostname: 'SMOKE-PC', description: 'Room 10', os: 'linux', status: 'critical', missing_total: 10, missing_security: 10, approved: 2, failed: 0, reboot_pending: false, last_scan: '2026-01-01T00:00:00Z' },
+  { agent_id: 'dev-2', hostname: 'ALPHA-WS', description: 'Room 2', os: 'windows', status: 'at_risk', missing_total: 2, missing_security: 0, approved: 1, failed: 0, reboot_pending: false, last_scan: '2026-01-01T01:00:00+02:00' },
+  { agent_id: 'dev-3', hostname: 'BETA-SRV', description: '', os: 'windows', status: 'unknown', missing_total: 0, missing_security: 0, approved: 0, failed: 0, reboot_pending: false },
+];
+
 // Reports ▸ Hardware & System: the last logged-in user, kept after logoff; one
 // is endpoint text that would be a formula in a spreadsheet.
 const hardwareRows = [
@@ -263,6 +271,8 @@ const server = createServer(async (req, res) => {
         return json(res, 200, remoteConfig);
       }
       if (pathname === '/api/devices') return json(res, 200, { devices: fleet });
+      if (pathname === '/api/reports/compliance') return json(res, 200, { rows: complianceRows });
+      if (/^\/api\/devices\/dev-[123]\/patches\/scan$/.test(pathname) && req.method === 'POST') return json(res, 200, { ok: true });
       if (pathname === '/api/reports/hardware') return json(res, 200, { rows: hardwareRows });
       if (pathname === '/api/jobs/bulk' && req.method === 'POST') {
         return json(res, 201, { batches: [{ client_id: 'client-a', batch_id: 'batch-a', count: 1 }, { client_id: 'client-b', batch_id: 'batch-b', count: 1 }], companies: 2, count: 2 });
@@ -778,6 +788,40 @@ async function policyTargetingBrowserFlow() {
   return true;
 }
 
+async function patchComplianceBrowserFlow() {
+  const wait = async (fn) => {
+    for (let i = 0; i < 150; i++) { const value = fn(); if (value) return value; await new Promise((r) => setTimeout(r, 50)); }
+    throw new Error('Patch compliance E2E timed out: ' + fn.toString());
+  };
+  const button = (label, root = document) => [...root.querySelectorAll('button')].find((el) => el.textContent.trim() === label);
+  const rows = () => [...document.querySelectorAll('tbody tr')];
+  const order = () => rows().map((r) => r.cells[0].textContent).join(',');
+  const assert = (condition, message) => { if (!condition) throw new Error(message); };
+  (await wait(() => button('Patches'))).click();
+  await wait(() => rows().length === 3 && button('Description', document.querySelector('thead')));
+  assert(rows()[2].cells[1].title === 'Room 10', 'Description tooltip uses the device description');
+  const sort = async (label, expected, direction) => {
+    const header = button(label, document.querySelector('thead'));
+    header.focus(); header.click();
+    await wait(() => order() === expected && header.closest('th').getAttribute('aria-sort') === direction);
+    assert(document.activeElement === header, 'Sort header retains keyboard focus');
+  };
+  await sort('Description', 'ALPHA-WS,SMOKE-PC,BETA-SRV', 'ascending');
+  await sort('Description', 'SMOKE-PC,ALPHA-WS,BETA-SRV', 'descending');
+  await sort('Missing', 'BETA-SRV,ALPHA-WS,SMOKE-PC', 'ascending');
+  await sort('Missing', 'SMOKE-PC,ALPHA-WS,BETA-SRV', 'descending');
+  await sort('Last scan', 'ALPHA-WS,SMOKE-PC,BETA-SRV', 'ascending');
+  await sort('Last scan', 'SMOKE-PC,ALPHA-WS,BETA-SRV', 'descending');
+  const input = document.querySelector('input[placeholder="Filter devices…"]');
+  Object.getOwnPropertyDescriptor(HTMLInputElement.prototype, 'value').set.call(input, 'ROOM 2');
+  input.dispatchEvent(new Event('input', { bubbles: true }));
+  await wait(() => order() === 'ALPHA-WS');
+  button('Scan', rows()[0]).click();
+  await wait(() => document.body.textContent.includes('Scan requested'));
+  document.documentElement.dataset.patchComplianceE2e = 'passed';
+  return true;
+}
+
 async function patchPolicyPickersBrowserFlow() {
   const wait = async (fn) => {
     for (let i = 0; i < 150; i++) { const value = fn(); if (value) return value; await new Promise((r) => setTimeout(r, 50)); }
@@ -1278,6 +1322,9 @@ try {
     assert.equal(copies.length, 1, 'only the edited copy went as a one-off job');
     assert.ok(copies[0].payload.script.includes('echo edited'));
     assert.deepEqual(copies[0].payload.variables, ['customerKey'], 'the edited copy asked for the script variable');
+    const complianceFlow = await runMobileChrome(chrome, baseURL + '/authenticated/', { width: 1280, flow: patchComplianceBrowserFlow });
+    assertBrowser(complianceFlow, /data-patch-compliance-e2e="passed"/);
+    assert.deepEqual(apiRequests.filter((r) => r.method === 'POST' && /\/patches\/scan$/.test(r.pathname)).map((r) => r.pathname), ['/api/devices/dev-2/patches/scan'], 'the sorted and searched row scans only its own device');
     const targetingFlow = await runMobileChrome(chrome, baseURL + '/authenticated/', { width: 1280, flow: policyTargetingBrowserFlow });
     assertBrowser(targetingFlow, /data-policy-targeting-e2e="passed"/);
     assert.deepEqual(apiRequests.filter((r) => r.method === 'PUT' && r.pathname === '/api/devices/dev-1/role').map((r) => r.payload), [{ role: 'server' }, { role: '' }]);

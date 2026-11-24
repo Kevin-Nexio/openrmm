@@ -13,6 +13,19 @@ tag.
   targeting filters, exclusions, AI review and cumulative patch policies remain
   unchanged. Only unrestricted managers can change exception policies; scoped
   viewers can inspect the effective rule. All nine console locales are included.
+- Patches > Compliance shows each device description and searches both hostname
+  and description. Every data column sorts in either direction, with numeric
+  counts, chronological scan dates, and missing values last.
+
+### Fixed
+
+- **The logged-in user is found on Linux systems without utmp.** The Linux
+  agent read the logged-in user only from utmp, which recent distributions
+  (Ubuntu 26.04, with systemd 259) no longer keep, so Devices ▸ Logged-in user
+  and the last logged-in user stayed empty there. The agent now asks
+  systemd-logind: the active session at the console or the graphical login
+  comes first, then another local session, then SSH. The login screen does not
+  count. Without logind it reads utmp as before. Needs the agent update.
 
 ## [0.12.1] - 2026-11-22
 
