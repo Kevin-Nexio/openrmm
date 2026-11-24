@@ -21,11 +21,11 @@
 
 services:
   server:
-    image: ${OPENRMM_SERVER_IMAGE:-ghcr.io/openrmm-project/openrmm-server:0.11.4@sha256:4414c180926325717607a842280afd8a24e7aa83d3ca7bf3c5b0fc848d4630fc}
+    image: ${OPENRMM_SERVER_IMAGE:-ghcr.io/openrmm-project/openrmm-server:0.12.2@sha256:a6fece69c6ba5196446e4d07d0b37e118c61ae97205878aa3c4c1da7ce4bf4e0}
     build: !reset null
 
   frontend:
-    image: ${OPENRMM_FRONTEND_IMAGE:-ghcr.io/openrmm-project/openrmm-frontend:0.11.4@sha256:a4bc6435a1b0c25448b3d9fef3543523440ab7ce9a09089030a1ecd926eb8eba}
+    image: ${OPENRMM_FRONTEND_IMAGE:-ghcr.io/openrmm-project/openrmm-frontend:0.12.2@sha256:f748ba26de1cb74051b4b42b9b791a9ce56633a6753c72e9513d596a59233a55}
     build: !reset null
     depends_on:
       artifacts:
@@ -39,7 +39,7 @@ services:
   # exits. Every installer and agent verifies these files against the release
   # key, so this service is a transport, not a trust boundary.
   artifacts:
-    image: ${OPENRMM_ARTIFACTS_IMAGE:-ghcr.io/openrmm-project/openrmm-artifacts:0.11.4@sha256:33f1c695fab865059ff1943ccba1b05ad54944e2a50e9334a7d6bbb87a7452c3}
+    image: ${OPENRMM_ARTIFACTS_IMAGE:-ghcr.io/openrmm-project/openrmm-artifacts:0.12.2@sha256:c5565ebacb66400c702b44acef89c61d8da7b590cd5cc0e58ebf0f6abe4f9a7f}
     # The image runs as nginx's uid, but a new named volume belongs to root:
     # the copy runs as root, with no capabilities and no network, and leaves
     # world-readable files that nginx serves.
