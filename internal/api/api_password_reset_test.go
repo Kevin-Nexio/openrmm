@@ -62,3 +62,28 @@ func TestPasswordResetURLComesFromConfig(t *testing.T) {
 		t.Fatalf("passwordResetURL = %q", got)
 	}
 }
+
+// On a split ingress RMM_PUBLIC_URL is the agents origin, which serves no
+// console: reset and address-confirmation links go to RMM_CONSOLE_PUBLIC_URL.
+// Without it, a single-origin installation keeps RMM_PUBLIC_URL.
+func TestAccountLinksUseTheConsoleOrigin(t *testing.T) {
+	split := &Server{cfg: &config.Config{PublicURL: "https://agents.example.test", ConsolePublicURL: "https://console.example.test"}}
+	if got := split.passwordResetURL("tok"); got != "https://console.example.test/?reset=tok" {
+		t.Fatalf("split passwordResetURL = %q", got)
+	}
+	if link, host := split.emailVerificationLink("tok"); link != "https://console.example.test/?verify-email=tok" || host != "console.example.test" {
+		t.Fatalf("split emailVerificationLink = %q, %q", link, host)
+	}
+	// A console under a base path: its pages live there.
+	based := &Server{cfg: &config.Config{PublicURL: "https://agents.example.test", ConsolePublicURL: "https://example.test/console"}}
+	if got := based.passwordResetURL("tok"); got != "https://example.test/console/?reset=tok" {
+		t.Fatalf("base-path passwordResetURL = %q", got)
+	}
+	single := &Server{cfg: &config.Config{PublicURL: "https://rmm.example.test/"}}
+	if got := single.passwordResetURL("tok"); got != "https://rmm.example.test/?reset=tok" {
+		t.Fatalf("single-origin passwordResetURL = %q", got)
+	}
+	if link, host := single.emailVerificationLink("tok"); link != "https://rmm.example.test/?verify-email=tok" || host != "rmm.example.test" {
+		t.Fatalf("single-origin emailVerificationLink = %q, %q", link, host)
+	}
+}

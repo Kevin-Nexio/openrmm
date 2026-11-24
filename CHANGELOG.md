@@ -14,6 +14,32 @@ tag.
   queue, so no alert or recovery email went out. The alert now goes out with
   the default template, the same message a new installation sends, and the
   server log says why.
+- **Password reset and address confirmation links open the console on a
+  split-ingress deployment.** They were built from `RMM_PUBLIC_URL`, the agents
+  origin, which answers 404 for the console, so the link in the mail did not
+  open the reset or confirmation page. They now use `RMM_CONSOLE_PUBLIC_URL`, as
+  alert links do since 0.12.0, and so do the CSV download links the AI hands
+  out on the chat and over MCP. A single-origin installation, without
+  `RMM_CONSOLE_PUBLIC_URL`, keeps `RMM_PUBLIC_URL`.
+- **The default single sign-on callback is on the console origin.** Without
+  `RMM_OIDC_REDIRECT_URL` it was `RMM_PUBLIC_URL` + `/api/auth/oidc/callback`,
+  which the agents origin of a split ingress answers with 404. It now uses the
+  origin of `RMM_CONSOLE_PUBLIC_URL` when that is set, as the sign-on guide
+  already told you to register. Links to `/api` routes, this callback and the
+  AI's download links, use that origin even when the console has a base path,
+  because nginx serves the API at the origin root; console page links keep
+  the base path.
+
+### Upgrade notes
+
+- With `RMM_CONSOLE_PUBLIC_URL` set, single sign-on and no
+  `RMM_OIDC_REDIRECT_URL`, register `https://<console>/api/auth/oidc/callback`
+  with your identity provider, or set `RMM_OIDC_REDIRECT_URL` to the callback
+  you registered.
+- The server refuses to start when `RMM_CONSOLE_PUBLIC_URL` is not an absolute
+  `http(s)` URL with a host, or carries user info, a query, a fragment, an
+  invalid port, or an empty, `.` or `..` path segment. Such a value produced
+  broken links before.
 
 ## [0.12.2] - 2026-11-24
 
