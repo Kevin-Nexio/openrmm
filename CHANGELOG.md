@@ -6,6 +6,8 @@ tag.
 
 ## [Unreleased]
 
+## [0.12.3] - 2026-11-24
+
 ### Fixed
 
 - **An alert email template that cannot be used no longer stops alert mail.**
@@ -13,14 +15,16 @@ tag.
   variable from a newer version after a rollback, made every alert fail to
   queue, so no alert or recovery email went out. The alert now goes out with
   the default template, the same message a new installation sends, and the
-  server log says why.
+  server log says why. This affected 0.12.1 and 0.12.2
+  ([#306](https://github.com/openrmm-project/openrmm/pull/306)).
 - **Password reset and address confirmation links open the console on a
   split-ingress deployment.** They were built from `RMM_PUBLIC_URL`, the agents
   origin, which answers 404 for the console, so the link in the mail did not
   open the reset or confirmation page. They now use `RMM_CONSOLE_PUBLIC_URL`, as
   alert links do since 0.12.0, and so do the CSV download links the AI hands
   out on the chat and over MCP. A single-origin installation, without
-  `RMM_CONSOLE_PUBLIC_URL`, keeps `RMM_PUBLIC_URL`.
+  `RMM_CONSOLE_PUBLIC_URL`, keeps `RMM_PUBLIC_URL`
+  ([#307](https://github.com/openrmm-project/openrmm/pull/307)).
 - **The default single sign-on callback is on the console origin.** Without
   `RMM_OIDC_REDIRECT_URL` it was `RMM_PUBLIC_URL` + `/api/auth/oidc/callback`,
   which the agents origin of a split ingress answers with 404. It now uses the
@@ -28,10 +32,12 @@ tag.
   already told you to register. Links to `/api` routes, this callback and the
   AI's download links, use that origin even when the console has a base path,
   because nginx serves the API at the origin root; console page links keep
-  the base path.
+  the base path ([#307](https://github.com/openrmm-project/openrmm/pull/307)).
 
 ### Upgrade notes
 
+- No database migration. Only the server changes: the agent's code differs
+  only in its version number, and the remote component is unchanged.
 - With `RMM_CONSOLE_PUBLIC_URL` set, single sign-on and no
   `RMM_OIDC_REDIRECT_URL`, register `https://<console>/api/auth/oidc/callback`
   with your identity provider, or set `RMM_OIDC_REDIRECT_URL` to the callback
