@@ -77,19 +77,18 @@ func (s *Service) Queue(ctx context.Context, ev Event) error {
 		operator = err == nil && cfg.Operator
 	}
 	if ev.TemplateData != nil {
-		templates, err := LoadAlertTemplates(ctx, s.store)
+		message, err := s.renderAlertMail(ctx, ev)
 		if err != nil {
-			return err
+			// A saved template that cannot be loaded or rendered (a setting saved
+			// by a newer version before a rollback, an edited row) must not stop
+			// alert mail: send what the default template says instead, the same
+			// message a new installation sends.
+			log.Printf("notify: alert email template unusable, sending the default template: %v", err)
+			message, err = RenderAlertTemplate(DefaultAlertTemplates(), alertTemplateKind(ev.Type), *ev.TemplateData)
 		}
-		kind := "alert"
-		if ev.Type == store.NotifyCheckRecovered || ev.Type == store.NotifyAgentRecovered {
-			kind = "recovery"
+		if err == nil {
+			ev.Subject, ev.Body = message.Subject, message.Body
 		}
-		message, err := RenderAlertTemplate(templates, kind, *ev.TemplateData)
-		if err != nil {
-			return err
-		}
-		ev.Subject, ev.Body = message.Subject, message.Body
 	}
 	var recipients []store.NotificationRecipient
 	var err error
@@ -301,6 +300,22 @@ func quietReason(cfg Config, err error) string {
 	default:
 		return fmt.Sprintf("host %s is set but no sender address is", cfg.Host)
 	}
+}
+
+// renderAlertMail renders the saved alert email template for ev.
+func (s *Service) renderAlertMail(ctx context.Context, ev Event) (Message, error) {
+	templates, err := LoadAlertTemplates(ctx, s.store)
+	if err != nil {
+		return Message{}, err
+	}
+	return RenderAlertTemplate(templates, alertTemplateKind(ev.Type), *ev.TemplateData)
+}
+
+func alertTemplateKind(eventType string) string {
+	if eventType == store.NotifyCheckRecovered || eventType == store.NotifyAgentRecovered {
+		return "recovery"
+	}
+	return "alert"
 }
 
 // AlertOpenedEvent renders the mail for a newly opened alert.
