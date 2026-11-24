@@ -311,3 +311,60 @@ func TestOIDCShowButton(t *testing.T) {
 		}
 	}
 }
+
+// Reset, confirmation and export tokens ride on links built from the console
+// origin: a value that is not an absolute http(s) base refuses to start rather
+// than mail broken or misdirected links.
+func TestConsolePublicURLMustBeAnAbsoluteBase(t *testing.T) {
+	t.Setenv("RMM_ADMIN_TOKEN", strings.Repeat("a", 32))
+	for _, bad := range []string{
+		"console.example.test",
+		"javascript:alert(1)",
+		"ftp://console.example.test",
+		"https://",
+		"https://user:pass@console.example.test",
+		"https://console.example.test/?next=x",
+		"https://console.example.test/#x",
+	} {
+		t.Setenv("RMM_CONSOLE_PUBLIC_URL", bad)
+		if _, err := Load(); err == nil {
+			t.Errorf("RMM_CONSOLE_PUBLIC_URL=%q was accepted", bad)
+		}
+	}
+	for _, good := range []string{"https://console.example.test/", "https://example.test/rmm", "http://localhost:5173"} {
+		t.Setenv("RMM_CONSOLE_PUBLIC_URL", good)
+		if _, err := Load(); err != nil {
+			t.Errorf("RMM_CONSOLE_PUBLIC_URL=%q refused: %v", good, err)
+		}
+	}
+}
+
+// The single sign-on callback is a console page. On a split ingress the agents
+// origin answers 404 for it, so the default follows the console origin; an
+// explicit RMM_OIDC_REDIRECT_URL and a single-origin installation are unchanged.
+func TestOIDCCallbackDefaultsToTheConsoleOrigin(t *testing.T) {
+	t.Setenv("RMM_ADMIN_TOKEN", strings.Repeat("a", 32))
+	t.Setenv("RMM_OIDC_ENABLED", "true")
+	t.Setenv("RMM_OIDC_ISSUER", "https://idp.example.test")
+	t.Setenv("RMM_OIDC_CLIENT_ID", "rmm-console")
+	t.Setenv("RMM_PUBLIC_URL", "https://agents.example.test")
+	load := func() string {
+		t.Helper()
+		cfg, err := Load()
+		if err != nil {
+			t.Fatalf("Load: %v", err)
+		}
+		return cfg.OIDCRedirectURL
+	}
+	if got := load(); got != "https://agents.example.test/api/auth/oidc/callback" {
+		t.Errorf("single-origin callback = %q", got)
+	}
+	t.Setenv("RMM_CONSOLE_PUBLIC_URL", "https://console.example.test")
+	if got := load(); got != "https://console.example.test/api/auth/oidc/callback" {
+		t.Errorf("split-ingress callback = %q, want the console origin", got)
+	}
+	t.Setenv("RMM_OIDC_REDIRECT_URL", "https://sso.example.test/api/auth/oidc/callback")
+	if got := load(); got != "https://sso.example.test/api/auth/oidc/callback" {
+		t.Errorf("explicit callback = %q, want it kept", got)
+	}
+}
