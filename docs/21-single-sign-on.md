@@ -36,7 +36,7 @@ Everything else has a working default:
 | variable | default | what it does |
 |---|---|---|
 | `RMM_OIDC_SCOPES` | `openid,profile,email` | `openid` is added back if you drop it — without it there is no ID token to verify |
-| `RMM_OIDC_REDIRECT_URL` | `<console origin>/api/auth/oidc/callback`: `RMM_CONSOLE_PUBLIC_URL`, else `RMM_PUBLIC_URL` | must match what you registered with the provider |
+| `RMM_OIDC_REDIRECT_URL` | `<console origin>/api/auth/oidc/callback`: the origin of `RMM_CONSOLE_PUBLIC_URL`, else `RMM_PUBLIC_URL` | must match what you registered with the provider |
 | `RMM_OIDC_USERNAME_CLAIM` | `email` | which claim becomes the console username |
 | `RMM_OIDC_AUTO_PROVISION` | `false` | create an account on first successful sign-in |
 | `RMM_OIDC_DEFAULT_ROLE` | `readonly` | the role such an account is created with |

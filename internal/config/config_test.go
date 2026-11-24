@@ -325,13 +325,21 @@ func TestConsolePublicURLMustBeAnAbsoluteBase(t *testing.T) {
 		"https://user:pass@console.example.test",
 		"https://console.example.test/?next=x",
 		"https://console.example.test/#x",
+		"https://console.example.test?",
+		"https://console.example.test#",
+		"https://console.example.test:99999",
+		"https://console.example.test/..//evil.test",
+		"https://console.example.test//evil.test",
+		"https://console.example.test/%2e%2e/console",
+		`https://console.example.test\@evil.test`,
+		" https://console.example.test",
 	} {
 		t.Setenv("RMM_CONSOLE_PUBLIC_URL", bad)
 		if _, err := Load(); err == nil {
 			t.Errorf("RMM_CONSOLE_PUBLIC_URL=%q was accepted", bad)
 		}
 	}
-	for _, good := range []string{"https://console.example.test/", "https://example.test/rmm", "http://localhost:5173"} {
+	for _, good := range []string{"https://console.example.test/", "https://example.test/rmm", "https://example.test/rmm/console/", "http://localhost:5173", "https://[::1]:8443"} {
 		t.Setenv("RMM_CONSOLE_PUBLIC_URL", good)
 		if _, err := Load(); err != nil {
 			t.Errorf("RMM_CONSOLE_PUBLIC_URL=%q refused: %v", good, err)
@@ -363,8 +371,30 @@ func TestOIDCCallbackDefaultsToTheConsoleOrigin(t *testing.T) {
 	if got := load(); got != "https://console.example.test/api/auth/oidc/callback" {
 		t.Errorf("split-ingress callback = %q, want the console origin", got)
 	}
+	// A console under a base path: the callback is an /api route, which nginx
+	// serves at the origin root.
+	t.Setenv("RMM_CONSOLE_PUBLIC_URL", "https://console.example.test/console/")
+	if got := load(); got != "https://console.example.test/api/auth/oidc/callback" {
+		t.Errorf("base-path callback = %q, want the console origin", got)
+	}
 	t.Setenv("RMM_OIDC_REDIRECT_URL", "https://sso.example.test/api/auth/oidc/callback")
 	if got := load(); got != "https://sso.example.test/api/auth/oidc/callback" {
 		t.Errorf("explicit callback = %q, want it kept", got)
+	}
+}
+
+// Console pages keep the console's base path; /api routes answer at the
+// origin root. Without RMM_CONSOLE_PUBLIC_URL both stay RMM_PUBLIC_URL.
+func TestConsolePageAndAPIBases(t *testing.T) {
+	c := &Config{PublicURL: "https://agents.example.test", ConsolePublicURL: "https://example.test/console"}
+	if got := c.NotificationConsoleURL(); got != "https://example.test/console" {
+		t.Errorf("page base = %q", got)
+	}
+	if got := c.ConsoleAPIBase(); got != "https://example.test" {
+		t.Errorf("API base = %q, want the origin", got)
+	}
+	c = &Config{PublicURL: "https://rmm.example.test/"}
+	if got := c.ConsoleAPIBase(); got != "https://rmm.example.test" {
+		t.Errorf("single-origin API base = %q", got)
 	}
 }

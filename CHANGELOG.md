@@ -17,9 +17,12 @@ tag.
   `RMM_CONSOLE_PUBLIC_URL`, keeps `RMM_PUBLIC_URL`.
 - **The default single sign-on callback is on the console origin.** Without
   `RMM_OIDC_REDIRECT_URL` it was `RMM_PUBLIC_URL` + `/api/auth/oidc/callback`,
-  which the agents origin of a split ingress answers with 404. It now follows
-  `RMM_CONSOLE_PUBLIC_URL` when that is set, as the sign-on guide already told
-  you to register.
+  which the agents origin of a split ingress answers with 404. It now uses the
+  origin of `RMM_CONSOLE_PUBLIC_URL` when that is set, as the sign-on guide
+  already told you to register. Links to `/api` routes, this callback and the
+  AI's download links, use that origin even when the console has a base path,
+  because nginx serves the API at the origin root; console page links keep
+  the base path.
 
 ### Upgrade notes
 
@@ -28,8 +31,9 @@ tag.
   with your identity provider, or set `RMM_OIDC_REDIRECT_URL` to the callback
   you registered.
 - The server refuses to start when `RMM_CONSOLE_PUBLIC_URL` is not an absolute
-  `http(s)` URL with a host, or carries user info, a query or a fragment. Such a
-  value produced broken links before.
+  `http(s)` URL with a host, or carries user info, a query, a fragment, an
+  invalid port, or an empty, `.` or `..` path segment. Such a value produced
+  broken links before.
 
 ## [0.12.2] - 2026-11-24
 

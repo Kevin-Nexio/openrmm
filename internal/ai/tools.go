@@ -28,8 +28,8 @@ type ToolContext struct {
 	Patches *patches.Service
 	Actor   string // who is driving the chat (recorded as job creator / audit actor)
 	// Config and PublicURL let a tool hand back a signed download link instead of
-	// reading rows into the model. See export_audit. PublicURL is the browser
-	// console's origin (Config.NotificationConsoleURL), which serves /api.
+	// reading rows into the model. See export_audit. PublicURL is where the
+	// console's API answers (Config.ConsoleAPIBase).
 	Config      *config.Config
 	PublicURL   string
 	ScopeUserID string // restrict tools to this user's access scope ("" = full)

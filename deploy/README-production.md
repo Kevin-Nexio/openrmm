@@ -125,8 +125,10 @@ The frontend is built for this path, nginx serves it there, and nginx generates
 
 `RMM_CONSOLE_PUBLIC_URL` is the browser console origin used in the links people
 open from a message: alert mail, password reset and address confirmation mail,
-and the download links the AI hands out. If unset, those links keep the
-`RMM_PUBLIC_URL` fallback.
+and the download links the AI hands out. Include the base path when the console
+has one (`https://rmm.example.com/console`): page links keep it, while `/api`
+links and the default sign-on callback use the origin. If unset, those links
+keep the `RMM_PUBLIC_URL` fallback.
 
 `RMM_PUBLIC_URL` is the HTTPS agents origin. `RMM_MCP_PUBLIC_URL` is the HTTPS MCP
 origin and is mandatory when OAuth is enabled. Neither is the raw app address.

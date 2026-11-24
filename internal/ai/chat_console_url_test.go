@@ -13,6 +13,11 @@ func TestChatDownloadLinksUseTheConsoleOrigin(t *testing.T) {
 	if e.publicURL != "https://console.example.test" {
 		t.Fatalf("chat link origin = %q, want the console", e.publicURL)
 	}
+	// /api answers at the origin root, not under the console's base path.
+	e = NewEngine(nil, nil, nil, nil, &config.Config{PublicURL: "https://agents.example.test", ConsolePublicURL: "https://example.test/console"})
+	if e.publicURL != "https://example.test" {
+		t.Fatalf("base-path chat link origin = %q, want the origin", e.publicURL)
+	}
 	e = NewEngine(nil, nil, nil, nil, &config.Config{PublicURL: "https://rmm.example.test"})
 	if e.publicURL != "https://rmm.example.test" {
 		t.Fatalf("single-origin chat link origin = %q", e.publicURL)

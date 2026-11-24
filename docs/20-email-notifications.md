@@ -114,8 +114,10 @@ address confirmation mail, and the download links the AI hands out on the chat
 and over MCP use this address. Keep `RMM_PUBLIC_URL` set to the agents origin
 used for enrollment. When the console URL is unset, these links fall back to
 `RMM_PUBLIC_URL` for compatibility with single-origin installations. Restart the
-server after changing this setting. OIDC takes the console origin from its
-callback URL and the MCP endpoint keeps `RMM_MCP_PUBLIC_URL`.
+server after changing this setting. Links to console pages keep its path, such
+as a `/console` base path; links to `/api` routes (the download links and the
+default sign-on callback) use its origin, where nginx serves the API. The MCP
+endpoint keeps `RMM_MCP_PUBLIC_URL`.
 
 ## Configuration
 

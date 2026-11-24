@@ -429,12 +429,12 @@ func Load() (*Config, error) {
 			return nil, fmt.Errorf("RMM_OIDC_ISSUER must use https://")
 		}
 		if c.OIDCRedirectURL == "" {
-			if c.NotificationConsoleURL() == "" {
+			if c.ConsoleAPIBase() == "" {
 				return nil, fmt.Errorf("RMM_OIDC_REDIRECT_URL is required when RMM_PUBLIC_URL is not set")
 			}
-			// The callback is a console page: on a split ingress the agents
-			// origin answers 404 for it, so the console origin is the default.
-			c.OIDCRedirectURL = strings.TrimRight(c.NotificationConsoleURL(), "/") + "/api/auth/oidc/callback"
+			// The callback is an API route of the console: on a split ingress
+			// the agents origin answers 404 for it, so the console is the default.
+			c.OIDCRedirectURL = c.ConsoleAPIBase() + "/api/auth/oidc/callback"
 		}
 		if u, err := url.Parse(c.OIDCRedirectURL); err != nil || !u.IsAbs() {
 			return nil, fmt.Errorf("RMM_OIDC_REDIRECT_URL must be an absolute URL")
@@ -519,11 +519,12 @@ func parseUpdatePublicKeys(raw string) ([]string, error) {
 	return keys, nil
 }
 
-// NotificationConsoleURL is the browser console's origin, for every link a
-// person opens from a message: alert mail, password reset and address
-// confirmation mail, and the download links the AI hands out.
-// RMM_CONSOLE_PUBLIC_URL on a split-ingress deployment, where RMM_PUBLIC_URL is
-// the agents origin that serves no console; RMM_PUBLIC_URL otherwise.
+// NotificationConsoleURL is the browser console's address, base path included,
+// for every console page a person opens from a message: alert mail, password
+// reset and address confirmation mail. RMM_CONSOLE_PUBLIC_URL on a
+// split-ingress deployment, where RMM_PUBLIC_URL is the agents origin that
+// serves no console; RMM_PUBLIC_URL otherwise. Links to /api routes use
+// ConsoleAPIBase.
 func (c *Config) NotificationConsoleURL() string {
 	if c.ConsolePublicURL != "" {
 		return c.ConsolePublicURL
@@ -531,12 +532,39 @@ func (c *Config) NotificationConsoleURL() string {
 	return c.PublicURL
 }
 
-// validConsoleURL accepts an absolute http(s) URL with a host, no user info, and
-// no query or fragment: a base that links are appended to.
+// ConsoleAPIBase is where the console's API answers, for links to /api routes
+// (the single sign-on callback, the AI's download links): the origin of
+// RMM_CONSOLE_PUBLIC_URL, since nginx serves /api at the origin root whatever
+// the console's base path; RMM_PUBLIC_URL when it is unset, as before.
+func (c *Config) ConsoleAPIBase() string {
+	if c.ConsolePublicURL != "" {
+		if u, err := url.Parse(c.ConsolePublicURL); err == nil && u.Host != "" {
+			return u.Scheme + "://" + u.Host
+		}
+	}
+	return strings.TrimRight(c.PublicURL, "/")
+}
+
+// validConsoleURL accepts an absolute http(s) URL with a host and an optional
+// base path: no user info, query, fragment, out-of-range port, or empty, "." or
+// ".." path segment. Links are appended to it.
 func validConsoleURL(raw string) error {
+	bad := fmt.Errorf("RMM_CONSOLE_PUBLIC_URL must be an absolute http(s) URL such as https://console.example.com or https://example.com/console, without user info, query, fragment, or empty, . or .. path segments")
 	u, err := url.Parse(raw)
-	if err != nil || (u.Scheme != "https" && u.Scheme != "http") || u.Host == "" || u.User != nil || u.RawQuery != "" || u.Fragment != "" {
-		return fmt.Errorf("RMM_CONSOLE_PUBLIC_URL must be an absolute http(s) URL such as https://console.example.com, without user info, query or fragment")
+	if err != nil || (u.Scheme != "https" && u.Scheme != "http") || u.Host == "" || u.User != nil || strings.ContainsAny(raw, "?#") {
+		return bad
+	}
+	if p := u.Port(); p != "" {
+		if n, err := strconv.Atoi(p); err != nil || n < 1 || n > 65535 {
+			return bad
+		}
+	}
+	if path := strings.TrimSuffix(u.Path, "/"); path != "" {
+		for _, segment := range strings.Split(path[1:], "/") {
+			if segment == "" || segment == "." || segment == ".." {
+				return bad
+			}
+		}
 	}
 	return nil
 }
