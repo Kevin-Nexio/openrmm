@@ -1,6 +1,7 @@
 package main
 
 import (
+	"strings"
 	"testing"
 
 	"github.com/shirou/gopsutil/v3/host"
@@ -53,4 +54,55 @@ func TestUtmpSessionUser(t *testing.T) {
 // session it reports "".
 func TestLoggedInUserDoesNotPanic(t *testing.T) {
 	_ = loggedInUser()
+}
+
+// Linux with logind: someone at the machine (the active session on a seat)
+// before someone over SSH; the login screen, the lock screen and the service
+// managers are not users.
+func TestLogindSessionUser(t *testing.T) {
+	greeter := logindSession{ID: "c1", Name: "lightdm", Class: "greeter", State: "active", Seat: "seat0", Active: true}
+	manager := logindSession{ID: "1", Name: "lightdm", Class: "manager-early", State: "active", Active: true}
+	desktop := logindSession{ID: "3", Name: "teste", Class: "user", State: "active", Seat: "seat0", Active: true}
+	inactiveSeat := logindSession{ID: "5", Name: "ana", Class: "user", State: "online", Seat: "seat0"}
+	ssh := logindSession{ID: "4", Name: "ops", Class: "user", State: "active", Remote: true}
+	tty := logindSession{ID: "6", Name: "root", Class: "user", State: "active"}
+	closing := logindSession{ID: "7", Name: "old", Class: "user", State: "closing", Seat: "seat0", Active: true}
+	for name, tc := range map[string]struct {
+		sessions []logindSession
+		want     string
+	}{
+		"only the login screen":        {[]logindSession{manager, greeter}, ""},
+		"graphical login":              {[]logindSession{manager, greeter, desktop}, "teste"},
+		"seat before ssh":              {[]logindSession{ssh, desktop}, "teste"},
+		"active seat before inactive":  {[]logindSession{inactiveSeat, desktop}, "teste"},
+		"inactive seat before ssh":     {[]logindSession{ssh, inactiveSeat}, "ana"},
+		"local terminal before ssh":    {[]logindSession{ssh, tty}, "root"},
+		"ssh only":                     {[]logindSession{greeter, ssh}, "ops"},
+		"a closing session is not one": {[]logindSession{closing}, ""},
+		"nothing":                      {nil, ""},
+	} {
+		if got := logindSessionUser(tc.sessions); got != tc.want {
+			t.Errorf("%s: got %q, want %q", name, got, tc.want)
+		}
+	}
+}
+
+// The ids come from the first column of list-sessions; show-session prints
+// one block per session. The sample is the Ubuntu 26.04 lab device at its
+// login screen, plus an SSH session.
+func TestLoginctlParsing(t *testing.T) {
+	list := " 1 105 lightdm -     1402 manager-early - no -\nc1 105 lightdm seat0 1373 greeter       - no -\n 9 1000 ops   -     2210 user          pts/0 no -\n--bad 1 x\n\n"
+	if got := strings.Join(loginctlSessionIDs(list), ","); got != "1,c1,9" {
+		t.Fatalf("ids = %q", got)
+	}
+	show := "Id=1\nName=lightdm\nClass=manager-early\nState=active\nSeat=\nRemote=no\nActive=yes\n\n" +
+		"Id=c1\nName=lightdm\nSeat=seat0\nClass=greeter\nState=active\nRemote=no\nActive=yes\n\n" +
+		"Id=9\nName=ops\nClass=user\nState=active\nSeat=\nRemote=yes\nActive=yes\n"
+	sessions := parseLoginctlShow(show)
+	if len(sessions) != 3 || sessions[1].Seat != "seat0" || sessions[1].Class != "greeter" || !sessions[2].Remote || sessions[2].Name != "ops" {
+		t.Fatalf("sessions = %#v", sessions)
+	}
+	if got := logindSessionUser(sessions); got != "ops" {
+		t.Fatalf("user = %q, want the SSH user", got)
+	}
 }
