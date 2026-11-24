@@ -6,6 +6,15 @@ tag.
 
 ## [Unreleased]
 
+### Fixed
+
+- **An alert email template that cannot be used no longer stops alert mail.**
+  A saved template this version cannot load or render, such as one using a
+  variable from a newer version after a rollback, made every alert fail to
+  queue, so no alert or recovery email went out. The alert now goes out with
+  the default template, the same message a new installation sends, and the
+  server log says why.
+
 ## [0.12.2] - 2026-11-24
 
 ### Security
