@@ -510,8 +510,11 @@ func parseUpdatePublicKeys(raw string) ([]string, error) {
 	return keys, nil
 }
 
-// NotificationConsoleURL keeps single-origin installations compatible while
-// letting split-ingress deployments link to the browser console.
+// NotificationConsoleURL is the browser console's origin, for every link a
+// person opens from a message: alert mail, password reset and address
+// confirmation mail, and the download links the AI hands out.
+// RMM_CONSOLE_PUBLIC_URL on a split-ingress deployment, where RMM_PUBLIC_URL is
+// the agents origin that serves no console; RMM_PUBLIC_URL otherwise.
 func (c *Config) NotificationConsoleURL() string {
 	if c.ConsolePublicURL != "" {
 		return c.ConsolePublicURL

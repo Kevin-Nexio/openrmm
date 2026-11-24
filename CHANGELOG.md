@@ -6,6 +6,16 @@ tag.
 
 ## [Unreleased]
 
+### Fixed
+
+- **Password reset and address confirmation links open the console on a
+  split-ingress deployment.** They were built from `RMM_PUBLIC_URL`, the agents
+  origin, which answers 404 for the console, so the link in the mail did not
+  open the reset or confirmation page. They now use `RMM_CONSOLE_PUBLIC_URL`, as
+  alert links do since 0.12.0, and so do the CSV download links the AI hands
+  out on the chat and over MCP. A single-origin installation, without
+  `RMM_CONSOLE_PUBLIC_URL`, keeps `RMM_PUBLIC_URL`.
+
 ## [0.12.2] - 2026-11-24
 
 ### Security

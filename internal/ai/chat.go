@@ -91,7 +91,7 @@ type Engine struct {
 
 // NewEngine builds the chat engine.
 func NewEngine(c *Client, s *store.Store, j *jobs.Service, p *patches.Service, cfg *config.Config) *Engine {
-	return &Engine{client: c, store: s, jobs: j, patches: p, cfg: cfg, publicURL: cfg.PublicURL}
+	return &Engine{client: c, store: s, jobs: j, patches: p, cfg: cfg, publicURL: cfg.NotificationConsoleURL()}
 }
 
 // UpdateProvider swaps model provider settings for future chat requests.

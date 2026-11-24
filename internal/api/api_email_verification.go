@@ -78,11 +78,7 @@ func (s *Server) sendEmailVerification(ctx context.Context, userID, email, actor
 	if err := s.store.CreateEmailVerification(ctx, userID, email, auth.Hash(token), time.Now().Add(emailVerificationTTL)); err != nil {
 		return err
 	}
-	link := strings.TrimRight(s.cfg.PublicURL, "/") + "/?verify-email=" + token
-	host := s.cfg.PublicURL
-	if i := strings.Index(host, "://"); i >= 0 {
-		host = host[i+3:]
-	}
+	link, host := s.emailVerificationLink(token)
 	body := fmt.Sprintf("Someone set this address to receive alerts from the OpenRMM instance %s.\n\n"+
 		"If that was you or your team, confirm it:\n\n%s\n\n"+
 		"The link works once and expires in %d hours. Until the address is confirmed, no alert is sent to it.\n"+
@@ -186,4 +182,15 @@ func (s *Server) confirmEmailVerification(w http.ResponseWriter, r *http.Request
 	}
 	_ = s.store.AddAudit(r.Context(), userID, "user.email.verify", userID, nil)
 	writeJSON(w, http.StatusOK, map[string]string{"status": "confirmed"})
+}
+
+// emailVerificationLink is the console link that confirms an address, and the
+// console's host to name the instance by in the message.
+func (s *Server) emailVerificationLink(token string) (link, host string) {
+	base := s.consoleBase()
+	host = base
+	if i := strings.Index(host, "://"); i >= 0 {
+		host = host[i+3:]
+	}
+	return base + "/?verify-email=" + token, host
 }

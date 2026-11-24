@@ -119,8 +119,14 @@ func (s *Server) deliverPasswordReset(email string) {
 // query string because it must survive a cold load in whatever browser the mail
 // client opens — there is no session to carry it.
 func (s *Server) passwordResetURL(token string) string {
-	base := strings.TrimRight(s.cfg.PublicURL, "/")
-	return base + "/?reset=" + token
+	return s.consoleBase() + "/?reset=" + token
+}
+
+// consoleBase is the browser console's origin for links a person opens from a
+// message (RMM_CONSOLE_PUBLIC_URL, else RMM_PUBLIC_URL). It never comes from the
+// request: a Host header an attacker controls must not decide where a link points.
+func (s *Server) consoleBase() string {
+	return strings.TrimRight(s.cfg.NotificationConsoleURL(), "/")
 }
 
 // confirmPasswordReset redeems the token and sets the new password.

@@ -108,12 +108,14 @@ on every 30s tick:
 ## Links to the console
 
 On split-ingress deployments, set `RMM_CONSOLE_PUBLIC_URL` to the browser console
-origin (for example, `https://rmm.example.com`). Alert and recovery messages,
-job-failure messages, and the shared-service footer use this address. Keep
-`RMM_PUBLIC_URL` set to the agents origin used for enrollment. When the console
-URL is unset, notification links fall back to `RMM_PUBLIC_URL` for compatibility
-with single-origin installations. Restart the server after changing this setting.
-This setting does not change OIDC, MCP, or account/password-reset URLs.
+origin (for example, `https://console.rmm.example.com`). Alert and recovery
+messages, job-failure messages, the shared-service footer, password reset and
+address confirmation mail, and the download links the AI hands out on the chat
+and over MCP use this address. Keep `RMM_PUBLIC_URL` set to the agents origin
+used for enrollment. When the console URL is unset, these links fall back to
+`RMM_PUBLIC_URL` for compatibility with single-origin installations. Restart the
+server after changing this setting. OIDC takes the console origin from its
+callback URL and the MCP endpoint keeps `RMM_MCP_PUBLIC_URL`.
 
 ## Configuration
 
