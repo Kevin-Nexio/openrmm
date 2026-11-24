@@ -24,9 +24,9 @@ Emails on GitHub.
 
 ### 2. Sign the CLA (once)
 
-OpenRMM is released under the AGPL-3.0 **and** offered to customers under
-separate commercial terms. Holding both requires that one party hold the rights
-to the whole codebase, which is what the [Contributor License Agreement](CLA.md)
+OpenRMM is released under the AGPL-3.0. So that its terms can change later
+without asking every past contributor, one party has to hold the rights to the
+whole codebase, which is what the [Contributor License Agreement](CLA.md)
 establishes. You keep the copyright in your work; you grant a licence broad
 enough to include relicensing.
 
