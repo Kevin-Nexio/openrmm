@@ -12,7 +12,7 @@ require (
 	github.com/go-chi/httprate v0.16.1
 	github.com/go-jose/go-jose/v4 v4.1.9
 	github.com/google/uuid v1.6.0
-	github.com/gorilla/websocket v1.5.3
+	github.com/gorilla/websocket v1.5.4-0.20240701034025-d67f41855da4
 	github.com/jackc/pgx/v5 v5.13.0
 	github.com/kardianos/service v1.3.0
 	github.com/modelcontextprotocol/go-sdk v1.8.0
@@ -40,6 +40,7 @@ require (
 	github.com/yosida95/uritemplate/v3 v3.0.2 // indirect
 	github.com/yusufpapurcu/wmi v1.2.4 // indirect
 	github.com/zeebo/xxh3 v1.0.2 // indirect
+	golang.org/x/net v0.62.0 // indirect
 	golang.org/x/sync v0.25.0 // indirect
 	golang.org/x/time v0.15.0 // indirect
 )
