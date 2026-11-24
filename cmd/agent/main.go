@@ -43,7 +43,7 @@ import (
 // release whose capabilities this source actually has: the server gates features
 // on this string, so an agent that under-reports is refused work it can do, and
 // one that over-reports is handed work it cannot.
-var agentVersion = "0.12.1"
+var agentVersion = "0.12.2"
 
 type state struct {
 	AgentID               string `json:"agent_id"`
