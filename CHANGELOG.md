@@ -6,21 +6,42 @@ tag.
 
 ## [Unreleased]
 
+## [0.12.2] - 2026-11-24
+
+### Security
+
+- **WebSocket library updated for GO-2026-6278.** The Gorilla WebSocket
+  library chose the mask key of the frames a client sends with a weak random
+  number generator. The server, the agent and the remote component now use the
+  fixed revision ([#302](https://github.com/openrmm-project/openrmm/pull/302)).
+
 ### Added
 
-- Patches > Compliance shows each device description and searches both hostname
-  and description. Every data column sorts in either direction, with numeric
-  counts, chronological scan dates, and missing values last.
+- **Patches ▸ Compliance shows device descriptions.** The search covers both
+  hostname and description, and every data column sorts in either direction,
+  with numeric counts, chronological scan dates and missing values last. Thanks
+  to Kevin-Nexio for the contribution in
+  [#298](https://github.com/openrmm-project/openrmm/pull/298).
 
 ### Fixed
 
+- **A patch scan on an offline device says the device is offline.** The
+  console showed a generic server error instead. It now shows "Device offline"
+  in the user's language, and a busy agent connection is reported apart from a
+  disconnected device ([#301](https://github.com/openrmm-project/openrmm/pull/301)).
 - **The logged-in user is found on Linux systems without utmp.** The Linux
   agent read the logged-in user only from utmp, which recent distributions
   (Ubuntu 26.04, with systemd 259) no longer keep, so Devices ▸ Logged-in user
   and the last logged-in user stayed empty there. The agent now asks
   systemd-logind: the active session at the console or the graphical login
   comes first, then another local session, then SSH. The login screen does not
-  count. Without logind it reads utmp as before. Needs the agent update.
+  count. Without logind it reads utmp as before
+  ([#303](https://github.com/openrmm-project/openrmm/pull/303)).
+
+### Upgrade notes
+
+- No database migration. Update the agents too: the WebSocket fix and the Linux
+  logged-in user are in the agent and the remote component.
 
 ## [0.12.1] - 2026-11-22
 
