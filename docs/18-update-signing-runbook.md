@@ -80,6 +80,15 @@ key, and drop the old key once the fleet has converged (see
    workflow re-checks ancestry and runs race/vet/test plus migration, installer
    and deployment gates before building.
 
+   A release restores no GitHub Actions cache (setup-go runs with
+   `cache: false`, and tag image builds skip the Docker layer cache). Branch
+   runs write that cache while running tests, npm packages and third-party
+   actions, so restoring it would let them choose what the release compiles
+   and signs. Key material reaches only the step that uses it: the update keys
+   reach the signing step, and the Apple certificate the step that imports it,
+   as a key that cannot be exported. `.github/scripts/check-workflow-policy.py`
+   enforces both on every CI run.
+
 ## Phase 2 — Cut a signed release
 
 7. Keep `agentVersion` in `cmd/agent/main.go` consistent with the tag (currently

@@ -14,6 +14,19 @@ tag.
   unchanged. Only unrestricted managers can change exception policies; scoped
   viewers can inspect the effective rule. All nine console locales are included.
 
+### Security
+
+- **A release builds only from what it fetches itself.** Release jobs no
+  longer restore the GitHub Actions cache, and tag image builds skip the
+  Docker layer cache: both are written by branch runs, whose code the release
+  and its signing keys need not trust. The Apple signing certificate now
+  reaches only the step that imports it, as a non-exportable key, instead of
+  every step of the macOS jobs. The Third-party notices job installs npm
+  packages without running their install scripts. A new CI check
+  (`.github/scripts/check-workflow-policy.py`) keeps these rules and the
+  commit-SHA pinning of every action from being undone. No secret is known to
+  have been exposed.
+
 ## [0.12.3] - 2026-11-24
 
 ### Fixed
