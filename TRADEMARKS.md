@@ -16,23 +16,38 @@ policy says how the logo may be used. It does not claim the name "OpenRMM".
 
 ## Without asking
 
-- **Use the software as it is published here**, logo included. Run it,
-  unmodified, for your own organisation or for your customers.
-- **Redistribute an unmodified release**, logo included: the official
+- **Run OpenRMM for your own organisation**, as published or modified, logo
+  included. Changes that stay in-house need no permission.
+- **Host a release for your customers**, as published or modified, logo
+  included. That covers the agents and installers your console hands to their
+  devices. If you modified it, the AGPL still requires you to offer your users
+  that modified source.
+- **Redistribute a release**, logo included, unmodified or with small changes:
+  security fixes, packaging for an operating system or distribution,
+  translations, or configuration defaults. A release means the official
   binaries, images and installers, or the source of a tagged release.
-- **Show the logo to refer to this project** in articles, talks, tutorials,
-  documentation, or a list of integrations.
+- **Publish any content about OpenRMM**, logo included, such as reviews,
+  comparisons, articles, tutorials, documentation, talks and their slides,
+  videos, screenshots, lists of integrations, or non-commercial material such
+  as stickers for a meetup.
 
 ## Not without written permission
 
-- **A modified version, a fork, or a product or hosted service built on
-  OpenRMM** may not use the logo, or a confusingly similar logo.
+- **Releasing a fork or a modified version for others to install** under the
+  OpenRMM logo, or under a confusingly similar logo, when the changes go
+  beyond the small ones above. Software that other people install themselves
+  counts here: binaries, installers, container images and source packages.
+  Hosting it for your customers does not count; see above.
 - **No suggestion of endorsement.** Do not use the logo in a way that suggests
   this project endorses you or is affiliated with you when it is not.
 
 ## Forks
 
-Forks are welcome; that is what the AGPL is for.
+Forks are welcome; that is what the AGPL is for. A fork kept to develop
+OpenRMM, or to send changes back to this project, may keep the logo files as
+they are.
+
+If you release a fork for others to install:
 
 - Take the OpenRMM logo out of the interface, the executables, the installers
   and the container images, and use your own.
