@@ -78,6 +78,27 @@ func (tc ToolContext) targetOwner(ctx context.Context, agentID, policyID string)
 	return nil, &policyID, nil
 }
 
+// writeTargetProposal keeps the scoped policy authorization current through
+// insertion. Rule-override updates take the same policy lock.
+func (tc ToolContext) writeTargetProposal(ctx context.Context, policyID *string, write func(*store.Store) error) error {
+	if tc.ScopeUserID == "" || policyID == nil {
+		return write(tc.Store)
+	}
+	return tc.Store.InConfigTransaction(ctx, func(tx *store.Store) error {
+		if err := tx.LockConfigTarget(ctx, models.EditPolicy, *policyID, false); err != nil {
+			return err
+		}
+		allowed, err := tx.PolicyManageAllowedForUser(ctx, tc.ScopeUserID, *policyID)
+		if err != nil {
+			return err
+		}
+		if !allowed {
+			return fmt.Errorf("policy is outside your access scope")
+		}
+		return write(tx)
+	})
+}
+
 // proposalResult is the standard answer: it says plainly that nothing runs yet,
 // because a model told "created" will report success to the operator and move on.
 func proposalResult(kind, id, name string, target string) (any, error) {
@@ -158,7 +179,12 @@ func proposeTask(ctx context.Context, tc ToolContext, args json.RawMessage) (any
 	// A proposal applies to the one device or policy it names; it can be
 	// attached elsewhere only once a person has approved it.
 	t.Attachments = []models.Attachment{{AgentID: agentID, PolicyID: policyID, AddedBy: t.ProposedBy}}
-	out, err := tc.Store.CreateTask(ctx, t)
+	var out *models.Task
+	err = tc.writeTargetProposal(ctx, policyID, func(st *store.Store) error {
+		saved, err := st.CreateTask(ctx, t)
+		out = saved
+		return err
+	})
 	if err != nil {
 		return nil, err
 	}
@@ -213,6 +239,9 @@ func (in proposedCheckArgs) check(tc ToolContext, agentID, policyID *string) (*m
 	if err := models.ValidateCheck(c); err != nil {
 		return nil, err
 	}
+	if c.OverridesParent() && tc.ScopeUserID != "" {
+		return nil, fmt.Errorf("parent rule replacements require an unrestricted manager")
+	}
 	return c, nil
 }
 
@@ -233,7 +262,12 @@ func proposeCheck(ctx context.Context, tc ToolContext, args json.RawMessage) (an
 	if err != nil {
 		return nil, err
 	}
-	out, err := tc.Store.CreateCheck(ctx, c)
+	var out *models.Check
+	err = tc.writeTargetProposal(ctx, policyID, func(st *store.Store) error {
+		saved, err := st.CreateCheck(ctx, c)
+		out = saved
+		return err
+	})
 	if err != nil {
 		return nil, err
 	}

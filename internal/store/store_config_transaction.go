@@ -61,13 +61,17 @@ func (s *Store) requireConfigTransaction() error {
 	return nil
 }
 
+// ErrConfigBusy is a retryable lock/serialization conflict. It remains an
+// ErrConflict for ordinary callers, but must not consume a reviewed proposal.
+var ErrConfigBusy = fmt.Errorf("%w: configuration is being changed; retry the operation", ErrConflict)
+
 func configLockError(err error) error {
 	if errors.Is(err, pgx.ErrNoRows) {
 		return ErrNotFound
 	}
 	var pgErr *pgconn.PgError
 	if errors.As(err, &pgErr) && (pgErr.Code == "55P03" || pgErr.Code == "40P01" || pgErr.Code == "40001") {
-		return fmt.Errorf("%w: configuration is being changed", ErrConflict)
+		return ErrConfigBusy
 	}
 	return err
 }

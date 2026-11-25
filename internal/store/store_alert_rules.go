@@ -5,6 +5,7 @@ import (
 	"encoding/json"
 	"errors"
 	"fmt"
+	"sort"
 	"time"
 
 	"github.com/jackc/pgx/v5"
@@ -41,6 +42,9 @@ func (s *Store) AlertRuleDefaults(ctx context.Context) (map[string]models.AlertR
 // SetAlertRuleDefault replaces one type's fleet default. The caller validates
 // the config (models.ParseServerRuleConfig).
 func (s *Store) SetAlertRuleDefault(ctx context.Context, ruleType string, cfg models.ServerRuleConfig, actor string) error {
+	if cfg.OverrideParent {
+		return fmt.Errorf("fleet defaults cannot override a parent rule")
+	}
 	tag, err := s.pool.Exec(ctx, `UPDATE alert_rule_defaults SET config=$2, updated_by=$3, updated_at=now() WHERE type=$1`,
 		ruleType, cfg.Raw(), actor)
 	if err != nil {
@@ -78,6 +82,7 @@ var governingCandidates = `
 	WHERE a.status <> 'revoked' AND c.enabled AND (c.proposed_by = '' OR c.approved_by <> '')`
 
 // governingOrder is the precedence, applied with DISTINCT ON (a.id): the
+// explicit Site replacements win over explicit Client replacements; otherwise the
 // broadest scope decides (a policy assigned to every device, then to the
 // client, the site, the department, the device, then a rule the device owns),
 // so a client's rule holds for every device under it. At the same level an
@@ -87,7 +92,11 @@ var governingCandidates = `
 // over tasks only, a higher severity), then the lower id, so the result never
 // depends on row order.
 const governingOrder = `
-	ORDER BY a.id, src.rank, NOT src.filtered,
+	ORDER BY a.id,
+      CASE WHEN c.config->>'override_parent' = 'true' AND src.scope = 'site' THEN -2
+           WHEN c.config->>'override_parent' = 'true' AND src.scope = 'client' THEN -1
+           ELSE src.rank END,
+      NOT src.filtered,
 	  (c.config->>'mode' = 'ignore'),
 	  COALESCE(NULLIF(c.config->>'after_min', '')::int, 0),
 	  COALESCE(NULLIF(c.config->>'after_days', '')::int, 0),
@@ -99,11 +108,27 @@ const governingOrder = `
 // GoverningRules returns, per device id, the server rule of ruleType in force
 // for it. Devices no rule governs are absent: the fleet default applies to them.
 func (s *Store) GoverningRules(ctx context.Context, ruleType string) (map[string]models.GoverningRule, error) {
+	return s.governingRules(ctx, ruleType, "")
+}
+
+// GoverningRuleForAgent uses the same resolver, bounded to one authorized device.
+func (s *Store) GoverningRuleForAgent(ctx context.Context, ruleType, agentID string) (models.GoverningRule, error) {
+	rules, err := s.governingRules(ctx, ruleType, agentID)
+	return rules[agentID], err
+}
+
+func (s *Store) governingRules(ctx context.Context, ruleType, agentID string) (map[string]models.GoverningRule, error) {
 	if !models.IsServerRule(ruleType) {
 		return nil, fmt.Errorf("%q is not a server rule type", ruleType)
 	}
+	candidates := governingCandidates
+	args := []any{ruleType}
+	if agentID != "" {
+		candidates += " AND a.id = $2"
+		args = append(args, agentID)
+	}
 	rows, err := s.pool.Query(ctx, `SELECT DISTINCT ON (a.id) a.id, c.id, c.name, c.config,
-		COALESCE(p.id::text, ''), COALESCE(p.name, ''), src.scope, a.monitoring_scope_since`+governingCandidates+governingOrder, ruleType)
+		COALESCE(p.id::text, ''), COALESCE(p.name, ''), src.scope, a.monitoring_scope_since`+candidates+governingOrder, args...)
 	if err != nil {
 		return nil, err
 	}
@@ -300,4 +325,72 @@ func (s *Store) SetNotificationRuleFilter(ctx context.Context, userID string, f 
 		}
 	}
 	return tx.Commit(ctx)
+}
+
+// PolicyHasRuleOverrides includes disabled and unreviewed rules: changing their
+// policy is still changing a future exception to a parent rule.
+func (s *Store) PolicyHasRuleOverrides(ctx context.Context, policyID string) (bool, error) {
+	return policyHasRuleOverrides(ctx, s.pool, policyID)
+}
+
+func policyHasRuleOverrides(ctx context.Context, q dbQuerier, policyID string) (bool, error) {
+	var found bool
+	err := q.QueryRow(ctx, `SELECT EXISTS (SELECT 1 FROM checks c JOIN check_attachments att ON att.check_id=c.id
+ WHERE att.policy_id=$1 AND c.type = ANY($2) AND c.config->>'override_parent' = 'true')`, policyID, models.ServerRuleTypes).Scan(&found)
+	return found, err
+}
+
+// validateRuleOverrideTarget is shared by API and AI store writes. An unassigned
+// policy can be prepared, but every assignment of an exception must be Client/Site.
+func validateRuleOverrideTarget(ctx context.Context, q dbQuerier, c *models.Check) error {
+	if !c.OverridesParent() {
+		return nil
+	}
+	if len(c.Attachments) == 0 {
+		return fmt.Errorf("override_parent requires a Client/Site policy rule")
+	}
+	policies := map[string]bool{}
+	for _, a := range c.Attachments {
+		if err := a.Validate(); err != nil {
+			return err
+		}
+		if a.PolicyID == nil || a.AgentID != nil {
+			return fmt.Errorf("override_parent requires a Client/Site policy rule")
+		}
+		policies[*a.PolicyID] = true
+	}
+	ids := make([]string, 0, len(policies))
+	for id := range policies {
+		ids = append(ids, id)
+	}
+	sort.Strings(ids)
+	// API and AI edits already hold the check lock. Activation takes policy
+	// then check locks, so never wait for a policy while holding its check.
+	// A conflict rolls back the complete edit and can be retried by the caller.
+	for _, id := range ids {
+		var locked string
+		if err := q.QueryRow(ctx, `SELECT id FROM policies WHERE id=$1 FOR UPDATE NOWAIT`, id).Scan(&locked); err != nil {
+			return configLockError(err)
+		}
+	}
+	var invalid bool
+	if err := q.QueryRow(ctx, `SELECT EXISTS (SELECT 1 FROM policy_assignments
+ WHERE policy_id=ANY($1::uuid[]) AND scope_type NOT IN ('client','site'))`, ids).Scan(&invalid); err != nil {
+		return err
+	}
+	if invalid {
+		return fmt.Errorf("override_parent policies may only be assigned to Client or Site")
+	}
+	return nil
+}
+
+// lockRulePolicy serializes assignment and check changes with each other and
+// activation. The caller must hold this lock through validation and commit.
+func lockRulePolicy(ctx context.Context, q dbQuerier, policyID string) error {
+	var id string
+	err := q.QueryRow(ctx, `SELECT id FROM policies WHERE id=$1 FOR UPDATE`, policyID).Scan(&id)
+	if errors.Is(err, pgx.ErrNoRows) {
+		return ErrNotFound
+	}
+	return err
 }

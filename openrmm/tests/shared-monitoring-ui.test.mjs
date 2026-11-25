@@ -26,6 +26,7 @@ function harness(code, apiImpl = {}) {
     React: { createElement(type, props, ...children) { return typeof type === 'function' ? type({ ...props, children }) : { type, props: props || {}, children }; } },
     useState(initial) { const i = cursor++; if (!(i in states)) states[i] = typeof initial === 'function' ? initial() : initial; return [states[i], (v) => { states[i] = typeof v === 'function' ? v(states[i]) : v; }]; },
     useEffect() {},
+    useQuery: () => ({ data: {} }),
     useToast: () => ({ success: (...a) => toasts.push(a), error: (...a) => { throw new Error(a.join(':')); }, info() {} }),
     useAuth: () => ({ can: () => true }),
     t: (key, vars) => (vars ? key + ' ' + JSON.stringify(vars) : key),

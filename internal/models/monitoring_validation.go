@@ -49,6 +49,19 @@ func ValidateCheck(c *Check) error {
 		if err != nil {
 			return err
 		}
+		if cfg.OverrideParent {
+			if len(c.Attachments) == 0 {
+				return fmt.Errorf("override_parent requires a Client/Site policy rule")
+			}
+			for _, a := range c.Attachments {
+				if err := a.Validate(); err != nil {
+					return err
+				}
+				if a.PolicyID == nil || a.AgentID != nil {
+					return fmt.Errorf("override_parent requires a Client/Site policy rule")
+				}
+			}
+		}
 		c.Config = cfg.Raw()
 		c.WarnThreshold, c.ErrThreshold = nil, nil
 		c.IntervalSec, c.TimeoutSec, c.FailureCount, c.RecoveryCount = 300, 180, 1, 1
@@ -86,6 +99,9 @@ func ValidateCheck(c *Check) error {
 		return fmt.Errorf("config must be a JSON object")
 	}
 
+	if raw, ok := object["override_parent"]; ok && string(raw) != "false" {
+		return fmt.Errorf("override_parent is only valid for server rules")
+	}
 	switch c.Type {
 	case CheckDiskSpace, CheckMemory:
 		if !finitePercent(c.WarnThreshold) || !finitePercent(c.ErrThreshold) || *c.ErrThreshold >= *c.WarnThreshold {

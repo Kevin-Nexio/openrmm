@@ -418,6 +418,16 @@ func (s *Server) applyLockedEditProposal(w *stepRecorder, r *http.Request) error
 		// and link locks. The normal handlers still validate the proposed fields.
 		for _, st := range writer.editSteps(p, target, c) {
 			code, body := writer.replay(r, st.handler, st.params, st.body)
+			if code == http.StatusConflict {
+				var result struct {
+					Code string `json:"code"`
+				}
+				if json.Unmarshal(body, &result) == nil && result.Code == configBusyCode {
+					// Roll back the entire attempt, including earlier successful
+					// steps, but retain the proposal for a later retry.
+					return store.ErrConfigBusy
+				}
+			}
 			if code >= 500 {
 				return errors.New("an edit step could not be saved")
 			}

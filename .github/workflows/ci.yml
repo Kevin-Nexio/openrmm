@@ -32,6 +32,10 @@ jobs:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
         with:
           fetch-depth: 0
+      # Here rather than in a job of its own: every run passes through this job,
+      # and a workflow that breaks one of these rules should not run the rest.
+      - name: Workflow policy (release isolation, pinned actions)
+        run: python3 .github/scripts/check-workflow-policy.py
       - id: filter
         name: Work out which areas the change touches
         env:
@@ -133,9 +137,13 @@ jobs:
     # publishes as an artifact is the one operators can actually install without
     # re-granting permissions. Absent — on a fork, or before one exists — the
     # bundle stays ad-hoc signed and everything still builds.
+    #
+    # The certificate and its password reach only the step that imports them.
+    # Every other step of this job runs code the signing key need not trust
+    # (actions, tests, build scripts); the job itself only learns whether an
+    # identity exists.
     env:
-      APPLE_SIGNING_P12: ${{ secrets.APPLE_SIGNING_P12 }}
-      APPLE_SIGNING_P12_PASSWORD: ${{ secrets.APPLE_SIGNING_P12_PASSWORD }}
+      HAS_APPLE_SIGNING: ${{ secrets.APPLE_SIGNING_P12 != '' }}
       RMM_MACOS_CODESIGN_IDENTITY: ${{ secrets.APPLE_SIGNING_IDENTITY }}
       # The oldest macOS the sidecar supports (Go's own floor), for every cgo
       # step in this job, the tests included. Left to the runner, clang targets
@@ -158,7 +166,10 @@ jobs:
       # grants for the shipped sidecar rely on the application bundle. Ad-hoc
       # signing changes identity on rebuild and cannot preserve those grants.
       - name: Import the signing identity
-        if: env.APPLE_SIGNING_P12 != ''
+        if: env.HAS_APPLE_SIGNING == 'true'
+        env:
+          APPLE_SIGNING_P12: ${{ secrets.APPLE_SIGNING_P12 }}
+          APPLE_SIGNING_P12_PASSWORD: ${{ secrets.APPLE_SIGNING_P12_PASSWORD }}
         run: |
           set -eu
           keychain="$RUNNER_TEMP/openrmm-signing.keychain-db"
@@ -167,8 +178,10 @@ jobs:
           security set-keychain-settings "$keychain"
           security unlock-keychain -p "$password" "$keychain"
           printf '%s' "$APPLE_SIGNING_P12" | base64 --decode > "$RUNNER_TEMP/signing.p12"
+          # -x: the private key cannot be exported again from the keychain, so a
+          # later step can at most sign with it, never take it away.
           security import "$RUNNER_TEMP/signing.p12" -k "$keychain" \
-            -P "$APPLE_SIGNING_P12_PASSWORD" -T /usr/bin/codesign
+            -P "$APPLE_SIGNING_P12_PASSWORD" -T /usr/bin/codesign -x
           rm -f "$RUNNER_TEMP/signing.p12"
           # Without this, codesign blocks on a GUI prompt no runner can answer.
           security set-key-partition-list -S apple-tool:,apple:,codesign: -s -k "$password" "$keychain" >/dev/null
@@ -203,7 +216,7 @@ jobs:
       # in the fleet is asked for its privacy permissions again, because macOS
       # sees a different application. Nothing downstream would notice.
       - name: The bundle must carry the persistent identity
-        if: env.APPLE_SIGNING_P12 != ''
+        if: env.HAS_APPLE_SIGNING == 'true'
         run: |
           set -eux
           work="$(mktemp -d)"
@@ -260,7 +273,7 @@ jobs:
           path: dist/rmm-remote-darwin-*
           retention-days: 7
       - name: Remove the signing keychain
-        if: always() && env.APPLE_SIGNING_P12 != ''
+        if: always() && env.HAS_APPLE_SIGNING == 'true'
         run: security delete-keychain "$RUNNER_TEMP/openrmm-signing.keychain-db" || true
 
   installers-linux:
@@ -441,7 +454,10 @@ jobs:
       - uses: actions/setup-go@d8cbb8045d7f43706b9177cceb36c1f91a6644d5 # v7.1.0
         with:
           go-version-file: go.mod
-      - run: npm ci
+      # Only the files are needed (package-lock.json, each package.json and its
+      # licence). Install scripts would run npm packages' code in a job whose
+      # Go cache other runs restore.
+      - run: npm ci --ignore-scripts
         working-directory: openrmm
       - run: go mod download
       - run: go run ./cmd/notices -check

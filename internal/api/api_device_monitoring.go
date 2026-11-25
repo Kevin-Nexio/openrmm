@@ -36,12 +36,14 @@ type monitoringSource struct {
 // deviceCheck is a check as it stands on one device.
 type deviceCheck struct {
 	models.Check
+	Governing *bool `json:"governing,omitempty"`
 	// Sources are how the check reaches this device, direct first. A check
 	// shared by several policies that reach the device lists each; it still
 	// runs once.
 	Sources []monitoringSource `json:"sources"`
 	// PolicyName names the first policy it came through, for clients of the
 	// one-owner API; empty when it reaches the device only directly.
+
 	PolicyName string `json:"policy_name,omitempty"`
 	// State is this device's: never-run checks read unknown.
 	Status       string     `json:"status"`
@@ -92,14 +94,31 @@ func (s *Server) listDeviceChecks(w http.ResponseWriter, r *http.Request) {
 		writeErr(w, http.StatusInternalServerError, err.Error())
 		return
 	}
-	rows := deviceChecks(checks, states, id, reaching)
-	for i := range rows {
-		if err := s.redactCheck(r, &rows[i].Check); err != nil {
+	out := deviceChecks(checks, states, id, reaching)
+	governing := map[string]string{}
+	for i := range out {
+		if err := s.redactCheck(r, &out[i].Check); err != nil {
 			writeErr(w, http.StatusInternalServerError, err.Error())
 			return
 		}
+		if !models.IsServerRule(out[i].Type) {
+			continue
+		}
+		winner, found := governing[out[i].Type]
+		if !found {
+			rule, err := s.store.GoverningRuleForAgent(ctx, out[i].Type, id)
+			if err != nil {
+				writeErr(w, http.StatusInternalServerError, err.Error())
+				return
+			}
+			winner = rule.CheckID
+			governing[out[i].Type] = winner
+		}
+		effective := out[i].ID == winner
+		out[i].Governing = &effective
 	}
-	writeJSON(w, http.StatusOK, map[string]any{"checks": rows})
+	writeJSON(w, http.StatusOK, map[string]any{"checks": out})
+
 }
 
 func (s *Server) listDeviceTasks(w http.ResponseWriter, r *http.Request) {

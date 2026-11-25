@@ -42,6 +42,10 @@ jobs:
           # Go baked into the runner image, which is how CI kept building on a
           # release that already had published security fixes.
           check-latest: true
+          # Restores nothing: the Actions cache is written by branch runs, which
+          # run code (tests, npm packages, actions) that the release, its build
+          # and its signing key need not trust.
+          cache: false
       - name: Validate tag and main ancestry
         run: |
           [[ "$GITHUB_REF_NAME" =~ ^v[0-9]+\.[0-9]+\.[0-9]+([+-][0-9A-Za-z.-]+)?$ ]]
@@ -93,6 +97,10 @@ jobs:
           # Go baked into the runner image, which is how CI kept building on a
           # release that already had published security fixes.
           check-latest: true
+          # Restores nothing: the Actions cache is written by branch runs, which
+          # run code (tests, npm packages, actions) that the release, its build
+          # and its signing key need not trust.
+          cache: false
       - name: Parse installer
         shell: pwsh
         run: |
@@ -126,6 +134,10 @@ jobs:
           # Go baked into the runner image, which is how CI kept building on a
           # release that already had published security fixes.
           check-latest: true
+          # Restores nothing: the Actions cache is written by branch runs, which
+          # run code (tests, npm packages, actions) that the release, its build
+          # and its signing key need not trust.
+          cache: false
       - run: brew install openssl@3 shellcheck
       - name: Validate installer
         run: |
@@ -185,6 +197,10 @@ jobs:
           # Go baked into the runner image, which is how CI kept building on a
           # release that already had published security fixes.
           check-latest: true
+          # Restores nothing: the Actions cache is written by branch runs, which
+          # run code (tests, npm packages, actions) that the release, its build
+          # and its signing key need not trust.
+          cache: false
       - run: test -n "$RMM_UPDATE_PUBLIC_KEY"
       - name: Build agents and CGO-free sidecars
         run: |
@@ -212,9 +228,10 @@ jobs:
     # left with no remote module at all.
     runs-on: macos-15
     timeout-minutes: 30
+    # The certificate and its password reach only the step that imports them;
+    # the job itself only learns whether an identity exists.
     env:
-      APPLE_SIGNING_P12: ${{ secrets.APPLE_SIGNING_P12 }}
-      APPLE_SIGNING_P12_PASSWORD: ${{ secrets.APPLE_SIGNING_P12_PASSWORD }}
+      HAS_APPLE_SIGNING: ${{ secrets.APPLE_SIGNING_P12 != '' }}
       RMM_MACOS_CODESIGN_IDENTITY: ${{ secrets.APPLE_SIGNING_IDENTITY }}
     steps:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
@@ -225,6 +242,10 @@ jobs:
           # Go baked into the runner image, which is how CI kept building on a
           # release that already had published security fixes.
           check-latest: true
+          # Restores nothing: the Actions cache is written by branch runs, which
+          # run code (tests, npm packages, actions) that the release, its build
+          # and its signing key need not trust.
+          cache: false
       # The macOS signing identity, when the repository has one. Without it the
       # bundle is ad-hoc signed exactly as before, so forks and PRs still build.
       #
@@ -233,7 +254,10 @@ jobs:
       # identity, and an ad-hoc signature changes it on every build, so each
       # release asks the operator for permission again.
       - name: Import the signing identity
-        if: env.APPLE_SIGNING_P12 != ''
+        if: env.HAS_APPLE_SIGNING == 'true'
+        env:
+          APPLE_SIGNING_P12: ${{ secrets.APPLE_SIGNING_P12 }}
+          APPLE_SIGNING_P12_PASSWORD: ${{ secrets.APPLE_SIGNING_P12_PASSWORD }}
         run: |
           set -eu
           keychain="$RUNNER_TEMP/openrmm-signing.keychain-db"
@@ -244,8 +268,10 @@ jobs:
           security set-keychain-settings "$keychain"
           security unlock-keychain -p "$password" "$keychain"
           printf '%s' "$APPLE_SIGNING_P12" | base64 --decode > "$RUNNER_TEMP/signing.p12"
+          # -x: the private key cannot be exported again from the keychain, so a
+          # later step can at most sign with it, never take it away.
           security import "$RUNNER_TEMP/signing.p12" -k "$keychain" \
-            -P "$APPLE_SIGNING_P12_PASSWORD" -T /usr/bin/codesign
+            -P "$APPLE_SIGNING_P12_PASSWORD" -T /usr/bin/codesign -x
           rm -f "$RUNNER_TEMP/signing.p12"
           # Without this, codesign blocks on a GUI prompt that no runner can answer.
           security set-key-partition-list -S apple-tool:,apple:,codesign: -s -k "$password" "$keychain" >/dev/null
@@ -288,7 +314,7 @@ jobs:
       # in the fleet is asked for its privacy permissions again, because macOS
       # sees a different application. Nothing downstream would notice.
       - name: The bundle must carry the persistent identity
-        if: env.APPLE_SIGNING_P12 != ''
+        if: env.HAS_APPLE_SIGNING == 'true'
         run: |
           set -eux
           work="$(mktemp -d)"
@@ -340,7 +366,7 @@ jobs:
             test ! -e "$app/Contents/Resources/StableCodeIdentity"
           done
       - name: Remove the signing keychain
-        if: always() && env.APPLE_SIGNING_P12 != ''
+        if: always() && env.HAS_APPLE_SIGNING == 'true'
         run: security delete-keychain "$RUNNER_TEMP/openrmm-signing.keychain-db" || true
       - uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7.0.2
         with:
@@ -382,6 +408,10 @@ jobs:
           # Go baked into the runner image, which is how CI kept building on a
           # release that already had published security fixes.
           check-latest: true
+          # Restores nothing: the Actions cache is written by branch runs, which
+          # run code (tests, npm packages, actions) that the release, its build
+          # and its signing key need not trust.
+          cache: false
       - uses: actions/download-artifact@9000827ccba6bdab643e8b6fd33ac0654aef8333 # v8.0.2
         with:
           pattern: '*-binaries'

@@ -8,6 +8,7 @@ import (
 	"github.com/google/uuid"
 
 	"github.com/p1ngu/rmm/internal/models"
+	"github.com/p1ngu/rmm/internal/store"
 )
 
 // Targeting a POLICY rather than a device is the wider blast radius: a task on a
@@ -202,5 +203,66 @@ func TestListPoliciesToolIsScopedIntegration(t *testing.T) {
 	unscoped := Execute(f.ctx, tc, "list_policies", json.RawMessage(`{}`))
 	if !strings.Contains(unscoped.Output, mineP) || !strings.Contains(unscoped.Output, theirP) {
 		t.Errorf("an unscoped admin should see every policy: %s", unscoped.Output)
+	}
+}
+
+func TestScopedAIParentRuleOverridesIntegration(t *testing.T) {
+	f := newProposalFixture(t)
+	policyID := f.policyAssignedTo(t, f.mineClient)
+	args := json.RawMessage(`{"policy_id":"` + policyID + `","type":"connectivity","name":"exception","config":{"override_parent":true,"mode":"ignore"}}`)
+	if res := Execute(f.ctx, f.tc(), "propose_check", args); !strings.Contains(res.Output, "unrestricted manager") {
+		t.Fatalf("scoped override: %s", res.Output)
+	}
+	padded := json.RawMessage(strings.Replace(string(args), `"type":"connectivity"`, `"type":" connectivity "`, 1))
+	if res := Execute(f.ctx, f.tc(), "propose_check", padded); !strings.Contains(res.Output, "unrestricted manager") {
+		t.Fatalf("padded type bypass: %s", res.Output)
+	}
+	tc := f.tc()
+	tc.ScopeUserID = ""
+	if res := Execute(f.ctx, tc, "propose_check", args); strings.Contains(res.Output, `"error"`) {
+		t.Fatal(res.Output)
+	}
+	checks, err := f.st.ListChecks(f.ctx, "", policyID)
+	if err != nil || len(checks) != 1 || checks[0].Enabled || checks[0].ApprovedBy != "" || !checks[0].OverridesParent() {
+		t.Fatalf("proposal %v %v", checks, err)
+	}
+	if res := Execute(f.ctx, f.tc(), "propose_task", policyTaskArgs(policyID)); !strings.Contains(res.Output, "outside your access scope") {
+		t.Fatalf("scoped task mutated exception policy: %s", res.Output)
+	}
+	normal := json.RawMessage(`{"policy_id":"` + policyID + `","type":"connectivity","name":"ordinary","config":{}}`)
+	if res := Execute(f.ctx, f.tc(), "propose_check", normal); !strings.Contains(res.Output, "outside your access scope") {
+		t.Fatalf("scoped check mutated exception policy: %s", res.Output)
+	}
+}
+
+func TestTargetProposalRechecksPolicyBeforeWritingIntegration(t *testing.T) {
+	f := newProposalFixture(t)
+	tc := f.tc()
+	policy := f.policyAssignedTo(t, f.mineClient)
+	_, policyID, err := tc.targetOwner(f.ctx, "", policy)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := tc.writeTargetProposal(f.ctx, policyID, func(*store.Store) error { return nil }); err != nil {
+		t.Fatalf("ordinary in-scope policy refused: %v", err)
+	}
+
+	// Authorization at the start of the request must not outlive a later
+	// policy change. An administrator installs an exception after that read.
+	check := &models.Check{
+		Type: models.CheckConnectivity, Name: "Site monitoring exception",
+		Config:      json.RawMessage(`{"override_parent":true,"mode":"ignore"}`),
+		Attachments: []models.Attachment{{PolicyID: policyID}},
+	}
+	if _, err := f.st.CreateCheck(f.ctx, check); err != nil {
+		t.Fatal(err)
+	}
+	called := false
+	err = tc.writeTargetProposal(f.ctx, policyID, func(*store.Store) error {
+		called = true
+		return nil
+	})
+	if err == nil || !strings.Contains(err.Error(), "outside your access scope") || called {
+		t.Fatalf("stale policy authorization was accepted: write called=%t, err=%v", called, err)
 	}
 }

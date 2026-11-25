@@ -19,6 +19,18 @@ import (
 // response. A successful response is sent only after the commit succeeds.
 var errConfigResponse = errors.New("configuration write refused")
 
+const configBusyCode = "configuration_busy"
+
+// Keep transient database contention distinguishable from semantic conflicts
+// when replaying a normal handler as one step of a reviewed proposal.
+func writeConfigError(w http.ResponseWriter, err error) {
+	if errors.Is(err, store.ErrConfigBusy) {
+		writeJSON(w, http.StatusConflict, map[string]string{"error": err.Error(), "code": configBusyCode})
+		return
+	}
+	writeErr(w, httpStatusFor(err), err.Error())
+}
+
 func (s *Server) configWrite(w http.ResponseWriter, r *http.Request, fn func(*Server, *stepRecorder, *http.Request) error) {
 	ctx, cancel := context.WithTimeout(r.Context(), 20*time.Second)
 	defer cancel()
@@ -33,7 +45,7 @@ func (s *Server) configWrite(w http.ResponseWriter, r *http.Request, fn func(*Se
 		status := httpStatusFor(err)
 		switch status {
 		case http.StatusConflict, http.StatusNotFound:
-			writeErr(w, status, err.Error())
+			writeConfigError(w, err)
 		default:
 			log.Printf("configuration write failed: %v", err)
 			writeErr(w, http.StatusInternalServerError, "configuration changes could not be saved")
