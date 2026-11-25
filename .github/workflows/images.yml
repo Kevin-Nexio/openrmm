@@ -100,8 +100,14 @@ jobs:
           # Layer cache in the registry: without it every run recompiles the Go
           # binary and reinstalls npm, which is most of the minutes this
           # workflow costs.
-          cache-from: type=gha
-          cache-to: type=gha,mode=max
+          #
+          # Except on a release tag. A tag run can read the cache that branch
+          # runs wrote, so a released image would otherwise ship layers (the
+          # npm install, the frontend build) that this run never built. A
+          # release image is built from scratch and leaves no cache behind.
+          no-cache: ${{ startsWith(github.ref, 'refs/tags/') }}
+          cache-from: ${{ !startsWith(github.ref, 'refs/tags/') && 'type=gha' || '' }}
+          cache-to: ${{ !startsWith(github.ref, 'refs/tags/') && 'type=gha,mode=max' || '' }}
           provenance: true
           sbom: true
 
