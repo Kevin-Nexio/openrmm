@@ -118,7 +118,13 @@ designed defense-first. This summarizes the posture; details live in
 
 - Scripts and the terminal run with the agent service's root/SYSTEM privileges;
   there is no sandbox.
-- Native remote media is trusted at the relay and is not end-to-end encrypted.
+- Native remote sessions (desktop, terminal, file transfer, and guest chat) use
+  end-to-end authenticated encryption (`rmm-e2e-p256-aes256gcm-v1`) once the
+  agent registers its device identity key; the application origin and control
+  channel remain trusted for session authorization and public-key distribution,
+  and the relay can still observe traffic metadata (timing, frequency, frame
+  sizes). Pre-0.13 agents without a pinned key can still use legacy relay mode
+  under the default `preferred` policy until updated.
 - The supported control plane is a single server replica. Hub/relay/scheduler
   state is process-local; there is no HA or distributed agent hub.
 - `/readyz` checks the database only, and the token-gated `/metrics` is a small

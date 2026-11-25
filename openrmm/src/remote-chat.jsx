@@ -113,6 +113,8 @@ const RemoteChat = (() => {
   async function encrypt(room, text) {
     const grant = room.grant;
     if (grant && !expiry(grant.exp)) throw new Error('chat invitation expired');
+    const body = typeof text === 'string' ? cleanText(text) : '';
+    if (!body) throw new Error('empty chat message');
     const from = grant ? 'guest' : 'tech';
     const name = grant?.name || '';
     const counters = roomCounters(room);
@@ -120,9 +122,9 @@ const RemoteChat = (() => {
     if (!Number.isSafeInteger(seq) || seq < 1) throw new Error('invalid chat sequence');
     counters.sent = seq;
     saveCounters(room, counters);
-    const sig = await sign(room.signing.key, msgBytes(room, from, name, text, seq));
+    const sig = await sign(room.signing.key, msgBytes(room, from, name, body, seq));
     const iv = random(12);
-    const ct = await subtle().encrypt(gcm(iv, chatAAD(room)), room.key, utf8(JSON.stringify({ from, name, text, seq, sig, grant })));
+    const ct = await subtle().encrypt(gcm(iv, chatAAD(room)), room.key, utf8(JSON.stringify({ from, name, text: body, seq, sig, grant })));
     return { t: 'e2e_chat', v: 1, kid: room.kid, iv: encode(iv), ct: encode(new Uint8Array(ct)) };
   }
 

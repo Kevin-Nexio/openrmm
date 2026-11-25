@@ -55,8 +55,33 @@ func TestEncryptedChatEpochIsBoundToApprovedMembership(t *testing.T) {
 	if _, ok := publish("initial", 1, first, true); ok {
 		t.Fatal("out-of-order previous epoch reactivated")
 	}
+
+	// A local endpoint user line forwarded by the technician may also activate a new generation.
+	if lines, ok := sessions.exchangeChat(viewer, remoteChatRequest{
+		Kid: "fourth", Generation: 4, Envelope: json.RawMessage(`{"t":"e2e_chat"}`),
+	}, "user", "", second, true, func() bool { return true }); !ok || len(lines) != 1 || lines[0].From != "user" {
+		t.Fatalf("endpoint user line failed to activate new generation: lines=%+v ok=%v", lines, ok)
+	}
+	if _, ok := sessions.exchangeChat(viewer, remoteChatRequest{
+		Kid: "guest-epoch", Generation: 5, Envelope: json.RawMessage(`{"t":"e2e_chat"}`),
+	}, "guest", "guest-b", second, true, func() bool { return true }); ok {
+		t.Fatal("guest activated a new chat epoch")
+	}
+
+	// Suspending a room clears buffered messages and refuses the suspended kid until rekeyed.
+	sessions.suspendChat(viewer.SessionID)
+	if _, ok := read("fourth", "guest-b", second); ok {
+		t.Fatal("suspended room remained readable")
+	}
+	if _, ok := publish("fourth", 5, second, true); ok {
+		t.Fatal("suspended room reactivated under the same kid")
+	}
+	if lines, ok := publish("fifth", 5, second, true); !ok || len(lines) != 1 || lines[0].Cursor != 1 {
+		t.Fatalf("replacement epoch after suspend failed: lines=%+v ok=%v", lines, ok)
+	}
+
 	sessions.forgetChat(viewer.SessionID)
-	if _, ok := read("third", "guest-b", second); ok {
+	if _, ok := read("fifth", "guest-b", second); ok {
 		t.Fatal("room survived the technician's session")
 	}
 }

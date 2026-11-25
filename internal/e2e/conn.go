@@ -146,6 +146,9 @@ func HandshakeAgent(raw *websocket.Conn, opts AgentHandshakeOpts) (*Conn, error)
 	if opts.GuestMode != "" && opts.GuestMode != "view" && opts.GuestMode != "control" {
 		return nil, errors.New("e2e: invalid guest_mode")
 	}
+	if err := ValidatePublicKey(opts.ViewerKey); err != nil {
+		return nil, fmt.Errorf("e2e: invalid authorized viewer key: %w", err)
+	}
 	_, ekPriv, err := DecodePrivateKey(opts.EKPriv)
 	if err != nil {
 		return nil, err
@@ -221,7 +224,7 @@ func HandshakeAgent(raw *websocket.Conn, opts AgentHandshakeOpts) (*Conn, error)
 		return nil, fmt.Errorf("e2e: viewer ek: %w", err)
 	}
 	nonceViewer, err := base64.RawURLEncoding.DecodeString(peerHello.Nonce)
-	if err != nil || len(nonceViewer) != nonceRawLen {
+	if err != nil || len(nonceViewer) != nonceRawLen || base64.RawURLEncoding.EncodeToString(nonceViewer) != peerHello.Nonce {
 		_ = raw.Close()
 		return nil, errors.New("e2e: invalid viewer nonce")
 	}
@@ -287,6 +290,9 @@ func HandshakeViewer(raw *websocket.Conn, opts ViewerHandshakeOpts) (*Conn, erro
 	opts.ExpectedKind = NormalizeKind(opts.ExpectedKind)
 	if opts.SessionID == "" {
 		return nil, errors.New("e2e: session_id is required")
+	}
+	if opts.ExpectedIKPub == "" && opts.ExpectedInviteFP == "" {
+		return nil, errors.New("e2e: expected device identity or invite fingerprint is required")
 	}
 	_, ekPriv, err := DecodePrivateKey(opts.EKPriv)
 	if err != nil {
@@ -364,7 +370,7 @@ func HandshakeViewer(raw *websocket.Conn, opts ViewerHandshakeOpts) (*Conn, erro
 		return nil, err
 	}
 	nonceAgent, err := base64.RawURLEncoding.DecodeString(peerHello.Nonce)
-	if err != nil || len(nonceAgent) != nonceRawLen {
+	if err != nil || len(nonceAgent) != nonceRawLen || base64.RawURLEncoding.EncodeToString(nonceAgent) != peerHello.Nonce {
 		_ = raw.Close()
 		return nil, errors.New("e2e: invalid agent nonce")
 	}
@@ -688,7 +694,7 @@ func guestAllowFromAgent(mt int, data []byte) bool {
 		return false
 	}
 	switch e.T {
-	case "hello", "monitors", "notice", "chat":
+	case "hello", "monitors", "notice":
 		return true
 	}
 	return false

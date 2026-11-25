@@ -267,6 +267,7 @@ func (s *Server) endGuest(shareID string, code int, reason string) {
 	if gs == nil {
 		return
 	}
+	s.suspendRemoteChat(gs.agentID, gs.sponsor)
 	s.presence.Remove(gs.agentID, gs.sessionID)
 	s.relay.CloseSession(gs.sessionID, code, reason)
 	_ = s.store.SetRemoteSessionStatus(context.Background(), gs.sessionID, "ended")
@@ -293,6 +294,7 @@ func (s *Server) closeAllGuestShares(ctx context.Context, actor string) {
 		return
 	}
 	for _, sh := range shares {
+		s.suspendRemoteChat(sh.AgentID, sh.CreatedBy)
 		s.endGuest(sh.ID, remote.CloseGuestEnded, "guest_access_disabled")
 		s.auditShare(ctx, actor, "remote.share.revoke", &sh, map[string]string{"reason": "guest access turned off"})
 	}
@@ -753,8 +755,16 @@ func (s *Server) setRemoteShareChatKey(w http.ResponseWriter, r *http.Request) {
 		writeErr(w, http.StatusBadRequest, "invalid wrapped chat key")
 		return
 	}
+	if !s.guestAccessEnabled(r.Context()) {
+		writeCodedErr(w, http.StatusForbidden, "guest_access_disabled", "guest access is turned off for this instance")
+		return
+	}
+	if err := s.sponsorStillAllowed(r.Context(), sh); err != nil {
+		writeErr(w, http.StatusForbidden, err.Error())
+		return
+	}
 	viewers := s.presence.ForUser(sh.AgentID, principal, "native")
-	if len(viewers) == 0 || !viewers[0].E2E || sh.GuestPublicKey == "" || sh.RedeemCount != in.RedeemCount {
+	if len(viewers) == 0 || !viewers[0].E2E || sh.GuestPublicKey == "" || sh.GuestSignKey == "" || sh.RedeemCount != in.RedeemCount {
 		writeErr(w, http.StatusConflict, "the encrypted guest request is no longer active")
 		return
 	}
@@ -791,6 +801,7 @@ func (s *Server) closeRemoteShare(w http.ResponseWriter, r *http.Request) {
 		writeErr(w, http.StatusInternalServerError, err.Error())
 		return
 	}
+	s.suspendRemoteChat(closed.AgentID, closed.CreatedBy)
 	s.endGuest(closed.ID, remote.CloseGuestEnded, "guest_removed")
 	action := "remote.share.revoke"
 	if closed.Status == models.RemoteShareEnded {
@@ -914,6 +925,7 @@ func (s *Server) guestJoin(w http.ResponseWriter, r *http.Request) {
 	if sh.RedeemCount > 1 {
 		// Whoever held the previous credential is out: one guest per
 		// invitation, and this one waits for the technician like the first.
+		s.suspendRemoteChat(sh.AgentID, sh.CreatedBy)
 		s.endGuest(sh.ID, remote.CloseSessionReplaced, "guest_rejoined")
 		rejoin = map[string]string{"rejoin": "true", "redeem_count": fmt.Sprint(sh.RedeemCount)}
 	}

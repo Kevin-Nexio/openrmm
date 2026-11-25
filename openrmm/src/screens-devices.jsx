@@ -866,8 +866,12 @@ function ShareAccessModal({ open, onClose, device }) {
   const create = async () => {
     setBusy(true);
     try {
+      if (!RemoteCrypto.deviceIdentity(device.id, device.device_public_key)) throw new Error(t('viewer.deviceKeyChanged'));
+      if (device.device_public_key && !globalThis.crypto?.subtle) throw new Error(t('viewer.encryptionFailed'));
       const r = await api.createRemoteShare(device.id, { mode, minutes: Number(minutes), reusable: !singleUse });
-      if (!RemoteCrypto.deviceIdentity(device.id, r.device_public_key)) throw new Error(t('viewer.deviceKeyChanged'));
+      const abort = (msg) => { api.closeRemoteShare(r.share.id).catch(() => {}); throw new Error(msg); };
+      if (!RemoteCrypto.deviceIdentity(device.id, r.device_public_key)) abort(t('viewer.deviceKeyChanged'));
+      if (r.device_public_key && !globalThis.crypto?.subtle) abort(t('viewer.encryptionFailed'));
       const pin = r.device_public_key ? '.' + await RemoteCrypto.fingerprint(r.device_public_key) : '';
       const link = new URL((window.__BASE_PATH__ || '/') + 'join', location.origin).toString() + '#' + r.token + pin;
       setIssued({ link, code: r.code, expires_at: r.share.expires_at, mode: r.share.mode, reusable: r.share.reusable });
@@ -1165,11 +1169,13 @@ function RemoteViewer({ deviceId, hostname, os, filesOnly, onClose, guest, theme
       ws.chatGeneration = room.generation;
       room.cursor = 0;
       for (const entry of accepted) {
+        if (!entry.guest_public_key || !entry.guest_sign_key) throw new Error(t('viewer.encryptionFailed'));
         const payload = await RemoteChat.wrap(room, entry);
         ensureAttached();
         await api.setRemoteShareChatKey(entry.id, { ...payload, redeem_count: entry.redeem_count });
       }
       if (pending) {
+        if (!pending.guest_public_key || !pending.guest_sign_key) throw new Error(t('viewer.encryptionFailed'));
         const payload = await RemoteChat.wrap(room, pending);
         ensureAttached();
         await api.acceptRemoteShare(pending.id, { ...payload, redeem_count: pending.redeem_count });
@@ -1178,6 +1184,7 @@ function RemoteViewer({ deviceId, hostname, os, filesOnly, onClose, guest, theme
       ensureAttached();
       ws.send(JSON.stringify({ t: 'chat_init', kid: room.kid, k: RemoteCrypto.encode(room.material), tech_pub: room.techPub }));
       setRoom(room);
+      if (room.members.size) ws.exchangeChat?.(room).catch(() => {});
     } finally {
       ws.rotatingChat = false;
       if (ws === wsRef.current) setChatRekeying(false);
@@ -1401,7 +1408,13 @@ function RemoteViewer({ deviceId, hostname, os, filesOnly, onClose, guest, theme
               const packet = typeof envelope === 'function' ? await envelope() : envelope;
               if (!attached() || roomRef.current !== room) throw new Error(t('viewer.encryptedChatPending'));
               const input = { session_id: session.id, kid: room.kid, cursor: room.cursor, generation: room.generation, envelope: packet, source };
-              const { lines } = g ? await api.guest.chat(g.credential, input) : await api.remoteChat(deviceId, input);
+              let lines;
+              try {
+                ({ lines } = g ? await api.guest.chat(g.credential, input) : await api.remoteChat(deviceId, input));
+              } catch (err) {
+                if (g && err.code === 'chat_room_changed' && roomRef.current === room) setRoom(null);
+                throw err;
+              }
               if (!attached() || roomRef.current !== room) return;
               for (const line of lines) {
                 if (!attached() || roomRef.current !== room) break;

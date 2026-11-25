@@ -82,4 +82,13 @@ test('previously verified devices refuse replacement or legacy relay keys', asyn
   assert.equal(RemoteCrypto.deviceIdentity('pin-device', undefined), false);
   assert.equal(RemoteCrypto.deviceIdentity('pin-device', original.pub), true);
   assert.equal(RemoteCrypto.deviceIdentity('other-device', replacement.pub, true), true);
+  assert.equal(RemoteCrypto.deviceIdentity('', original.pub, true), false);
+});
+
+test('encrypt normalizes multiline text and rejects empty input', async () => {
+  const { tech, invite } = await conversation();
+  const alice = await invite('share-norm', 'Alice');
+  const env = await RemoteChat.encrypt(alice.room, '  line 1\nline 2  ');
+  assert.deepEqual({ ...(await RemoteChat.decrypt(tech, env)) }, { from: 'guest', name: 'Alice', text: 'line 1 line 2' });
+  await assert.rejects(RemoteChat.encrypt(tech, '   \n\t\x00  '));
 });

@@ -354,21 +354,21 @@ var ErrAgentKeyMismatch = errors.New("device E2E identity key does not match the
 
 // VerifyOrPinAgentPublicKey enforces Trust-On-First-Use for an agent's E2E
 // identity key. On first contact with a non-empty pubKey it pins the key and
-// reports pinned=true. Subsequent registrations with a different non-empty key
-// fail with ErrAgentKeyMismatch; a pinned key is never cleared or overwritten,
-// so E2E remains permanently required for remote sessions on that device.
+// reports pinned=true. Once a key is pinned, subsequent registrations with a
+// different or empty key fail with ErrAgentKeyMismatch; a pinned key is never
+// cleared or overwritten, so E2E remains permanently required for remote
+// sessions on that device.
 func (s *Store) VerifyOrPinAgentPublicKey(ctx context.Context, id, pubKey string) (bool, error) {
-	if pubKey == "" {
-		return false, nil
-	}
-	tag, err := s.pool.Exec(ctx,
-		`UPDATE agents SET device_public_key=$2
-		 WHERE id=$1 AND revoked_at IS NULL AND device_public_key=''`, id, pubKey)
-	if err != nil {
-		return false, err
-	}
-	if tag.RowsAffected() == 1 {
-		return true, nil
+	if pubKey != "" {
+		tag, err := s.pool.Exec(ctx,
+			`UPDATE agents SET device_public_key=$2
+			 WHERE id=$1 AND revoked_at IS NULL AND device_public_key=''`, id, pubKey)
+		if err != nil {
+			return false, err
+		}
+		if tag.RowsAffected() == 1 {
+			return true, nil
+		}
 	}
 	var current string
 	if err := s.pool.QueryRow(ctx,

@@ -40,6 +40,7 @@ const RemoteCrypto = (() => {
   // Store only verified public identity keys. The check before connecting
   // also prevents returning to legacy mode for a previously pinned device.
   function deviceIdentity(agentID, deviceKey, remember = false) {
+    if (!agentID) return false;
     try {
       const name = 'rmm-device-key:' + agentID;
       const known = globalThis.localStorage.getItem(name);

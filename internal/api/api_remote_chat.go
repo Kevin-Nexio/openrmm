@@ -77,8 +77,14 @@ func (s *Server) technicianRemoteChat(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	from := "tech"
-	if in.Source == "user" {
+	switch in.Source {
+	case "", "tech":
+		from = "tech"
+	case "user":
 		from = "user"
+	default:
+		writeErr(w, http.StatusBadRequest, "invalid encrypted chat source")
+		return
 	}
 	s.exchangeRemoteChat(w, r, viewer, in, from, "")
 }
@@ -129,7 +135,7 @@ func (g *guestSessions) exchangeChat(viewer remote.Viewer, in remoteChatRequest,
 		return nil, false
 	}
 	if room == nil || room.kid != in.Kid {
-		if from != "tech" || in.Generation == 0 || (room != nil && in.Generation <= room.generation) {
+		if from == "guest" || in.Generation == 0 || (room != nil && in.Generation <= room.generation) {
 			return nil, false
 		}
 		room = &remoteChatRoom{kid: in.Kid, generation: in.Generation, members: members}
@@ -154,6 +160,29 @@ func (g *guestSessions) exchangeChat(viewer remote.Viewer, in remoteChatRequest,
 		}
 	}
 	return lines, true
+}
+
+func (g *guestSessions) suspendChat(sessionID string) {
+	if g == nil || sessionID == "" {
+		return
+	}
+	g.roomMu.Lock()
+	defer g.roomMu.Unlock()
+	if room := g.rooms[sessionID]; room != nil {
+		room.suspended = true
+		room.lines = nil
+	}
+}
+
+func (s *Server) suspendRemoteChat(agentID, sponsor string) {
+	if s.presence == nil || s.guests == nil {
+		return
+	}
+	for _, viewer := range s.presence.ForUser(agentID, sponsor, "native") {
+		if viewer.E2E {
+			s.guests.suspendChat(viewer.SessionID)
+		}
+	}
 }
 
 func (g *guestSessions) forgetChat(sessionID string) {

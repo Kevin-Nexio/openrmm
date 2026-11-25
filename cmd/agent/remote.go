@@ -138,7 +138,7 @@ func (a *agent) reportRemoteFailure(rs protocol.RemoteStartMsg, text string) {
 		a.mu.Lock()
 		agentID := a.st.AgentID
 		a.mu.Unlock()
-		hs, hsErr := e2e.NewAgentHandshakeFromIdentity(rs.SessionID, agentID, rs.Kind, rs.GuestMode, rs.ViewerKey, priv, pub, 2*time.Minute)
+		hs, hsErr := e2e.NewAgentHandshakeFromIdentity(rs.SessionID, agentID, rs.Kind, rs.GuestMode, rs.ViewerKey, priv, pub, 5*time.Minute)
 		if hsErr != nil {
 			return
 		}

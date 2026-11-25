@@ -292,8 +292,9 @@ func TestGuestPolicyEnforcedInsideE2EConn(t *testing.T) {
 		t.Fatalf("agent got %q (err=%v), want only kf", got, err)
 	}
 
-	// Outbound filter: clipboard and file chunks must never leave a guest's sidecar.
+	// Outbound filter: clipboard, direct chat, and file chunks must never leave a guest's sidecar.
 	_ = agentConn.WriteMessage(websocket.TextMessage, []byte(`{"t":"clip","text":"host-secret"}`))
+	_ = agentConn.WriteMessage(websocket.TextMessage, []byte(`{"t":"chat","from":"user","text":"not-over-guest-ws"}`))
 	_ = agentConn.WriteMessage(websocket.BinaryMessage, []byte{0x02, 1, 2, 3})
 	_ = agentConn.WriteMessage(websocket.TextMessage, []byte(`{"t":"hello","v":"0.19.0"}`))
 
@@ -549,5 +550,39 @@ func TestAgentHandshakeEnforcesReadLimitBeforeParsing(t *testing.T) {
 	}
 	if _, err := HandshakeAgent(rawAgent, opts); !errors.Is(err, websocket.ErrReadLimit) {
 		t.Fatalf("handshake should reject messages at the WebSocket read limit: %v", err)
+	}
+}
+
+func TestHandshakeValidationGuards(t *testing.T) {
+	ikPriv, ikPub, _ := GenerateKeyPair()
+	ekPriv, ekPub, _ := GenerateKeyPair()
+	exp := time.Now().Add(time.Minute).Unix()
+	sig, err := SignDelegation(ikPriv, Delegation{
+		SessionID: "sess-guard",
+		AgentID:   "agent-guard",
+		Kind:      "desktop",
+		EKPub:     ekPub,
+		Exp:       exp,
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if _, err := HandshakeAgent(nil, AgentHandshakeOpts{
+		SessionID: "sess-guard",
+		AgentID:   "agent-guard",
+		Kind:      "desktop",
+		EKPriv:    ekPriv,
+		ViewerKey: "",
+		IKPub:     ikPub,
+		Exp:       exp,
+		SigDel:    sig,
+	}); err == nil || !strings.Contains(err.Error(), "authorized viewer key") {
+		t.Fatalf("HandshakeAgent accepted missing viewer key before I/O: %v", err)
+	}
+	if _, err := HandshakeViewer(nil, ViewerHandshakeOpts{
+		SessionID: "sess-guard",
+		EKPriv:    ekPriv,
+	}); err == nil || !strings.Contains(err.Error(), "expected device identity") {
+		t.Fatalf("HandshakeViewer accepted empty identity pin and invite fingerprint: %v", err)
 	}
 }
