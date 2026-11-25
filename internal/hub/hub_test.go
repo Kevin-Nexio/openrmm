@@ -66,3 +66,29 @@ func TestDisconnectCurrentDoesNotCloseReplacement(t *testing.T) {
 		t.Fatal("current transport was not closed")
 	}
 }
+
+func TestEnqueueDistinguishesOfflineAndFullQueue(t *testing.T) {
+	h := New()
+	const id = "scan-target"
+	msg := []byte("scan")
+	if err := h.Enqueue(id, msg); err != ErrOffline {
+		t.Fatalf("offline agent: got %v, want %v", err, ErrOffline)
+	}
+
+	out := h.Add(id, nil)
+	for range cap(out) {
+		if !h.Send(id, msg) {
+			t.Fatal("send rejected before the outbound queue filled")
+		}
+	}
+	if err := h.Enqueue(id, msg); err != ErrQueueFull {
+		t.Fatalf("full queue: got %v, want %v", err, ErrQueueFull)
+	}
+	if h.Send(id, msg) {
+		t.Fatal("the boolean sender reported a full-queue send as delivered")
+	}
+	<-out
+	if err := h.Enqueue(id, msg); err != nil {
+		t.Fatalf("send after queue drained: %v", err)
+	}
+}

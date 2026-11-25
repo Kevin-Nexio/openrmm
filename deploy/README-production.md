@@ -94,7 +94,7 @@ Edit only non-secret values and secret-file paths in `deploy/.env`:
 
 ```dotenv
 RMM_PUBLIC_URL=https://agents.rmm.example.com
-RMM_CONSOLE_PUBLIC_URL=https://rmm.example.com
+RMM_CONSOLE_PUBLIC_URL=https://console.rmm.example.com
 RMM_MCP_PUBLIC_URL=https://mcp.rmm.example.com
 RMM_MCP_OAUTH_ENABLED=false
 OPENRMM_BASE_PATH=/
@@ -123,8 +123,12 @@ The frontend is built for this path, nginx serves it there, and nginx generates
 `${OPENRMM_BASE_PATH}config.js` at runtime with
 `window.__API_BASE__ = location.origin`.
 
-`RMM_CONSOLE_PUBLIC_URL` is the browser console origin used in notification links.
-If unset, notification links retain the `RMM_PUBLIC_URL` fallback.
+`RMM_CONSOLE_PUBLIC_URL` is the browser console origin used in the links people
+open from a message: alert mail, password reset and address confirmation mail,
+and the download links the AI hands out. Include the base path when the console
+has one (`https://rmm.example.com/console`): page links keep it, while `/api`
+links and the default sign-on callback use the origin. If unset, those links
+keep the `RMM_PUBLIC_URL` fallback.
 
 `RMM_PUBLIC_URL` is the HTTPS agents origin. `RMM_MCP_PUBLIC_URL` is the HTTPS MCP
 origin and is mandatory when OAuth is enabled. Neither is the raw app address.
@@ -270,7 +274,7 @@ so the tag still pins the previous release.
 server image carries its version, shown in Settings ▸ Configuration and printed
 by `rmm-server -version`: the workflow passes the tag's version as the
 Dockerfile's `VERSION` build arg, and a build without it reports `dev` — pass
-`--build-arg VERSION=0.11.4` (or set it under `build.args` in the compose file)
+`--build-arg VERSION=0.12.3` (or set it under `build.args` in the compose file)
 when building one yourself.
 
 ## 6. Database migrations

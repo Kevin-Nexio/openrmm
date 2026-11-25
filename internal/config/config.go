@@ -202,8 +202,9 @@ type Config struct {
 	OIDCScopes       []string
 	OIDCACRValues    []string
 	OIDCRequiredAMR  []string
-	// Where the provider sends the browser back. Defaults to PublicURL +
-	// /api/auth/oidc/callback, and must be registered with the provider.
+	// Where the provider sends the browser back. Defaults to the console origin
+	// (ConsolePublicURL, else PublicURL) + /api/auth/oidc/callback, and must be
+	// registered with the provider.
 	OIDCRedirectURL string
 	// Which claim becomes the console username. 'email' for most providers;
 	// 'preferred_username' where addresses are not stable.
@@ -412,6 +413,12 @@ func Load() (*Config, error) {
 			return nil, fmt.Errorf("RMM_MCP_PUBLIC_URL must use https:// when RMM_MCP_OAUTH_ENABLED=true")
 		}
 	}
+	if c.ConsolePublicURL != "" {
+		// Reset, confirmation and export tokens ride on links built from it.
+		if err := validConsoleURL(c.ConsolePublicURL); err != nil {
+			return nil, err
+		}
+	}
 	if c.OIDCEnabled {
 		if c.OIDCIssuer == "" || c.OIDCClientID == "" {
 			return nil, fmt.Errorf("RMM_OIDC_ISSUER and RMM_OIDC_CLIENT_ID are required when RMM_OIDC_ENABLED=true")
@@ -422,10 +429,12 @@ func Load() (*Config, error) {
 			return nil, fmt.Errorf("RMM_OIDC_ISSUER must use https://")
 		}
 		if c.OIDCRedirectURL == "" {
-			if c.PublicURL == "" {
+			if c.ConsoleAPIBase() == "" {
 				return nil, fmt.Errorf("RMM_OIDC_REDIRECT_URL is required when RMM_PUBLIC_URL is not set")
 			}
-			c.OIDCRedirectURL = strings.TrimRight(c.PublicURL, "/") + "/api/auth/oidc/callback"
+			// The callback is an API route of the console: on a split ingress
+			// the agents origin answers 404 for it, so the console is the default.
+			c.OIDCRedirectURL = c.ConsoleAPIBase() + "/api/auth/oidc/callback"
 		}
 		if u, err := url.Parse(c.OIDCRedirectURL); err != nil || !u.IsAbs() {
 			return nil, fmt.Errorf("RMM_OIDC_REDIRECT_URL must be an absolute URL")
@@ -510,11 +519,52 @@ func parseUpdatePublicKeys(raw string) ([]string, error) {
 	return keys, nil
 }
 
-// NotificationConsoleURL keeps single-origin installations compatible while
-// letting split-ingress deployments link to the browser console.
+// NotificationConsoleURL is the browser console's address, base path included,
+// for every console page a person opens from a message: alert mail, password
+// reset and address confirmation mail. RMM_CONSOLE_PUBLIC_URL on a
+// split-ingress deployment, where RMM_PUBLIC_URL is the agents origin that
+// serves no console; RMM_PUBLIC_URL otherwise. Links to /api routes use
+// ConsoleAPIBase.
 func (c *Config) NotificationConsoleURL() string {
 	if c.ConsolePublicURL != "" {
 		return c.ConsolePublicURL
 	}
 	return c.PublicURL
+}
+
+// ConsoleAPIBase is where the console's API answers, for links to /api routes
+// (the single sign-on callback, the AI's download links): the origin of
+// RMM_CONSOLE_PUBLIC_URL, since nginx serves /api at the origin root whatever
+// the console's base path; RMM_PUBLIC_URL when it is unset, as before.
+func (c *Config) ConsoleAPIBase() string {
+	if c.ConsolePublicURL != "" {
+		if u, err := url.Parse(c.ConsolePublicURL); err == nil && u.Host != "" {
+			return u.Scheme + "://" + u.Host
+		}
+	}
+	return strings.TrimRight(c.PublicURL, "/")
+}
+
+// validConsoleURL accepts an absolute http(s) URL with a host and an optional
+// base path: no user info, query, fragment, out-of-range port, or empty, "." or
+// ".." path segment. Links are appended to it.
+func validConsoleURL(raw string) error {
+	bad := fmt.Errorf("RMM_CONSOLE_PUBLIC_URL must be an absolute http(s) URL such as https://console.example.com or https://example.com/console, without user info, query, fragment, or empty, . or .. path segments")
+	u, err := url.Parse(raw)
+	if err != nil || (u.Scheme != "https" && u.Scheme != "http") || u.Host == "" || u.User != nil || strings.ContainsAny(raw, "?#") {
+		return bad
+	}
+	if p := u.Port(); p != "" {
+		if n, err := strconv.Atoi(p); err != nil || n < 1 || n > 65535 {
+			return bad
+		}
+	}
+	if path := strings.TrimSuffix(u.Path, "/"); path != "" {
+		for _, segment := range strings.Split(path[1:], "/") {
+			if segment == "" || segment == "." || segment == ".." {
+				return bad
+			}
+		}
+	}
+	return nil
 }

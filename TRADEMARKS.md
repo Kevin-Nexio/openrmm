@@ -1,11 +1,18 @@
 # OpenRMM logo policy
 
-The OpenRMM logo and icons (`openrmm/assets/`, `cmd/rmm-remote/icon/`) belong
-to Miquéias Gonçalves (openrmm.org).
+The OpenRMM logo, the R in a circle, belongs to Miquéias Gonçalves
+(openrmm.org). The repository holds it in these files:
 
-The [AGPL-3.0](LICENSE) licenses the code. It does not license the logo and
-the icons. This policy says how they may be used. It does not claim the name
-"OpenRMM".
+- `openrmm/assets/logo_open_rmm_edit3.png`, the logo itself. The console, the
+  browser tab, the macOS app and the Windows executables show it.
+- `cmd/rmm-remote/icon/openrmm-16.png`, `openrmm-32.png` and `openrmm-48.png`,
+  the same logo made small for the chat window on Linux.
+
+The other icons in the interface, such as those on menus and buttons, are not
+the logo, and this policy does not cover them.
+
+The [AGPL-3.0](LICENSE) licenses the code. It does not license the logo. This
+policy says how the logo may be used. It does not claim the name "OpenRMM".
 
 ## Without asking
 
@@ -19,7 +26,7 @@ the icons. This policy says how they may be used. It does not claim the name
 ## Not without written permission
 
 - **A modified version, a fork, or a product or hosted service built on
-  OpenRMM** may not use the logo or the icons, or a confusingly similar logo.
+  OpenRMM** may not use the logo, or a confusingly similar logo.
 - **No suggestion of endorsement.** Do not use the logo in a way that suggests
   this project endorses you or is affiliated with you when it is not.
 
@@ -27,8 +34,8 @@ the icons. This policy says how they may be used. It does not claim the name
 
 Forks are welcome; that is what the AGPL is for.
 
-- Take the OpenRMM logo and icons out of the interface, the installers and the
-  images, and use your own.
+- Take the OpenRMM logo out of the interface, the executables, the installers
+  and the container images, and use your own.
 - Make clear that the fork is not this project, so users know where to report
   issues and where updates come from.
 - Keep the licence, the copyright notices and `THIRD_PARTY_NOTICES` as they
