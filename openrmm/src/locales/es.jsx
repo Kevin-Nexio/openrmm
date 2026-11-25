@@ -450,6 +450,7 @@
   'viewer.fullscreenDenied': 'El navegador rechazó el modo de pantalla completa.',
   'viewer.encrypted': "Cifrado de extremo a extremo",
   'viewer.encryptionAgentUpdate': "Actualiza el agente para iniciar una sesión cifrada",
+  'viewer.deviceKeyChanged': 'La clave de identidad del dispositivo cambió o no se pudo verificar',
   'viewer.encryptionFailed': "No se pudo establecer una conexión cifrada",
   'viewer.encryptedChatPending': "El chat cifrado aún se está conectando",
   'viewer.uploadFailed': "No se pudo subir el archivo",

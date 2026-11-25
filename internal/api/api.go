@@ -166,6 +166,7 @@ func (s *Server) Router() http.Handler {
 	r.With(authLimiter, maxBody).Post("/api/guest/join", s.guestJoin)
 	r.With(guestLimiter).Get("/api/guest/request", s.guestRequest)
 	r.With(guestLimiter, maxBody).Post("/api/guest/session", s.guestSession)
+	r.With(guestLimiter, maxBody).Post("/api/guest/chat", s.guestRemoteChat)
 
 	// MCP OAuth 2.1 flow (register / authorize+consent / token). Public clients +
 	// PKCE; the authorize POST verifies user credentials, so it's rate-limited like
@@ -274,6 +275,7 @@ func (s *Server) Router() http.Handler {
 		// Guest invitations (api_remote_shares.go). Sharing takes remote access
 		// and its own permission; the technician's session decides who gets in.
 		shareRemote := []func(http.Handler) http.Handler{s.requirePermission(models.PermDevicesRemote), s.requirePermission(models.PermDevicesRemoteShare)}
+		r.With(shareRemote...).Post("/devices/{id}/remote-chat", s.technicianRemoteChat)
 		r.With(shareRemote...).Post("/devices/{id}/remote-shares", s.createRemoteShare)
 		r.With(shareRemote...).Get("/devices/{id}/remote-shares", s.listRemoteShares)
 		r.With(shareRemote...).Get("/remote-shares/pending", s.pendingRemoteShares)

@@ -41,6 +41,15 @@ func hardenStateDir(statePath string) {
 	}
 }
 
+// Elevated sessions must stage their keys behind the service ACL even when
+// the configured state path differs from the default installation layout.
+func protectE2ESessionDir(dir string) error {
+	if runningAsLocalSystem() {
+		return restrictAgentDir(dir)
+	}
+	return nil
+}
+
 // restrictAgentDir writes stateDirSDDL onto dir. Setting a DACL through
 // SetNamedSecurityInfo propagates its inheritable entries to the existing
 // files, which is what removes the old grant from a state.json written before

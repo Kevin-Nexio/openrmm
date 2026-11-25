@@ -450,6 +450,7 @@
   'viewer.fullscreenDenied': '浏览器拒绝了全屏模式。',
   'viewer.encrypted': "已启用端到端加密",
   'viewer.encryptionAgentUpdate': "请更新代理以启动加密会话",
+  'viewer.deviceKeyChanged': '设备身份密钥已更改或无法验证',
   'viewer.encryptionFailed': "无法建立加密连接",
   'viewer.encryptedChatPending': "正在连接加密聊天",
   'viewer.uploadFailed': "上传失败",

@@ -450,6 +450,7 @@
   'viewer.fullscreenDenied': 'Der Browser hat den Vollbildmodus verweigert.',
   'viewer.encrypted': "Ende-zu-Ende-verschlüsselt",
   'viewer.encryptionAgentUpdate': "Aktualisieren Sie den Agent, um eine verschlüsselte Sitzung zu starten",
+  'viewer.deviceKeyChanged': 'Der Identitätsschlüssel des Geräts wurde geändert oder konnte nicht geprüft werden',
   'viewer.encryptionFailed': "Die verschlüsselte Verbindung konnte nicht hergestellt werden",
   'viewer.encryptedChatPending': "Der verschlüsselte Chat wird noch verbunden",
   'viewer.uploadFailed': "Upload fehlgeschlagen",

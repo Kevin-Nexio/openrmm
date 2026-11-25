@@ -174,7 +174,7 @@ func (s *Store) SetRemoteShareChatKey(ctx context.Context, id, createdBy string,
 // in, ended when they did.
 func (s *Store) CloseRemoteShare(ctx context.Context, id string) (*models.RemoteShare, error) {
 	return scanRemoteShare(s.pool.QueryRow(ctx, `UPDATE remote_shares
-		SET status=CASE WHEN status='accepted' THEN 'ended' ELSE 'revoked' END, ended_at=now()
+		SET status=CASE WHEN status='accepted' THEN 'ended' ELSE 'revoked' END, ended_at=now(), wrapped_chat_key='', chat_key_id=''
 		WHERE id=$1 AND status IN ('open','pending','accepted') RETURNING `+remoteShareCols, id))
 }
 
@@ -182,7 +182,7 @@ func (s *Store) CloseRemoteShare(ctx context.Context, id string) (*models.Remote
 // turned off for the instance.
 func (s *Store) CloseAllRemoteShares(ctx context.Context) ([]models.RemoteShare, error) {
 	rows, err := s.pool.Query(ctx, `UPDATE remote_shares
-		SET status=CASE WHEN status='accepted' THEN 'ended' ELSE 'revoked' END, ended_at=now()
+		SET status=CASE WHEN status='accepted' THEN 'ended' ELSE 'revoked' END, ended_at=now(), wrapped_chat_key='', chat_key_id=''
 		WHERE status IN ('open','pending','accepted') RETURNING `+remoteShareCols)
 	if err != nil {
 		return nil, err

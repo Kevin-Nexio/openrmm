@@ -52,8 +52,8 @@ var relayUpgrader = websocket.Upgrader{
 // stderr at 1 MiB each); relay frames carry screen tiles / 64 KiB file chunks,
 // so it gets generous headroom.
 const (
-	agentWSReadLimit = 8 << 20  // 8 MiB
-	relayWSReadLimit = 32 << 20 // 32 MiB
+	agentWSReadLimit = 8 << 20          // 8 MiB
+	relayWSReadLimit = e2e.MaxFrameSize // 32 MiB
 )
 
 // handleAgentWS upgrades, authenticates the agent via the register handshake,
@@ -500,7 +500,12 @@ func (s *Server) handleRelayWS(w http.ResponseWriter, r *http.Request) {
 		} else {
 			leave = s.presence.Join(viewer)
 		}
-		defer leave()
+		defer func() {
+			leave()
+			if viewer.E2E && viewer.Kind == "native" && guestShare == nil {
+				s.guests.forgetChat(sess.ID)
+			}
+		}()
 		if guestShare != nil {
 			policy := remote.GuestPolicy{Control: guestShare.Mode == models.RemoteShareControl, E2E: sess.E2E}
 			if err := s.relay.JoinGuest(sess.ID, sess.AgentID, conn, policy); err != nil {

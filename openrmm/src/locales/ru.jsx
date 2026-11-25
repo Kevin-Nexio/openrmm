@@ -433,6 +433,7 @@
   'viewer.fullscreenDenied': "Браузер запретил полноэкранный режим.",
   'viewer.encrypted': "Защищено сквозным шифрованием",
   'viewer.encryptionAgentUpdate': "Обновите агент, чтобы начать зашифрованный сеанс",
+  'viewer.deviceKeyChanged': 'Ключ идентификации устройства изменился или не прошёл проверку',
   'viewer.encryptionFailed': "Не удалось установить зашифрованное соединение",
   'viewer.encryptedChatPending': "Зашифрованный чат ещё подключается",
   'viewer.uploadFailed': "Не удалось загрузить файл",

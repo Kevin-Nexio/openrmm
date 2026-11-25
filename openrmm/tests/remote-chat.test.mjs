@@ -6,8 +6,16 @@ import { runInNewContext } from 'node:vm';
 
 const source = ['remote-crypto', 'remote-chat'].map((file) =>
   '{\n' + readFileSync(new URL('../src/' + file + '.jsx', import.meta.url), 'utf8') + '\n}').join('\n');
+function storage() {
+  const values = new Map();
+  return {
+    getItem: (key) => values.get(key) ?? null,
+    setItem: (key, value) => values.set(key, value),
+    removeItem: (key) => values.delete(key),
+  };
+}
 const { RemoteCrypto, RemoteChat } = runInNewContext(source + '\n({ RemoteCrypto: globalThis.RemoteCrypto, RemoteChat: globalThis.RemoteChat });', {
-  crypto: webcrypto, TextEncoder, TextDecoder, btoa, atob,
+  crypto: webcrypto, TextEncoder, TextDecoder, btoa, atob, sessionStorage: storage(), localStorage: storage(),
 });
 
 async function conversation() {
@@ -50,4 +58,28 @@ test('guest wrapping is bound to the approved invite, endpoint and expiry', asyn
   const forged = await RemoteChat.encrypt({ ...alice.room, grant: undefined }, 'Forged technician');
   assert.equal(await RemoteChat.decrypt(tech, forged), null);
   await assert.rejects(RemoteChat.encrypt({ ...alice.room, grant: { ...alice.room.grant, exp: 1 } }, 'Expired'));
+});
+
+
+test('guest replay state survives reopening the same room', async () => {
+  const { tech, identity, invite } = await conversation();
+  const bob = await invite('reconnecting-guest', 'Bob');
+  const first = await RemoteChat.encrypt(tech, 'First line');
+  const second = await RemoteChat.encrypt(tech, 'Second line');
+  assert.equal(await RemoteChat.decrypt(bob.room, first, { from: 'guest', share_id: 'other' }), null);
+  assert.equal((await RemoteChat.decrypt(bob.room, first, { from: 'tech' })).text, 'First line');
+  const reopened = await RemoteChat.unwrap(bob.status, bob.guest, identity);
+  assert.equal(await RemoteChat.decrypt(reopened, first, { from: 'tech' }), null);
+  assert.equal((await RemoteChat.decrypt(reopened, second, { from: 'tech' })).text, 'Second line');
+});
+
+test('previously verified devices refuse replacement or legacy relay keys', async () => {
+  const original = await RemoteCrypto.keyPair('ECDSA');
+  const replacement = await RemoteCrypto.keyPair('ECDSA');
+  assert.equal(RemoteCrypto.deviceIdentity('pin-device', undefined), true);
+  assert.equal(RemoteCrypto.deviceIdentity('pin-device', original.pub, true), true);
+  assert.equal(RemoteCrypto.deviceIdentity('pin-device', replacement.pub, true), false);
+  assert.equal(RemoteCrypto.deviceIdentity('pin-device', undefined), false);
+  assert.equal(RemoteCrypto.deviceIdentity('pin-device', original.pub), true);
+  assert.equal(RemoteCrypto.deviceIdentity('other-device', replacement.pub, true), true);
 });

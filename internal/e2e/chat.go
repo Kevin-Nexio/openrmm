@@ -18,11 +18,12 @@ import (
 const (
 	chatTextMax      = 1000
 	chatGuestNameMax = 60
-	chatSeenRingSize = 256
+	maxChatSenders   = 256
+	maxChatSequence  = 1<<53 - 1
 )
 
-// ChatEnvelope is the outer WebSocket TextMessage carried across sessions by
-// the server's ChatHook without exposing plaintext or touching 0xE0 counters.
+// ChatEnvelope is a signed group message carried over the authenticated
+// application channel or inside a peer-to-peer encrypted frame.
 type ChatEnvelope struct {
 	T   string `json:"t"`
 	V   int    `json:"v"`
@@ -58,7 +59,7 @@ type ChatInnerPayload struct {
 	From     string       `json:"from"` // "tech" | "user" | "guest"
 	Name     string       `json:"name,omitempty"`
 	Text     string       `json:"text"`
-	ID       string       `json:"id"`
+	Sequence uint64       `json:"seq"`
 	Sig      string       `json:"sig"`
 	Grant    *ChatGrant   `json:"grant,omitempty"`
 	UserCert *UserKeyCert `json:"user_cert,omitempty"`
@@ -207,64 +208,63 @@ func VerifyChatGrant(techSignPubB64 string, g ChatGrant) bool {
 	return VerifyP256(techSignPubB64, chatGrantBytes(g, guestRaw), g.Sig)
 }
 
-func chatMsgSigBytes(kid, agentID, from, name, text, msgID string) []byte {
-	buf := make([]byte, 0, 128+len(name)+len(text))
-	buf = append(buf, "rmm-chat-msg-v1\x00"...)
+func chatMsgSigBytes(kid, agentID, from, name, text string, seq uint64) []byte {
+	buf := make([]byte, 0, 128)
+	buf = append(buf, "rmm-chat-msg-v2\x00"...)
 	buf = appendLPString(buf, kid)
 	buf = appendLPString(buf, agentID)
 	buf = appendLPString(buf, from)
 	buf = appendLPString(buf, name)
 	buf = appendLPString(buf, text)
-	buf = appendLPString(buf, msgID)
+	buf = appendU64(buf, seq)
 	return buf
 }
 
 // EncodeChatEnvelope signs and encrypts a multi-party chat message.
-func EncodeChatEnvelope(chatKey [32]byte, kid, agentID, from, name, text, signPrivB64 string, grant *ChatGrant, userCert *UserKeyCert) ([]byte, string, error) {
+func EncodeChatEnvelope(chatKey [32]byte, kid, agentID, from, name, text, signPrivB64 string, seq uint64, grant *ChatGrant, userCert *UserKeyCert) ([]byte, error) {
 	cleanText := CleanOneLine(text, chatTextMax)
 	if cleanText == "" {
-		return nil, "", errors.New("e2e: empty chat message")
+		return nil, errors.New("e2e: empty chat message")
 	}
 	cleanName := ""
 	if from == "guest" {
 		if grant == nil {
-			return nil, "", errors.New("e2e: guest chat requires grant")
+			return nil, errors.New("e2e: guest chat requires grant")
 		}
 		cleanName = grant.Name
 	} else if from == "user" && userCert == nil {
-		return nil, "", errors.New("e2e: user chat requires user_cert")
+		return nil, errors.New("e2e: user chat requires user_cert")
 	} else if from != "tech" && from != "user" {
-		return nil, "", errors.New("e2e: invalid chat sender role")
+		return nil, errors.New("e2e: invalid chat sender role")
 	}
 
-	msgID, err := RandomBytesB64(16)
-	if err != nil {
-		return nil, "", err
+	if seq == 0 || seq > maxChatSequence {
+		return nil, errors.New("e2e: invalid chat sequence")
 	}
-	sig, err := SignP256(signPrivB64, chatMsgSigBytes(kid, agentID, from, cleanName, cleanText, msgID))
+	sig, err := SignP256(signPrivB64, chatMsgSigBytes(kid, agentID, from, cleanName, cleanText, seq))
 	if err != nil {
-		return nil, "", err
+		return nil, err
 	}
 	inner, err := json.Marshal(ChatInnerPayload{
 		From:     from,
 		Name:     cleanName,
 		Text:     cleanText,
-		ID:       msgID,
+		Sequence: seq,
 		Sig:      sig,
 		Grant:    grant,
 		UserCert: userCert,
 	})
 	if err != nil {
-		return nil, "", err
+		return nil, err
 	}
 
 	aead, err := newGCM(chatKey)
 	if err != nil {
-		return nil, "", err
+		return nil, err
 	}
 	var iv [12]byte
 	if _, err := io.ReadFull(rand.Reader, iv[:]); err != nil {
-		return nil, "", err
+		return nil, err
 	}
 	ct := aead.Seal(nil, iv[:], inner, chatAAD(kid, agentID))
 	env, err := json.Marshal(ChatEnvelope{
@@ -274,16 +274,17 @@ func EncodeChatEnvelope(chatKey [32]byte, kid, agentID, from, name, text, signPr
 		IV:  base64.RawURLEncoding.EncodeToString(iv[:]),
 		CT:  base64.RawURLEncoding.EncodeToString(ct),
 	})
-	return env, msgID, err
+	return env, err
 }
 
 // VerifiedChatMessage is a decrypted, sender-authenticated chat message.
 type VerifiedChatMessage struct {
-	From    string
-	Name    string
-	Text    string
-	ID      string
-	ShareID string
+	From      string
+	Name      string
+	Text      string
+	Sequence  uint64
+	SenderKey string
+	ShareID   string
 }
 
 // DecodeChatEnvelope decrypts and verifies an e2e_chat JSON frame against
@@ -320,16 +321,16 @@ func DecodeChatEnvelope(raw []byte, chatKey [32]byte, expectedKid, expectedAgent
 		return nil, errors.New("e2e: invalid inner chat payload")
 	}
 	cleanText := CleanOneLine(inner.Text, chatTextMax)
-	if cleanText == "" || inner.ID == "" || len(inner.ID) > 64 {
+	if cleanText == "" || inner.Sequence == 0 || inner.Sequence > maxChatSequence {
 		return nil, errors.New("e2e: empty or invalid chat message")
 	}
 
 	switch inner.From {
 	case "tech":
-		if !VerifyP256(techSignPubB64, chatMsgSigBytes(expectedKid, expectedAgentID, "tech", "", cleanText, inner.ID), inner.Sig) {
+		if !VerifyP256(techSignPubB64, chatMsgSigBytes(expectedKid, expectedAgentID, "tech", "", cleanText, inner.Sequence), inner.Sig) {
 			return nil, errors.New("e2e: invalid tech chat signature")
 		}
-		return &VerifiedChatMessage{From: "tech", Text: cleanText, ID: inner.ID}, nil
+		return &VerifiedChatMessage{From: "tech", Text: cleanText, Sequence: inner.Sequence, SenderKey: techSignPubB64}, nil
 
 	case "user":
 		if inner.UserCert == nil || inner.UserCert.Kid != expectedKid || inner.UserCert.AgentID != expectedAgentID {
@@ -338,10 +339,10 @@ func DecodeChatEnvelope(raw []byte, chatKey [32]byte, expectedKid, expectedAgent
 		if !VerifyUserKeyCert(techSignPubB64, *inner.UserCert) {
 			return nil, errors.New("e2e: invalid user_cert signature")
 		}
-		if !VerifyP256(inner.UserCert.UserPub, chatMsgSigBytes(expectedKid, expectedAgentID, "user", "", cleanText, inner.ID), inner.Sig) {
+		if !VerifyP256(inner.UserCert.UserPub, chatMsgSigBytes(expectedKid, expectedAgentID, "user", "", cleanText, inner.Sequence), inner.Sig) {
 			return nil, errors.New("e2e: invalid user chat signature")
 		}
-		return &VerifiedChatMessage{From: "user", Text: cleanText, ID: inner.ID}, nil
+		return &VerifiedChatMessage{From: "user", Text: cleanText, Sequence: inner.Sequence, SenderKey: inner.UserCert.UserPub}, nil
 
 	case "guest":
 		if inner.Grant == nil || inner.Grant.Kid != expectedKid || inner.Grant.AgentID != expectedAgentID || inner.Grant.Exp <= time.Now().Unix() {
@@ -353,15 +354,16 @@ func DecodeChatEnvelope(raw []byte, chatKey [32]byte, expectedKid, expectedAgent
 		if !VerifyChatGrant(techSignPubB64, *inner.Grant) {
 			return nil, errors.New("e2e: invalid guest grant signature")
 		}
-		if !VerifyP256(inner.Grant.GuestSignPub, chatMsgSigBytes(expectedKid, expectedAgentID, "guest", inner.Grant.Name, cleanText, inner.ID), inner.Sig) {
+		if !VerifyP256(inner.Grant.GuestSignPub, chatMsgSigBytes(expectedKid, expectedAgentID, "guest", inner.Grant.Name, cleanText, inner.Sequence), inner.Sig) {
 			return nil, errors.New("e2e: invalid guest chat signature")
 		}
 		return &VerifiedChatMessage{
-			From:    "guest",
-			Name:    inner.Grant.Name,
-			Text:    cleanText,
-			ID:      inner.ID,
-			ShareID: inner.Grant.ShareID,
+			From:      "guest",
+			Name:      inner.Grant.Name,
+			Text:      cleanText,
+			Sequence:  inner.Sequence,
+			SenderKey: inner.Grant.GuestSignPub,
+			ShareID:   inner.Grant.ShareID,
 		}, nil
 
 	default:
@@ -473,30 +475,6 @@ func OpenChatKeyAsGuest(guestECDHPrivB64, wrappedB64 string) (*WrappedGuestChatK
 	return &out, nil
 }
 
-// seenIDRing deduplicates message IDs in a bounded ring buffer.
-type seenIDRing struct {
-	ring [chatSeenRingSize]string
-	pos  int
-	set  map[string]struct{}
-}
-
-func newSeenIDRing() *seenIDRing {
-	return &seenIDRing{set: make(map[string]struct{}, chatSeenRingSize)}
-}
-
-func (r *seenIDRing) add(id string) bool {
-	if _, exists := r.set[id]; exists {
-		return false
-	}
-	if old := r.ring[r.pos]; old != "" {
-		delete(r.set, old)
-	}
-	r.ring[r.pos] = id
-	r.pos = (r.pos + 1) % chatSeenRingSize
-	r.set[id] = struct{}{}
-	return true
-}
-
 // agentChatBridge manages the technician room key (K_chat) and local user
 // signing certificate inside the technician's sidecar e2e.Conn.
 type agentChatBridge struct {
@@ -510,14 +488,15 @@ type agentChatBridge struct {
 	userPub  string
 	userCert *UserKeyCert
 	revoked  map[string]bool
-	seen     *seenIDRing
+	seen     map[string]uint64
+	userSeq  uint64
 }
 
 func newAgentChatBridge(agentID string) *agentChatBridge {
 	return &agentChatBridge{
 		agentID: agentID,
 		revoked: map[string]bool{},
-		seen:    newSeenIDRing(),
+		seen:    make(map[string]uint64),
 	}
 }
 
@@ -558,6 +537,8 @@ func (b *agentChatBridge) HandleControl(data []byte) (handled bool, reply []byte
 		b.userPub = userPub
 		b.userCert = nil
 		b.revoked = map[string]bool{}
+		b.seen = make(map[string]uint64)
+		b.userSeq = 0
 		b.mu.Unlock()
 		ack, _ := json.Marshal(map[string]string{
 			"t":        "chat_init_ack",
@@ -601,28 +582,30 @@ func (b *agentChatBridge) HandleControl(data []byte) (handled bool, reply []byte
 	}
 }
 
-// DecodeGuestEnvelope decrypts and verifies an incoming outer e2e_chat frame
+// DecodeGuestEnvelope decrypts and verifies an incoming group envelope
 // for the local OS chat window on the technician's sidecar.
-func (b *agentChatBridge) DecodeGuestEnvelope(raw []byte) (*VerifiedChatMessage, bool) {
+func (b *agentChatBridge) DecodeGuestEnvelope(raw []byte, shareID string) (*VerifiedChatMessage, bool) {
 	b.mu.Lock()
 	defer b.mu.Unlock()
 	if !b.hasKey || b.agentID == "" {
 		return nil, false
 	}
 	msg, err := DecodeChatEnvelope(raw, b.chatKey, b.kid, b.agentID, b.techPub, b.revoked)
-	if err != nil || msg.From != "guest" {
+	if err != nil || msg.From != "guest" || msg.ShareID != shareID {
 		return nil, false
 	}
-	if !b.seen.add(msg.ID) {
+	last, known := b.seen[msg.SenderKey]
+	if msg.Sequence <= last || (!known && len(b.seen) >= maxChatSenders) {
 		return nil, false
 	}
+	b.seen[msg.SenderKey] = msg.Sequence
 	return msg, true
 }
 
 // MaybeEncodeUserChat checks whether an outbound inner JSON message is a chat
 // line typed by the person at the endpoint ({"t":"chat","from":"user","text":...})
-// and, if the technician chat bridge has an active certified user key, returns
-// an encrypted outer e2e_chat envelope for the server's ChatHook to deliver to guests.
+// and, if the technician chat bridge has a certified user key, returns a signed
+// envelope to deliver inside the encrypted technician connection.
 func (b *agentChatBridge) MaybeEncodeUserChat(innerJSON []byte) ([]byte, bool) {
 	var m struct {
 		T    string `json:"t"`
@@ -642,14 +625,13 @@ func (b *agentChatBridge) MaybeEncodeUserChat(innerJSON []byte) ([]byte, bool) {
 	agentID := b.agentID
 	userPriv := b.userPriv
 	certCopy := *b.userCert
+	b.userSeq++
+	seq := b.userSeq
 	b.mu.Unlock()
 
-	env, msgID, err := EncodeChatEnvelope(chatKey, kid, agentID, "user", "", m.Text, userPriv, nil, &certCopy)
+	env, err := EncodeChatEnvelope(chatKey, kid, agentID, "user", "", m.Text, userPriv, seq, nil, &certCopy)
 	if err != nil {
 		return nil, false
 	}
-	b.mu.Lock()
-	b.seen.add(msgID)
-	b.mu.Unlock()
 	return env, true
 }

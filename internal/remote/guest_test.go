@@ -274,12 +274,12 @@ func TestChatText(t *testing.T) {
 			t.Errorf("chatText(%.40q) = %q, %v; want %q, %v", c.frame, text, ok, c.text, c.ok)
 		}
 	}
-	if text, ok := chatText([]byte("{\"t\":\"chat\",\"text\":\"\\u0000e2e_chat:spoof\"}")); !ok || strings.HasPrefix(text, E2EChatPrefix) {
+	if text, ok := chatText([]byte("{\"t\":\"chat\",\"text\":\"\\u0000e2e_chat:spoof\"}")); !ok || strings.HasPrefix(text, "\x00") {
 		t.Fatalf("chatText allowed NUL prefix injection: %q, %v", text, ok)
 	}
 }
 
-func TestGuestPolicyE2EAndChatEnvelopeHook(t *testing.T) {
+func TestGuestPolicyE2EFrames(t *testing.T) {
 	p := GuestPolicy{E2E: true}
 	validFrame := make([]byte, 32)
 	validFrame[0] = chE2E
@@ -311,14 +311,10 @@ func TestGuestPolicyE2EAndChatEnvelopeHook(t *testing.T) {
 		t.Fatal("large 0xE0 video frame from agent rejected")
 	}
 
-	env := `{"t":"e2e_chat","v":1,"kid":"kid-1","iv":"0123456789abcdef","ct":"0123456789abcdef0123456789"}`
-	got, ok := e2eChatFrame([]byte(env))
-	if !ok || !strings.HasPrefix(got, E2EChatPrefix) {
-		t.Fatalf("e2eChatFrame(%q) = %q, %v", env, got, ok)
+	if p.FromViewer(websocket.TextMessage, []byte(`{"t":"e2e_chat","v":1}`)) {
+		t.Fatal("unenclosed chat envelope allowed from guest relay")
 	}
-	if _, ok := e2eChatFrame([]byte(`{"t":"e2e_chat","v":1,"kid":"kid-1","iv":"short","ct":"0123456789abcdef0123456789"}`)); ok {
-		t.Fatal("short IV accepted")
-	}
+
 }
 
 // The relay remembers whether an endpoint's sidecar shows a guest's chat line

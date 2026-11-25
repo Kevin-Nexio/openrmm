@@ -463,6 +463,7 @@
   'viewer.fullscreenDenied': 'The browser denied full-screen mode.',
   'viewer.encrypted': "End-to-end encrypted",
   'viewer.encryptionAgentUpdate': "Update the agent to start an encrypted session",
+  'viewer.deviceKeyChanged': 'The device identity key changed or could not be verified',
   'viewer.encryptionFailed': "Could not establish an encrypted connection",
   'viewer.encryptedChatPending': "Encrypted chat is still connecting",
   'viewer.uploadFailed': "Upload failed",

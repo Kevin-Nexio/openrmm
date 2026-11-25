@@ -450,6 +450,7 @@
   'viewer.fullscreenDenied': 'ブラウザーが全画面表示を拒否しました。',
   'viewer.encrypted': "エンドツーエンド暗号化済み",
   'viewer.encryptionAgentUpdate': "暗号化されたセッションを開始するにはエージェントを更新してください",
+  'viewer.deviceKeyChanged': 'デバイスの識別キーが変更されたか、確認できませんでした',
   'viewer.encryptionFailed': "暗号化された接続を確立できませんでした",
   'viewer.encryptedChatPending': "暗号化チャットに接続しています",
   'viewer.uploadFailed': "アップロードに失敗しました",

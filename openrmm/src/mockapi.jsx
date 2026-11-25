@@ -283,6 +283,7 @@ const api = {
   // remote session (docs/08-remote-access.md).
   createRemoteShare(id, body) { return POST('/api/devices/' + id + '/remote-shares', body); },
   listRemoteShares(id) { return GET('/api/devices/' + id + '/remote-shares'); },
+  remoteChat(agentId, payload) { return POST('/api/devices/' + encodeURIComponent(agentId) + '/remote-chat', payload); },
   pendingRemoteShares(agentId) { return GET('/api/remote-shares/pending' + qs({ agent_id: agentId })); },
   acceptRemoteShare(id, body) { return POST('/api/remote-shares/' + id + '/accept', body); },
   setRemoteShareChatKey(id, body) { return PUT('/api/remote-shares/' + id + '/chat-key', body); },
@@ -291,6 +292,7 @@ const api = {
   guest: {
     lookup(token) { return guestCall('POST', '/api/guest/lookup', '', { token }); },
     join(token, code, name, publicKeys) { return guestCall('POST', '/api/guest/join', '', { token, code, name, ...publicKeys }); },
+    chat(credential, payload) { return guestCall('POST', '/api/guest/chat', credential, payload); },
     status(credential) { return guestCall('GET', '/api/guest/request', credential); },
     session(credential, viewerKey) { return guestCall('POST', '/api/guest/session', credential, { viewer_key: viewerKey }); },
   },

@@ -402,16 +402,10 @@ func copyFrames(src, dst *websocket.Conn, dstW chan struct{}, allow func(int, []
 		if onChat != nil && mt == websocket.TextMessage {
 			if text, ok := chatText(data); ok {
 				onChat(text)
-			} else if env, ok := e2eChatFrame(data); ok {
-				onChat(env)
 			}
 		}
 	}
 }
-
-// E2EChatPrefix tags an encrypted e2e_chat envelope handed to ChatHook so a
-// legacy plaintext chat message can never be mistaken for an E2E envelope.
-const E2EChatPrefix = "\x00e2e_chat:"
 
 // helloGuestChat reads "guest_chat" from an endpoint's hello.
 func helloGuestChat(data []byte) (bool, bool) {
@@ -446,31 +440,4 @@ func chatText(data []byte) (string, bool) {
 		return "", false
 	}
 	return text, true
-}
-
-// e2eChatFrame validates and re-serializes a bounded e2e_chat room envelope so
-// ChatHook can route it across sessions without reading plaintext or passing
-// unvalidated JSON fields.
-func e2eChatFrame(data []byte) (string, bool) {
-	if len(data) > 8192 {
-		return "", false
-	}
-	var e struct {
-		T   string `json:"t"`
-		V   int    `json:"v"`
-		Kid string `json:"kid"`
-		IV  string `json:"iv"`
-		CT  string `json:"ct"`
-	}
-	if json.Unmarshal(data, &e) != nil || e.T != "e2e_chat" || e.V != 1 {
-		return "", false
-	}
-	if len(e.Kid) == 0 || len(e.Kid) > 64 || len(e.IV) != 16 || len(e.CT) < 22 || len(e.CT) > 6144 {
-		return "", false
-	}
-	clean, err := json.Marshal(e)
-	if err != nil {
-		return "", false
-	}
-	return E2EChatPrefix + string(clean), true
 }

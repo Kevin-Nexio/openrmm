@@ -815,14 +815,14 @@ const SHARE_LIFETIMES = [15, 60, 240, 480, 1440];
 // for this technician's decision on this device, and those already in. Only
 // the technician who sent an invitation sees its guest here, and accepting
 // needs this session open — which is why it lives in the viewer.
-function GuestRequests({ deviceId, accept, sync, chatKid }) {
+function GuestRequests({ deviceId, accept, sync }) {
   const toast = useToast();
   const q = useQuery(['remote-shares-pending', deviceId], () => api.pendingRemoteShares(deviceId), { poll: 3000 });
   const pending = q.data?.pending || [];
   const guests = q.data?.guests || [];
   useEffect(() => {
-    if (chatKid && q.data) sync(q.data.guests);
-  }, [chatKid, q.data]);
+    if (q.data) sync(q.data.guests);
+  }, [q.data]);
   const act = async (fn) => {
     try { await fn(); q.refetch(); }
     catch (e) { toast.error(t('guest.actionFailed'), e.message); }
@@ -867,6 +867,7 @@ function ShareAccessModal({ open, onClose, device }) {
     setBusy(true);
     try {
       const r = await api.createRemoteShare(device.id, { mode, minutes: Number(minutes), reusable: !singleUse });
+      if (!RemoteCrypto.deviceIdentity(device.id, r.device_public_key)) throw new Error(t('viewer.deviceKeyChanged'));
       const pin = r.device_public_key ? '.' + await RemoteCrypto.fingerprint(r.device_public_key) : '';
       const link = new URL((window.__BASE_PATH__ || '/') + 'join', location.origin).toString() + '#' + r.token + pin;
       setIssued({ link, code: r.code, expires_at: r.share.expires_at, mode: r.share.mode, reusable: r.share.reusable });
@@ -985,7 +986,10 @@ function GuestJoinScreen() {
   useEffect(() => {
     if (location.hash) {
       history.replaceState(null, '', location.pathname + location.search);
-      try { sessionStorage.removeItem(GUEST_STORE); } catch (e) {}
+      try {
+        RemoteChat.forget(JSON.parse(sessionStorage.getItem(GUEST_STORE) || 'null')?.requestId);
+        sessionStorage.removeItem(GUEST_STORE);
+      } catch (e) {}
     }
   }, []);
   useEffect(() => {
@@ -993,7 +997,10 @@ function GuestJoinScreen() {
     api.guest.lookup(token).then((r) => { setTechnician(r.technician); setMode(r.mode); setPhase('form'); }).catch(() => setPhase('invalid'));
   }, [phase]);
   const remember = (s) => { setSaved(s); try { s ? sessionStorage.setItem(GUEST_STORE, JSON.stringify(s)) : sessionStorage.removeItem(GUEST_STORE); } catch (e) {} };
-  const finish = (reason) => { remember(null); setEnded(reason); setPhase('ended'); };
+  const finish = (reason) => {
+    try { RemoteChat.forget(saved?.requestId); } catch (e) {}
+    remember(null); setEnded(reason); setPhase('ended');
+  };
   const submit = async (e) => {
     e.preventDefault();
     setBusy(true); setError('');
@@ -1095,11 +1102,8 @@ function RemoteViewer({ deviceId, hostname, os, filesOnly, onClose, guest, theme
   const [status, setStatus] = useState('connecting');
   const [encrypted, setEncrypted] = useState(false);
   const [chatKid, setChatKid] = useState('');
+  const [chatRekeying, setChatRekeying] = useState(false);
   const roomRef = useRef(null);
-  const activeGuestsRef = useRef(new Map());
-  const rotationRef = useRef(null);
-  const distributingChatRef = useRef(false);
-  const chatSendingRef = useRef(Promise.resolve());
   const [chat, setChat] = useState([]); // { from: 'tech'|'user', text }
   // The panel follows new lines, unless the reader scrolled up to read back:
   // then it stays where they are until they return to the bottom.
@@ -1144,53 +1148,59 @@ function RemoteViewer({ deviceId, hostname, os, filesOnly, onClose, guest, theme
     if (!openRef.current) setUnread((n) => n + 1);
   };
   const setRoom = (room) => { roomRef.current = room; setChatKid(room?.kid || ''); };
-  const startChatRoom = async (ws) => {
-    const { agentID, deviceKey } = ws.identity;
-    const room = await RemoteChat.create(agentID, deviceKey);
-    if (ws !== wsRef.current || ws.readyState !== 1) return;
-    setRoom(room);
-    ws.send(JSON.stringify({ t: 'chat_init', kid: room.kid, k: RemoteCrypto.encode(room.material), tech_pub: room.techPub }));
+  const rotateChatRoom = async (ws, guests, pending) => {
+    if (ws.rotatingChat || ws.readyState !== 1) throw new Error(t('viewer.encryptedChatPending'));
+    ws.rotatingChat = true;
+    setChatRekeying(true);
+    setRoom(null);
+    const ensureAttached = () => {
+      if (ws !== wsRef.current || ws.readyState !== 1) throw new Error(t('viewer.encryptedChatPending'));
+    };
+    try {
+      const accepted = guests.filter((entry) => entry.status === 'accepted');
+      const { agentID, deviceKey } = ws.identity;
+      const room = await RemoteChat.create(agentID, deviceKey);
+      room.members = new Map(accepted.map((entry) => [entry.id, entry.redeem_count]));
+      room.generation = (ws.chatGeneration || 0) + 1;
+      ws.chatGeneration = room.generation;
+      room.cursor = 0;
+      for (const entry of accepted) {
+        const payload = await RemoteChat.wrap(room, entry);
+        ensureAttached();
+        await api.setRemoteShareChatKey(entry.id, { ...payload, redeem_count: entry.redeem_count });
+      }
+      if (pending) {
+        const payload = await RemoteChat.wrap(room, pending);
+        ensureAttached();
+        await api.acceptRemoteShare(pending.id, { ...payload, redeem_count: pending.redeem_count });
+        room.members.set(pending.id, pending.redeem_count);
+      }
+      ensureAttached();
+      ws.send(JSON.stringify({ t: 'chat_init', kid: room.kid, k: RemoteCrypto.encode(room.material), tech_pub: room.techPub }));
+      setRoom(room);
+    } finally {
+      ws.rotatingChat = false;
+      if (ws === wsRef.current) setChatRekeying(false);
+    }
   };
+
   const acceptGuest = async (guestShare) => {
     const ws = wsRef.current;
     if (!ws?.encrypted) return api.acceptRemoteShare(guestShare.id);
-    const room = roomRef.current;
-    if (!room || ws.readyState !== 1) throw new Error(t('viewer.encryptedChatPending'));
-    const payload = await RemoteChat.wrap(room, guestShare);
-    if (room !== roomRef.current || ws.readyState !== 1) throw new Error(t('viewer.encryptedChatPending'));
-    const result = await api.acceptRemoteShare(guestShare.id, { ...payload, redeem_count: guestShare.redeem_count });
-    if (ws === wsRef.current && ws.readyState === 1) activeGuestsRef.current.set(guestShare.id, guestShare.redeem_count);
-    return result;
+    const shares = await api.pendingRemoteShares(deviceId);
+    if (ws !== wsRef.current) throw new Error(t('viewer.encryptedChatPending'));
+    await rotateChatRoom(ws, shares.guests, guestShare);
   };
+
   const syncGuestRooms = (guests) => {
     const ws = wsRef.current;
+    if (!ws?.encrypted || ws.readyState !== 1 || ws.rotatingChat) return;
     const room = roomRef.current;
-    if (!ws?.encrypted || !room || rotationRef.current === ws) return;
-    const current = new Map(guests.map((entry) => [entry.id, entry.redeem_count]));
-    const removed = [...activeGuestsRef.current].filter(([id, count]) => current.get(id) !== count);
-    activeGuestsRef.current = current;
-    if (removed.length) {
-      for (const [id] of removed) sendJSON({ t: 'chat_revoke', share_id: id });
-      setRoom(null);
-      rotationRef.current = ws;
-      startChatRoom(ws).catch(() => toast.error(t('viewer.encryptionFailed'))).finally(() => { rotationRef.current = null; });
-      return;
-    }
-    if (distributingChatRef.current) return;
-    distributingChatRef.current = true;
-    (async () => {
-      for (const entry of guests) {
-        if (entry.chat_key_id === room.kid || !entry.guest_public_key) continue;
-        try {
-          if (room !== roomRef.current || ws.readyState !== 1) return;
-          const payload = await RemoteChat.wrap(room, entry);
-          if (room !== roomRef.current || ws.readyState !== 1) return;
-          await api.setRemoteShareChatKey(entry.id, { ...payload, redeem_count: entry.redeem_count });
-        } catch (e) {
-          // A guest may leave during rekeying. Continue with the other guests.
-        }
-      }
-    })().finally(() => { distributingChatRef.current = false; });
+    const accepted = guests.filter((entry) => entry.status === 'accepted');
+    if (room && accepted.length === room.members.size && accepted.every((entry) =>
+      room.members.get(entry.id) === entry.redeem_count && entry.chat_key_id === room.kid)) return;
+    if (!room && !accepted.length) return;
+    rotateChatRoom(ws, accepted).catch(() => {}); // Retry using the next authoritative roster.
   };
 
   useEffect(() => {
@@ -1224,6 +1234,13 @@ function RemoteViewer({ deviceId, hostname, os, filesOnly, onClose, guest, theme
                 ws.send(JSON.stringify({ t: 'chat_user_cert', kid: room.kid, cert }));
               }
             }).catch(() => {});
+          }
+        }
+        else if (m.t === 'chat_group' && !isGuest && wsRef.current?.encrypted) {
+          const ws = wsRef.current;
+          const room = roomRef.current;
+          if (room?.members.size && m.envelope?.kid === room.kid) {
+            ws.exchangeChat?.(room, m.envelope, 'user').catch(() => {});
           }
         }
         else if (m.t === 'hello') {
@@ -1314,7 +1331,6 @@ function RemoteViewer({ deviceId, hostname, os, filesOnly, onClose, guest, theme
     // down) re-broker and reconnect — the agent re-spawns the SYSTEM sidecar into
     // the now-active session (login screen included).
     let sessionId = null; // this tab's last session, taken back without asking after a drop
-    let lastDeviceKey = '';
     let stopChatPoll = () => {};
     const connect = async (replace) => {
       setConflict(null);
@@ -1323,6 +1339,7 @@ function RemoteViewer({ deviceId, hostname, os, filesOnly, onClose, guest, theme
       setVer(null);
       if (stopped) return;
       setEncrypted(false);
+      setChatRekeying(false);
       setRoom(null);
       setStatus(retries ? 'reconnecting' : 'connecting');
       const g = guestRef.current;
@@ -1348,12 +1365,13 @@ function RemoteViewer({ deviceId, hostname, os, filesOnly, onClose, guest, theme
       }
       if (stopped) return;
       const deviceKey = session.device_public_key;
+      if (!g && !RemoteCrypto.deviceIdentity(deviceId, deviceKey)) {
+        setStatus('closed'); setNotice(t('viewer.deviceKeyChanged')); toast.error(t('viewer.deviceKeyChanged')); return;
+      }
       if ((session.e2e && (!ephemeral || !(g ? g.fingerprint : deviceKey))) ||
-          (!session.e2e && (g?.fingerprint || lastDeviceKey || deviceKey)) ||
-          (lastDeviceKey && deviceKey !== lastDeviceKey)) {
+          (!session.e2e && (g?.fingerprint || deviceKey))) {
         setStatus('closed'); setNotice(t('viewer.encryptionFailed')); toast.error(t('viewer.encryptionFailed')); return;
       }
-      if (deviceKey) lastDeviceKey = deviceKey;
       sessionId = session.id;
       const wsUrl = api.websocketURL('/ws/remote?session=' + encodeURIComponent(session.id) + '&role=viewer');
       const protocols = g ? ['rmm-v1', 'rmm-ticket.' + session.viewer_ticket, 'rmm-guest.' + g.credential] : relayProtocols(session.viewer_ticket);
@@ -1364,62 +1382,70 @@ function RemoteViewer({ deviceId, hostname, os, filesOnly, onClose, guest, theme
       }) : raw;
       wsRef.current = ws;
       raw.binaryType = 'arraybuffer';
+      let identityRejected = false;
       ws.onopen = () => {
+        if (!g && ws.encrypted && !RemoteCrypto.deviceIdentity(deviceId, ws.identity.deviceKey, true)) {
+          identityRejected = true;
+          setNotice(t('viewer.deviceKeyChanged')); toast.error(t('viewer.deviceKeyChanged')); ws.close(); return;
+        }
         retries = 0; setStatus(filesOnly ? 'connected' : 'streaming'); setNotice(null);
         setEncrypted(!!ws.encrypted);
-        if (ws.encrypted && !filesOnly) {
-          let incoming = Promise.resolve(), queued = 0;
-          const buffered = [];
-          const receiveChat = (room, packet) => {
-            if (queued >= 64) return;
+        if (ws.encrypted && !filesOnly && (g || can('devices.remote.share'))) {
+          let exchange = Promise.resolve(), queued = 0, ticks = 0, polling = false;
+          const attached = () => !stopped && ws === wsRef.current && ws.readyState === 1;
+          ws.exchangeChat = (room, envelope, source) => {
+            if (queued >= 32) return Promise.reject(new Error(t('viewer.encryptedChatPending')));
             queued++;
-            incoming = incoming.then(async () => {
-              if (room !== roomRef.current || ws !== wsRef.current || ws.readyState !== 1) return;
-              const line = await RemoteChat.decrypt(room, packet);
-              if (line && room === roomRef.current && (g || line.from === 'guest')) appendChat(line);
-            }).catch(() => {}).finally(() => { queued--; });
+            const result = exchange.then(async () => {
+              if (!attached() || roomRef.current !== room) throw new Error(t('viewer.encryptedChatPending'));
+              const packet = typeof envelope === 'function' ? await envelope() : envelope;
+              if (!attached() || roomRef.current !== room) throw new Error(t('viewer.encryptedChatPending'));
+              const input = { session_id: session.id, kid: room.kid, cursor: room.cursor, generation: room.generation, envelope: packet, source };
+              const { lines } = g ? await api.guest.chat(g.credential, input) : await api.remoteChat(deviceId, input);
+              if (!attached() || roomRef.current !== room) return;
+              for (const line of lines) {
+                if (!attached() || roomRef.current !== room) break;
+                room.cursor = Math.max(room.cursor, line.cursor);
+                if (g ? line.share_id === g.requestId : line.from !== 'guest') continue;
+                try {
+                  const message = await RemoteChat.decrypt(room, line.envelope, line);
+                  if (!message || roomRef.current !== room || !attached()) continue;
+                  appendChat(message);
+                  if (!g) ws.send(JSON.stringify({ t: 'chat_guest', share_id: line.share_id, envelope: line.envelope }));
+                } catch (e) {} // Invalid signatures or retired epochs never reach the viewer.
+              }
+            }).finally(() => { queued--; });
+            exchange = result.catch(() => {});
+            return result;
           };
-          let refreshChat = () => {};
-          ws.onchat = (packet) => {
-            const room = roomRef.current;
-            if (room?.kid === packet.kid) {
-              receiveChat(room, packet);
-            } else if (g && typeof packet.kid === 'string' && packet.kid.length <= 64) {
-              if (buffered.length >= 32) buffered.shift();
-              buffered.push(packet);
-              refreshChat();
-            }
-          };
-          if (g) {
-            let polling = false, nextRefresh = 0;
-            refreshChat = async () => {
-              if (polling || Date.now() < nextRefresh || ws.readyState !== 1 || ws !== wsRef.current || stopped) return;
-              polling = true;
-              nextRefresh = Date.now() + 1000;
-              try {
+          const pollChat = async () => {
+            if (!attached() || polling || queued) return;
+            polling = true;
+            try {
+              if (g && (ticks++ % 2 === 0 || !roomRef.current)) {
                 const state = await api.guest.status(g.credential);
-                if (stopped || ws.readyState !== 1 || ws !== wsRef.current) return;
-                if (state.status !== 'accepted' || !state.wrapped_chat_key) { setRoom(null); return; }
-                if (roomRef.current?.kid === state.chat_key_id) return;
-                setRoom(null);
-                const room = await RemoteChat.unwrap(state, g, ws.identity);
-                if (!stopped && ws.readyState === 1 && ws === wsRef.current) {
-                  setRoom(room);
-                  for (const packet of buffered.splice(0)) {
-                    if (room.kid === packet.kid) receiveChat(room, packet);
-                  }
+                if (!attached()) return;
+                if (state.status !== 'accepted' || !state.wrapped_chat_key) {
+                  setRoom(null);
+                  return;
                 }
-              } catch (e) {
-                if (ws === wsRef.current) setRoom(null);
-              } finally { polling = false; }
-            };
-            const timer = setInterval(refreshChat, 3000);
-            stopChatPoll = () => clearInterval(timer);
-            refreshChat();
-          } else {
-            activeGuestsRef.current = new Map();
-            startChatRoom(ws).catch(() => toast.error(t('viewer.encryptionFailed')));
-          }
+                if (roomRef.current?.kid !== state.chat_key_id) {
+                  setRoom(null);
+                  const room = await RemoteChat.unwrap(state, g, ws.identity);
+                  if (!attached()) return;
+                  room.cursor = 0;
+                  setRoom(room);
+                }
+              }
+              const room = roomRef.current;
+              if (room && (g || room.members.size)) await ws.exchangeChat(room);
+            } catch (e) {
+              // A rekey or a network error leaves the next poll to retry.
+            } finally { polling = false; }
+          };
+          const timer = setInterval(pollChat, 1500);
+          stopChatPoll = () => clearInterval(timer);
+          pollChat();
         }
         setLocked(false); // a fresh sidecar starts unlocked (reconnect after logoff/desktop switch)
         // File-transfer-only sessions never stream the screen, so don't ask for a
@@ -1433,6 +1459,7 @@ function RemoteViewer({ deviceId, hostname, os, filesOnly, onClose, guest, theme
       ws.onerror = () => {};
       ws.onclose = (ev) => {
         if (stopped || ws !== wsRef.current) return;
+        if (identityRejected) { setStatus('closed'); return; }
         stopChatPoll();
         setEncrypted(false);
         setRoom(null);
@@ -1556,27 +1583,27 @@ function RemoteViewer({ deviceId, hostname, os, filesOnly, onClose, guest, theme
     };
   }, [deviceId, filesOnly, allowFiles, isMac, isGuest, control]);
 
-  const sendChat = () => {
+  const sendChat = async () => {
     const ws = wsRef.current;
-    if (!ws || ws.readyState !== 1) return;
+    if (!ws || ws.readyState !== 1 || ws.rotatingChat) return;
     const text = ws.encrypted ? RemoteChat.cleanText(draft) : draft.trim();
     if (!text) return;
-    if (!ws.encrypted) {
-      sendJSON(isGuest ? { t: 'chat', text } : { t: 'chat', from: 'tech', text });
-    } else {
-      const room = roomRef.current;
-      if (!room) return;
-      chatSendingRef.current = chatSendingRef.current.then(async () => {
-        if (ws !== wsRef.current || room !== roomRef.current || ws.readyState !== 1) return;
-        const envelope = await RemoteChat.encrypt(room, text);
-        if (ws !== wsRef.current || room !== roomRef.current || ws.readyState !== 1) return;
-        if (!isGuest) ws.send(JSON.stringify({ t: 'chat', from: 'tech', text }));
-        ws.sendChat(envelope);
-      }).catch(() => toast.error(t('viewer.encryptionFailed')));
-    }
-    chatStickRef.current = true;
-    setChat((c) => [...c, { from: 'self', text }]);
+    const room = roomRef.current;
+    if (ws.encrypted && isGuest && !room) return;
     setDraft('');
+    try {
+      // Keep the technician-to-endpoint conversation available during rekey.
+      if (!ws.encrypted || !isGuest) sendJSON(isGuest ? { t: 'chat', text } : { t: 'chat', from: 'tech', text });
+      if (ws.encrypted && room && (isGuest || room.members.size)) {
+        await ws.exchangeChat(room, () => RemoteChat.encrypt(room, text));
+      }
+      chatStickRef.current = true;
+      setChat((c) => [...c, { from: 'self', text }]);
+    } catch (e) {
+      if (isGuest) setDraft((current) => current || text);
+      else setChat((c) => [...c, { from: 'self', text }]);
+      toast.error(t('viewer.encryptedChatPending'));
+    }
   };
   const chatLabel = (m) => m.from === 'self' ? (isGuest ? t('guest.chatYou') : t('viewer.techYou'))
     : m.from === 'guest' ? t('viewer.chatGuest', { name: m.name || '?' })
@@ -1766,7 +1793,7 @@ function RemoteViewer({ deviceId, hostname, os, filesOnly, onClose, guest, theme
               emits nothing for an opacity modifier on one (bg-panel/95), which
               left these see-through over the black viewer. */}
           <div className="absolute top-3 left-1/2 -translate-x-1/2 z-[2] w-[min(92%,640px)] flex flex-col items-center gap-2 pointer-events-none">
-            {!isGuest && status === 'streaming' && can('devices.remote.share') && <GuestRequests deviceId={deviceId} accept={acceptGuest} sync={syncGuestRooms} chatKid={chatKid} />}
+            {!isGuest && status === 'streaming' && can('devices.remote.share') && <GuestRequests deviceId={deviceId} accept={acceptGuest} sync={syncGuestRooms} />}
             {notice && (
               <div className="pointer-events-auto max-w-full rounded-lg border border-warn bg-card px-3.5 py-2 text-[12px] text-ink flex items-start gap-2 shadow-lg">
                 <Icon name="info" size={14} className="text-warn shrink-0 mt-0.5" />
@@ -1787,8 +1814,8 @@ function RemoteViewer({ deviceId, hostname, os, filesOnly, onClose, guest, theme
             ))}
           </div>
           <div className="p-2 border-t border-line flex gap-1.5">
-            <Input value={draft} disabled={encrypted && !chatKid} onChange={(e) => setDraft(e.target.value)} onKeyDown={(e) => { if (e.key === 'Enter') sendChat(); }} placeholder={t('viewer.message')} maxLength={isGuest ? 1000 : undefined} className="text-[12px]" />
-            <Button variant="primary" size="sm" icon="send" onClick={sendChat} disabled={!draft.trim() || (encrypted && !chatKid)} />
+            <Input value={draft} disabled={chatRekeying || (isGuest && encrypted && !chatKid)} onChange={(e) => setDraft(e.target.value)} onKeyDown={(e) => { if (e.key === 'Enter') sendChat(); }} placeholder={t('viewer.message')} maxLength={isGuest ? 1000 : undefined} className="text-[12px]" />
+            <Button variant="primary" size="sm" icon="send" onClick={sendChat} disabled={!draft.trim() || chatRekeying || (isGuest && encrypted && !chatKid)} />
           </div>
         </div>}
         </>)}
@@ -1924,6 +1951,9 @@ function TerminalViewer({ deviceId, hostname, onClose }) {
         return;
       }
       if (stopped) return;
+      if (!RemoteCrypto.deviceIdentity(deviceId, session.device_public_key)) {
+        setStatus('closed'); toast.error(t('viewer.deviceKeyChanged')); return;
+      }
       if ((session.e2e && (!ephemeral || !session.device_public_key)) || (!session.e2e && session.device_public_key)) {
         setStatus('closed'); toast.error(t('viewer.encryptionFailed')); return;
       }
@@ -1934,7 +1964,12 @@ function TerminalViewer({ deviceId, hostname, onClose }) {
       }) : raw;
       wsRef.current = ws;
       raw.binaryType = 'arraybuffer';
-      ws.onopen = () => { setEncrypted(!!ws.encrypted); setStatus('connected'); doFit(); sendResize(); term.focus(); };
+      ws.onopen = () => {
+        if (ws.encrypted && !RemoteCrypto.deviceIdentity(deviceId, ws.identity.deviceKey, true)) {
+          toast.error(t('viewer.deviceKeyChanged')); ws.close(); return;
+        }
+        setEncrypted(!!ws.encrypted); setStatus('connected'); doFit(); sendResize(); term.focus();
+      };
       ws.onmessage = (ev) => {
         if (typeof ev.data === 'string') {
           try {

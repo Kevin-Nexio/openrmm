@@ -433,6 +433,7 @@
   'viewer.fullscreenDenied': "Pelayar menolak mod skrin penuh.",
   'viewer.encrypted': "Disulitkan hujung ke hujung",
   'viewer.encryptionAgentUpdate': "Kemas kini ejen untuk memulakan sesi yang disulitkan",
+  'viewer.deviceKeyChanged': 'Kunci identiti peranti berubah atau tidak dapat disahkan',
   'viewer.encryptionFailed': "Sambungan yang disulitkan tidak dapat diwujudkan",
   'viewer.encryptedChatPending': "Sembang yang disulitkan masih menyambung",
   'viewer.uploadFailed': "Muat naik gagal",

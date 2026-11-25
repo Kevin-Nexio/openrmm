@@ -6,3 +6,5 @@ package main
 // by writeDurableFile, and the installers refuse a directory that group or
 // others can write to.
 func hardenStateDir(string) {}
+
+func protectE2ESessionDir(string) error { return nil }

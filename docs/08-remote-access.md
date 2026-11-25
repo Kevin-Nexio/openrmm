@@ -361,7 +361,8 @@ endpoint ↔ your **hbbs/hbbr** (self-hosted or a plan) ↔ the technician's vie
 The native desktop, interactive terminal and file transfer support encryption
 between the browser and the endpoint. A lock appears next to the connection
 status after the browser verifies the device key and both peers confirm the
-session keys. The browser requires a secure context with Web Crypto.
+session keys. The browser remembers verified device keys for later sessions.
+The browser requires a secure context with Web Crypto.
 
 In **Settings ▸ Remote access ▸ Native**, **Prefer encryption** permits legacy
 sessions on agents that have yet to register an encryption key. **Require
@@ -375,7 +376,9 @@ still observe session timing, frequency and frame sizes. Encrypted invitations
 also carry the device fingerprint in the link fragment, which the guest's
 browser checks against the endpoint. Reissue links created before the device
 registered an encryption key. Guest chat uses a separate key and preserves the
-existing view and control restrictions.
+existing view and control restrictions. Group messages pass through the
+authenticated application API as ciphertext. The room key rotates when the
+approved membership changes, and sending pauses while the new key is installed.
 
 ### One desktop session per operator per device
 

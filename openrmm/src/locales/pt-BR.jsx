@@ -456,6 +456,7 @@
   'viewer.fullscreenDenied': 'O navegador recusou o modo tela cheia.',
   'viewer.encrypted': "Criptografado de ponta a ponta",
   'viewer.encryptionAgentUpdate': "Atualize o agente para iniciar uma sessão criptografada",
+  'viewer.deviceKeyChanged': 'A chave de identidade do dispositivo mudou ou não pôde ser verificada',
   'viewer.encryptionFailed': "Não foi possível estabelecer uma conexão criptografada",
   'viewer.encryptedChatPending': "O chat criptografado ainda está conectando",
   'viewer.uploadFailed': "Falha no envio do arquivo",

@@ -16,7 +16,9 @@ import (
 
 const (
 	handshakeTimeout   = 15 * time.Second
-	maxSkippedChatMsgs = 16
+	handshakeReadLimit = 8192
+	MaxFrameSize       = 32 << 20
+	maxPayloadSize     = MaxFrameSize - HeaderSize - TagSize - 1
 	guestInnerLimit    = 4096
 	chVideo            = 0x01
 )
@@ -124,9 +126,8 @@ type Conn struct {
 	nextOutSeq uint64
 	nextInSeq  uint64
 
-	peerIKPub      string
-	chat           *agentChatBridge
-	OnChatEnvelope func([]byte)
+	peerIKPub string
+	chat      *agentChatBridge
 }
 
 // PeerIdentityKey returns the authenticated device public key (IK_dev_pub).
@@ -176,6 +177,7 @@ func HandshakeAgent(raw *websocket.Conn, opts AgentHandshakeOpts) (*Conn, error)
 	}
 	nonceAgent, _ := base64.RawURLEncoding.DecodeString(nonceB64)
 
+	raw.SetReadLimit(handshakeReadLimit)
 	deadline := time.Now().Add(handshakeTimeout)
 	_ = raw.SetReadDeadline(deadline)
 	_ = raw.SetWriteDeadline(deadline)
@@ -204,7 +206,7 @@ func HandshakeAgent(raw *websocket.Conn, opts AgentHandshakeOpts) (*Conn, error)
 		return nil, fmt.Errorf("e2e: send agent hello: %w", err)
 	}
 
-	peerHello, _, err := readHello(raw, "viewer", false)
+	peerHello, err := readHello(raw, "viewer")
 	if err != nil {
 		_ = raw.Close()
 		return nil, err
@@ -272,10 +274,11 @@ func HandshakeAgent(raw *websocket.Conn, opts AgentHandshakeOpts) (*Conn, error)
 	if opts.GuestMode == "" && opts.Kind == "desktop" {
 		c.chat = newAgentChatBridge(opts.AgentID)
 	}
-	if err := c.confirmReady(false); err != nil {
+	if err := c.confirmReady(); err != nil {
 		_ = raw.Close()
 		return nil, err
 	}
+	raw.SetReadLimit(MaxFrameSize)
 	return c, nil
 }
 
@@ -298,6 +301,7 @@ func HandshakeViewer(raw *websocket.Conn, opts ViewerHandshakeOpts) (*Conn, erro
 	}
 	nonceViewer, _ := base64.RawURLEncoding.DecodeString(nonceB64)
 
+	raw.SetReadLimit(handshakeReadLimit)
 	deadline := time.Now().Add(handshakeTimeout)
 	_ = raw.SetReadDeadline(deadline)
 	_ = raw.SetWriteDeadline(deadline)
@@ -320,7 +324,7 @@ func HandshakeViewer(raw *websocket.Conn, opts ViewerHandshakeOpts) (*Conn, erro
 		return nil, fmt.Errorf("e2e: send viewer hello: %w", err)
 	}
 
-	peerHello, bufferedChats, err := readHello(raw, "agent", true)
+	peerHello, err := readHello(raw, "agent")
 	if err != nil {
 		_ = raw.Close()
 		return nil, err
@@ -429,89 +433,53 @@ func HandshakeViewer(raw *websocket.Conn, opts ViewerHandshakeOpts) (*Conn, erro
 		inIV:      keys.A2VIV,
 		peerIKPub: peerHello.IK,
 	}
-	moreChats, err := c.confirmReadyWithBuffered(true)
-	if err != nil {
+	if err := c.confirmReady(); err != nil {
 		_ = raw.Close()
 		return nil, err
 	}
-	bufferedChats = append(bufferedChats, moreChats...)
-	if len(bufferedChats) > 0 {
-		go func() {
-			for _, rawChat := range bufferedChats {
-				if c.OnChatEnvelope != nil {
-					c.OnChatEnvelope(rawChat)
-				}
-			}
-		}()
-	}
+	raw.SetReadLimit(MaxFrameSize)
 	return c, nil
 }
 
-func readHello(raw *websocket.Conn, wantRole string, keepChat bool) (helloFrame, [][]byte, error) {
-	var buffered [][]byte
-	for skipped := 0; skipped <= maxSkippedChatMsgs; skipped++ {
-		mt, data, err := raw.ReadMessage()
-		if err != nil {
-			return helloFrame{}, nil, fmt.Errorf("e2e: read %s hello: %w", wantRole, err)
-		}
-		if mt == websocket.TextMessage && IsChatEnvelope(data) {
-			if keepChat {
-				buffered = append(buffered, append([]byte(nil), data...))
-			}
-			continue
-		}
-		if mt != websocket.TextMessage || len(data) > 4096 {
-			return helloFrame{}, nil, errors.New("e2e: expected JSON e2e_hello frame")
-		}
-		var h helloFrame
-		if err := json.Unmarshal(data, &h); err != nil || h.T != "e2e_hello" || h.V != 1 || h.Role != wantRole {
-			return helloFrame{}, nil, errors.New("e2e: malformed e2e_hello")
-		}
-		return h, buffered, nil
+func readHello(raw *websocket.Conn, wantRole string) (helloFrame, error) {
+	mt, data, err := raw.ReadMessage()
+	if err != nil {
+		return helloFrame{}, fmt.Errorf("e2e: read %s hello: %w", wantRole, err)
 	}
-	return helloFrame{}, nil, errors.New("e2e: handshake flooded before e2e_hello")
+	if mt != websocket.TextMessage || len(data) > 4096 {
+		return helloFrame{}, errors.New("e2e: expected JSON e2e_hello frame")
+	}
+	var h helloFrame
+	if err := json.Unmarshal(data, &h); err != nil || h.T != "e2e_hello" || h.V != 1 || h.Role != wantRole {
+		return helloFrame{}, errors.New("e2e: malformed e2e_hello")
+	}
+	return h, nil
 }
 
-func (c *Conn) confirmReady(keepChat bool) error {
-	_, err := c.confirmReadyWithBuffered(keepChat)
-	return err
-}
-
-func (c *Conn) confirmReadyWithBuffered(keepChat bool) ([][]byte, error) {
-	readyPayload := []byte(`{"t":"e2e_ready"}`)
-	if err := c.sealAndSend(0, InnerText, readyPayload); err != nil {
-		return nil, fmt.Errorf("e2e: send e2e_ready: %w", err)
+func (c *Conn) confirmReady() error {
+	if err := c.sealAndSend(0, InnerText, []byte(`{"t":"e2e_ready"}`)); err != nil {
+		return fmt.Errorf("e2e: send e2e_ready: %w", err)
 	}
-	var buffered [][]byte
-	for skipped := 0; skipped <= maxSkippedChatMsgs; skipped++ {
-		mt, rawData, err := c.raw.ReadMessage()
-		if err != nil {
-			return nil, fmt.Errorf("e2e: read e2e_ready: %w", err)
-		}
-		if mt == websocket.TextMessage && IsChatEnvelope(rawData) {
-			if keepChat {
-				buffered = append(buffered, append([]byte(nil), rawData...))
-			}
-			continue
-		}
-		innerType, plain, err := c.openFrame(rawData, 0)
-		if err != nil {
-			return nil, err
-		}
-		if innerType != InnerText {
-			return nil, errors.New("e2e: invalid e2e_ready inner type")
-		}
-		var m struct {
-			T string `json:"t"`
-		}
-		if json.Unmarshal(plain, &m) != nil || m.T != "e2e_ready" {
-			return nil, errors.New("e2e: invalid e2e_ready payload")
-		}
-		c.nextOutSeq = 1
-		c.nextInSeq = 1
-		return buffered, nil
+	mt, frame, err := c.raw.ReadMessage()
+	if err != nil {
+		return fmt.Errorf("e2e: read e2e_ready: %w", err)
 	}
-	return nil, errors.New("e2e: handshake flooded before e2e_ready")
+	if mt != websocket.BinaryMessage {
+		return errors.New("e2e: expected encrypted e2e_ready")
+	}
+	innerType, plain, err := c.openFrame(frame, 0)
+	if err != nil {
+		return err
+	}
+	var ready struct {
+		T string `json:"t"`
+	}
+	if innerType != InnerText || json.Unmarshal(plain, &ready) != nil || ready.T != "e2e_ready" {
+		return errors.New("e2e: invalid e2e_ready")
+	}
+	c.nextOutSeq = 1
+	c.nextInSeq = 1
+	return nil
 }
 
 func (c *Conn) sealAndSend(seq uint64, innerType byte, payload []byte) error {
@@ -533,6 +501,10 @@ func (c *Conn) sealAndSend(seq uint64, innerType byte, payload []byte) error {
 }
 
 func (c *Conn) writeEncrypted(mt int, payload []byte) error {
+	// Check before allocating or consuming an outbound sequence number.
+	if len(payload) > maxPayloadSize {
+		return errors.New("e2e: outbound message exceeds the frame limit")
+	}
 	var innerType byte
 	switch mt {
 	case websocket.TextMessage:
@@ -566,14 +538,6 @@ func (c *Conn) writeEncrypted(mt int, payload []byte) error {
 	return c.raw.WriteMessage(websocket.BinaryMessage, wire)
 }
 
-// SendRawText writes an un-sequenced outer TextMessage (used only for signed
-// e2e_chat room envelopes routed across sessions by the server's ChatHook).
-func (c *Conn) SendRawText(data []byte) error {
-	c.writeMu.Lock()
-	defer c.writeMu.Unlock()
-	return c.raw.WriteMessage(websocket.TextMessage, data)
-}
-
 func (c *Conn) openFrame(rawData []byte, wantSeq uint64) (byte, []byte, error) {
 	if len(rawData) < HeaderSize+1+TagSize || rawData[0] != FramePrefix {
 		return 0, nil, errors.New("e2e: invalid frame header")
@@ -591,6 +555,13 @@ func (c *Conn) openFrame(rawData []byte, wantSeq uint64) (byte, []byte, error) {
 	return plain[0], plain[1:], nil
 }
 
+// Group envelopes only cross a WebSocket within the authenticated peer stream.
+type chatTransfer struct {
+	T        string          `json:"t"`
+	ShareID  string          `json:"share_id,omitempty"`
+	Envelope json.RawMessage `json:"envelope"`
+}
+
 // WriteMessage encrypts data as a 0xE0 binary frame. In a guest session it
 // enforces the outbound GuestPolicy allowlist prior to encryption; in a
 // technician desktop session it also emits a signed e2e_chat envelope when the
@@ -606,7 +577,11 @@ func (c *Conn) WriteMessage(mt int, data []byte) error {
 	}
 	if c.role == "agent" && c.guestMode == "" && mt == websocket.TextMessage && c.chat != nil {
 		if env, ok := c.chat.MaybeEncodeUserChat(data); ok {
-			_ = c.SendRawText(env)
+			frame, err := json.Marshal(chatTransfer{T: "chat_group", Envelope: env})
+			if err != nil {
+				return err
+			}
+			return c.writeEncrypted(websocket.TextMessage, frame)
 		}
 	}
 	return nil
@@ -619,30 +594,6 @@ func (c *Conn) ReadMessage() (int, []byte, error) {
 		mt, rawData, err := c.raw.ReadMessage()
 		if err != nil {
 			return 0, nil, err
-		}
-		if mt == websocket.TextMessage {
-			if IsChatEnvelope(rawData) {
-				if c.role == "viewer" {
-					if c.OnChatEnvelope != nil {
-						c.OnChatEnvelope(rawData)
-					}
-					continue
-				}
-				if c.role == "agent" && c.guestMode == "" && c.chat != nil {
-					if msg, ok := c.chat.DecodeGuestEnvelope(rawData); ok {
-						synth, _ := json.Marshal(map[string]string{
-							"t":    "chat",
-							"from": "guest",
-							"name": msg.Name,
-							"text": msg.Text,
-						})
-						return websocket.TextMessage, synth, nil
-					}
-				}
-				continue
-			}
-			_ = c.raw.Close()
-			return 0, nil, errors.New("e2e: unexpected unencrypted text frame")
 		}
 		if mt != websocket.BinaryMessage {
 			_ = c.raw.Close()
@@ -676,6 +627,16 @@ func (c *Conn) ReadMessage() (int, []byte, error) {
 			}
 		}
 		if c.role == "agent" && c.guestMode == "" && innerMT == websocket.TextMessage && c.chat != nil {
+			var transfer chatTransfer
+			if json.Unmarshal(payload, &transfer) == nil && transfer.T == "chat_guest" {
+				if msg, ok := c.chat.DecodeGuestEnvelope(transfer.Envelope, transfer.ShareID); ok {
+					data, err := json.Marshal(map[string]string{
+						"t": "chat", "from": "guest", "name": msg.Name, "text": msg.Text,
+					})
+					return websocket.TextMessage, data, err
+				}
+				continue
+			}
 			if handled, reply := c.chat.HandleControl(payload); handled {
 				if len(reply) > 0 {
 					_ = c.writeEncrypted(websocket.TextMessage, reply)

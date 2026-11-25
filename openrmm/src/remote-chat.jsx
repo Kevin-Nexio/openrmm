@@ -20,14 +20,33 @@ const RemoteChat = (() => {
   const grantBytes = (grant) => concat(tuple('rmm-chat-grant-v1', grant.kid, grant.agent_id,
     grant.share_id, grant.name, point(grant.guest_sign_pub)), uint64(grant.exp));
   const certBytes = (cert) => tuple('rmm-chat-user-v1', cert.kid, cert.agent_id, point(cert.user_pub));
-  const msgBytes = (room, from, name, text, id) => tuple('rmm-chat-msg-v1', room.kid, room.agentID, from, name, text, id);
+  const msgBytes = (room, from, name, text, seq) => concat(tuple('rmm-chat-msg-v2', room.kid, room.agentID, from, name, text), uint64(seq));
   const chatAAD = (room) => tuple('rmm-e2e-chat-v1', room.kid, room.agentID);
   const gcm = (iv, aad) => ({ name: 'AES-GCM', iv, additionalData: aad });
+
+  const counterKey = (requestID) => 'rmm-guest-chat:' + requestID;
+  const newCounters = (kid) => ({ kid, sent: 0, received: [] });
+
+  function roomCounters(room) {
+    if (!room.requestID) return room.counters;
+    const counters = JSON.parse(globalThis.sessionStorage.getItem(counterKey(room.requestID)) || 'null');
+    if (!counters || counters.kid !== room.kid) throw new Error('chat epoch changed');
+    return counters;
+  }
+
+  function saveCounters(room, counters) {
+    if (room.requestID) globalThis.sessionStorage.setItem(counterKey(room.requestID), JSON.stringify(counters));
+  }
+
+  function forget(requestID) {
+    if (requestID) globalThis.sessionStorage.removeItem(counterKey(requestID));
+  }
 
   async function create(agentID, deviceKey) {
     const material = random(32);
     const signing = await keyPair('ECDSA');
-    return { kid: encode(random(16)), key: await aes(material), material, signing, techPub: signing.pub, agentID, deviceKey, seen: new Set() };
+    const kid = encode(random(16));
+    return { kid, key: await aes(material), material, signing, techPub: signing.pub, agentID, deviceKey, counters: newCounters(kid) };
   }
 
   async function userCert(room, userPub) {
@@ -74,7 +93,7 @@ const RemoteChat = (() => {
     const publicPoint = point(blob.epk);
     const { key, params } = await wrapCipher(privateKey, publicPoint, publicPoint, decode(blob.iv, 12));
     const contents = JSON.parse(decoder.decode(await subtle().decrypt(params, key, decode(blob.ct))));
-    const room = { kid: contents.kid, agentID: contents.agent_id, techPub: contents.tech_pub, seen: new Set() };
+    const room = { kid: contents.kid, agentID: contents.agent_id, techPub: contents.tech_pub, requestID: guest.requestId };
     const grant = contents.grant;
     if (contents.v !== 1 || !room.kid || room.kid !== status.chat_key_id ||
         room.agentID !== identity.agentID || contents.dev_ik !== identity.deviceKey ||
@@ -86,6 +105,8 @@ const RemoteChat = (() => {
     room.key = await aes(decode(contents.k, 32));
     room.signing = { key: await subtle().importKey('jwk', guest.keys.signKey, curve('ECDSA'), false, ['sign']) };
     room.grant = grant;
+    const old = JSON.parse(globalThis.sessionStorage.getItem(counterKey(guest.requestId)) || 'null');
+    if (old?.kid !== room.kid) saveCounters(room, newCounters(room.kid));
     return room;
   }
 
@@ -94,18 +115,23 @@ const RemoteChat = (() => {
     if (grant && !expiry(grant.exp)) throw new Error('chat invitation expired');
     const from = grant ? 'guest' : 'tech';
     const name = grant?.name || '';
-    const id = encode(random(16));
-    const sig = await sign(room.signing.key, msgBytes(room, from, name, text, id));
+    const counters = roomCounters(room);
+    const seq = counters.sent + 1;
+    if (!Number.isSafeInteger(seq) || seq < 1) throw new Error('invalid chat sequence');
+    counters.sent = seq;
+    saveCounters(room, counters);
+    const sig = await sign(room.signing.key, msgBytes(room, from, name, text, seq));
     const iv = random(12);
-    const ct = await subtle().encrypt(gcm(iv, chatAAD(room)), room.key, utf8(JSON.stringify({ from, name, text, id, sig, grant })));
+    const ct = await subtle().encrypt(gcm(iv, chatAAD(room)), room.key, utf8(JSON.stringify({ from, name, text, seq, sig, grant })));
     return { t: 'e2e_chat', v: 1, kid: room.kid, iv: encode(iv), ct: encode(new Uint8Array(ct)) };
   }
 
-  async function decrypt(room, envelope) {
+  async function decrypt(room, envelope, source) {
     if (envelope.v !== 1 || envelope.kid !== room.kid) return null;
-    const { from, text, id, sig, grant, user_cert: cert } = JSON.parse(decoder.decode(await subtle().decrypt(
+    const { from, text, seq, sig, grant, user_cert: cert } = JSON.parse(decoder.decode(await subtle().decrypt(
       gcm(decode(envelope.iv, 12), chatAAD(room)), room.key, decode(envelope.ct))));
-    if (!text || cleanText(text) !== text || typeof id !== 'string' || id.length > 64 || !id || room.seen.has(id)) return null;
+    if (typeof text !== 'string' || !text || cleanText(text) !== text || !Number.isSafeInteger(seq) || seq < 1 ||
+        (source && (source.from !== from || (from === 'guest' && source.share_id !== grant?.share_id)))) return null;
     let name = '', pub = room.techPub;
     if (from === 'guest') {
       if (!await validGrant(room, grant) || room.revoked?.has(grant.share_id)) return null;
@@ -116,13 +142,21 @@ const RemoteChat = (() => {
           !await verify(room.techPub, certBytes(cert), cert.sig)) return null;
       pub = cert.user_pub;
     } else if (from !== 'tech') return null;
-    if (!await verify(pub, msgBytes(room, from, name, text, id), sig)) return null;
-    room.seen.add(id);
-    if (room.seen.size > 256) room.seen.delete(room.seen.values().next().value);
+    if (!await verify(pub, msgBytes(room, from, name, text, seq), sig)) return null;
+    const counters = roomCounters(room);
+    const sender = counters.received.find((entry) => entry[0] === pub);
+    if (sender) {
+      if (seq <= sender[1]) return null;
+      sender[1] = seq;
+    } else {
+      if (counters.received.length >= 256) return null;
+      counters.received.push([pub, seq]);
+    }
+    saveCounters(room, counters);
     return { from, name, text };
   }
 
-  return { cleanText, guestKeys, create, userCert, wrap, unwrap, encrypt, decrypt };
+  return { cleanText, guestKeys, create, userCert, wrap, unwrap, encrypt, decrypt, forget };
 })();
 
 globalThis.RemoteChat = RemoteChat;

@@ -82,6 +82,9 @@ type guestSessions struct {
 	// chat feeds the worker that carries chat lines (api_guest_chat.go).
 	chat     chan chatLine
 	chatOnce sync.Once
+
+	roomMu sync.Mutex
+	rooms  map[string]*remoteChatRoom
 }
 
 type guestSession struct {
@@ -931,8 +934,13 @@ func (s *Server) guestRequest(w http.ResponseWriter, r *http.Request) {
 	if !ok {
 		return
 	}
+	status := sh.EffectiveStatus(time.Now())
+	if status != models.RemoteShareAccepted {
+		sh.WrappedChatKey, sh.ChatKeyID = "", ""
+	}
+	w.Header().Set("Cache-Control", "no-store")
 	writeJSON(w, http.StatusOK, map[string]any{
-		"status":           sh.EffectiveStatus(time.Now()),
+		"status":           status,
 		"mode":             sh.Mode,
 		"technician":       s.technicianName(r.Context(), sh.CreatedBy),
 		"expires_at":       sh.ExpiresAt,

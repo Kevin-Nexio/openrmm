@@ -37,6 +37,22 @@ const RemoteCrypto = (() => {
   const tuple = (domain, ...fields) => concat(utf8(domain + '\0'), ...fields.map(lengthPrefixed));
   const digest = async (raw) => new Uint8Array(await subtle().digest('SHA-256', raw));
   const fingerprint = async (pub) => encode((await digest(point(pub))).subarray(0, 16));
+  // Store only verified public identity keys. The check before connecting
+  // also prevents returning to legacy mode for a previously pinned device.
+  function deviceIdentity(agentID, deviceKey, remember = false) {
+    try {
+      const name = 'rmm-device-key:' + agentID;
+      const known = globalThis.localStorage.getItem(name);
+      if (known && known !== deviceKey) return false;
+      if (remember && !known && deviceKey) {
+        point(deviceKey);
+        globalThis.localStorage.setItem(name, deviceKey);
+      }
+      return true;
+    } catch {
+      return !deviceKey && !remember;
+    }
+  }
   const aes = (raw) => subtle().importKey('raw', raw, 'AES-GCM', false, ['encrypt', 'decrypt']);
   const expiry = (exp) => Number.isSafeInteger(exp) && exp > Math.floor(Date.now() / 1000);
   const signature = { name: 'ECDSA', hash: 'SHA-256' };
@@ -111,9 +127,10 @@ const RemoteCrypto = (() => {
 
   function connect(raw, context) {
     let keys, viewerNonce, peer, ready = false, closing = false, failed = false;
-    let nextIn = 1n, nextOut = 1n, chat = 0, inBytes = 0, outBytes = 0;
+    let nextIn = 1n, nextOut = 1n, inBytes = 0, outBytes = 0;
     let input = Promise.resolve(), output = Promise.resolve();
-    const maxQueue = 64 * 1024 * 1024;
+    const maxFrame = 32 * 1024 * 1024;
+    const maxQueue = 2 * maxFrame;
     const lastSequence = 0xffffffffffffffffn;
     const timeout = setTimeout(() => fail(), 60_000);
     const facade = {
@@ -125,7 +142,7 @@ const RemoteCrypto = (() => {
         if (this.readyState !== 1) return;
         const size = typeof data === 'string' ? data.length * 3 + 26 : data.byteLength + 26;
         outBytes += size;
-        if (outBytes + raw.bufferedAmount > maxQueue) { fail(); return; }
+        if (size > maxFrame || outBytes + raw.bufferedAmount > maxQueue) { fail(); return; }
         output = output.then(async () => {
           if (closing) return;
           if (nextOut === lastSequence) throw new Error('outbound sequence exhausted');
@@ -140,10 +157,6 @@ const RemoteCrypto = (() => {
         }
         if (this.readyState !== 1) throw new Error('remote session closed');
       },
-      sendChat(envelope) {
-        if (this.readyState !== 1) throw new Error('remote session closed');
-        raw.send(JSON.stringify(envelope));
-      },
     };
     function fail() {
       if (closing) return;
@@ -153,14 +166,8 @@ const RemoteCrypto = (() => {
     async function receive(data) {
       if (closing) return;
       if (typeof data === 'string') {
-        if (data.length > 8192) throw new Error('oversized handshake or chat data');
-        const packet = JSON.parse(data);
-        if (packet.t === 'e2e_chat' && context.kind === 'desktop') {
-          if (ready) facade.onchat?.(packet);
-          else if (++chat > 16) throw new Error('too many messages before handshake');
-          return;
-        }
         if (keys || !viewerNonce || data.length > 4096) throw new Error('unexpected cleartext frame');
+        const packet = JSON.parse(data);
         keys = await sessionKeys(context.ephemeral, viewerNonce, packet, context);
         peer = packet;
         const confirm = await seal(keys.outbound, 0n, context.id, '{"t":"e2e_ready"}');
@@ -189,7 +196,7 @@ const RemoteCrypto = (() => {
     raw.onmessage = ({ data }) => {
       const size = Math.max(26, typeof data === 'string' ? data.length * 3 : data.byteLength);
       inBytes += size;
-      if (inBytes > maxQueue) { fail(); return; }
+      if (size > maxFrame || inBytes > maxQueue) { fail(); return; }
       input = input.then(() => receive(data)).catch(fail).finally(() => { inBytes -= size; });
     };
     raw.onclose = (event) => {
@@ -201,7 +208,7 @@ const RemoteCrypto = (() => {
     return facade;
   }
 
-  return { utf8, decoder, random, encode, decode, point, concat, uint64, tuple, fingerprint, aes, expiry, keyPair, verify, sign, sharedKey, hkdf, connect };
+  return { utf8, decoder, random, encode, decode, point, concat, uint64, tuple, fingerprint, deviceIdentity, aes, expiry, keyPair, verify, sign, sharedKey, hkdf, connect };
 })();
 
 globalThis.RemoteCrypto = RemoteCrypto;

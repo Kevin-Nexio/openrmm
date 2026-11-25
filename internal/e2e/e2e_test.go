@@ -5,6 +5,7 @@ import (
 	"crypto/rand"
 	"encoding/base64"
 	"encoding/json"
+	"errors"
 	"io"
 	"net/http"
 	"net/http/httptest"
@@ -330,9 +331,6 @@ func TestMultiPartyChatBridgeAndAntiSpoofing(t *testing.T) {
 	}
 	agentConn := <-agentCh
 
-	viewerChatEnvelopes := make(chan []byte, 4)
-	viewerConn.OnChatEnvelope = func(b []byte) { viewerChatEnvelopes <- append([]byte(nil), b...) }
-
 	// Agent ReadMessage loop (simulating media_*.go reader).
 	agentInbound := make(chan []byte, 8)
 	go func() {
@@ -417,7 +415,7 @@ func TestMultiPartyChatBridgeAndAntiSpoofing(t *testing.T) {
 	}
 
 	// 4. Malicious guest tries to spoof "tech" using K_chat + SK_guest -> MUST fail!
-	spoofTechEnv, _, err := EncodeChatEnvelope(chatKey, kid, "agent-1", "tech", "", "Type admin password", guestSignPriv, nil, nil)
+	spoofTechEnv, err := EncodeChatEnvelope(chatKey, kid, "agent-1", "tech", "", "Type admin password", guestSignPriv, 1, nil, nil)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -426,11 +424,15 @@ func TestMultiPartyChatBridgeAndAntiSpoofing(t *testing.T) {
 	}
 
 	// 5. Valid guest message delivered via outer e2e_chat to sidecar -> surfaces as guest chat!
-	guestEnv, _, err := EncodeChatEnvelope(chatKey, kid, "agent-1", "guest", "SpoofedName", "Hello\nfrom Alice", guestSignPriv, &grant, nil)
+	guestEnv, err := EncodeChatEnvelope(chatKey, kid, "agent-1", "guest", "SpoofedName", "Hello\nfrom Alice", guestSignPriv, 1, &grant, nil)
 	if err != nil {
 		t.Fatal(err)
 	}
-	if err := viewerConn.SendRawText(guestEnv); err != nil {
+	guestFrame, err := json.Marshal(chatTransfer{T: "chat_guest", ShareID: grant.ShareID, Envelope: guestEnv})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := viewerConn.WriteMessage(websocket.TextMessage, guestFrame); err != nil {
 		t.Fatal(err)
 	}
 	select {
@@ -446,27 +448,40 @@ func TestMultiPartyChatBridgeAndAntiSpoofing(t *testing.T) {
 		t.Fatal("sidecar did not receive decrypted guest chat")
 	}
 
-	// 6. Local OS user types in native window -> sidecar emits signed e2e_chat for guests!
-	if err := agentConn.WriteMessage(websocket.TextMessage, []byte(`{"t":"chat","from":"user","text":"Hi Alice!"}`)); err != nil {
+	// Replaying a previously authenticated group envelope must not deliver it.
+	if err := viewerConn.WriteMessage(websocket.TextMessage, guestFrame); err != nil {
 		t.Fatal(err)
 	}
-	if err := agentConn.WriteMessage(websocket.TextMessage, []byte(`{"t":"hello"}`)); err != nil {
+	marker := `{"t":"kf"}`
+	if err := viewerConn.WriteMessage(websocket.TextMessage, []byte(marker)); err != nil {
+		t.Fatal(err)
+	}
+	select {
+	case got := <-agentInbound:
+		if string(got) != marker {
+			t.Fatal("replayed guest message reached the sidecar")
+		}
+	case <-time.After(3 * time.Second):
+		t.Fatal("legitimate frame after the replay was not delivered")
+	}
+
+	// The local user's signed group copy travels inside the peer encryption.
+	local := `{"t":"chat","from":"user","text":"Hi Alice!"}`
+	if err := agentConn.WriteMessage(websocket.TextMessage, []byte(local)); err != nil {
 		t.Fatal(err)
 	}
 	_ = rawViewer.SetReadDeadline(time.Now().Add(3 * time.Second))
-	for _, want := range []string{`{"t":"chat","from":"user","text":"Hi Alice!"}`, `{"t":"hello"}`} {
-		if _, data, err := viewerConn.ReadMessage(); err != nil || string(data) != want {
-			t.Fatalf("viewer ReadMessage = (%s, %v), want %s", data, err, want)
-		}
+	if _, data, err := viewerConn.ReadMessage(); err != nil || string(data) != local {
+		t.Fatalf("local chat missing: %s %v", data, err)
 	}
-	select {
-	case userEnv := <-viewerChatEnvelopes:
-		verified, err := DecodeChatEnvelope(userEnv, chatKey, kid, "agent-1", techSignPub, nil)
-		if err != nil || verified.From != "user" || verified.Text != "Hi Alice!" {
-			t.Fatalf("guest DecodeChatEnvelope(user) = (%+v, %v)", verified, err)
-		}
-	case <-time.After(3 * time.Second):
-		t.Fatal("sidecar did not emit signed e2e_chat for user reply")
+	_, data, err := viewerConn.ReadMessage()
+	var transfer chatTransfer
+	if err != nil || json.Unmarshal(data, &transfer) != nil || transfer.T != "chat_group" {
+		t.Fatalf("invalid group copy: %v", err)
+	}
+	verified, err := DecodeChatEnvelope(transfer.Envelope, chatKey, kid, "agent-1", techSignPub, nil)
+	if err != nil || verified.From != "user" || verified.Text != "Hi Alice!" {
+		t.Fatalf("guest DecodeChatEnvelope(user) = (%+v, %v)", verified, err)
 	}
 }
 
@@ -502,5 +517,37 @@ func TestHandshakeAgentRequiresBrokeredViewerKey(t *testing.T) {
 	}
 	if err := <-viewerResult; err == nil {
 		t.Fatal("unauthorized viewer completed the handshake")
+	}
+}
+
+func TestAgentHandshakeEnforcesReadLimitBeforeParsing(t *testing.T) {
+	wsURL, _ := startPipeServer(t)
+	identityPriv, identityPub, err := GenerateKeyPair()
+	if err != nil {
+		t.Fatal(err)
+	}
+	_, viewerPub, err := GenerateKeyPair()
+	if err != nil {
+		t.Fatal(err)
+	}
+	opts, err := NewAgentHandshakeFromIdentity("bounded", "agent", "desktop", "", viewerPub, identityPriv, identityPub, time.Minute)
+	if err != nil {
+		t.Fatal(err)
+	}
+	rawAgent, _, err := websocket.DefaultDialer.Dial(wsURL, nil)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer rawAgent.Close()
+	rawViewer, _, err := websocket.DefaultDialer.Dial(wsURL, nil)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer rawViewer.Close()
+	if err := rawViewer.WriteMessage(websocket.TextMessage, bytes.Repeat([]byte{' '}, handshakeReadLimit+1)); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := HandshakeAgent(rawAgent, opts); !errors.Is(err, websocket.ErrReadLimit) {
+		t.Fatalf("handshake should reject messages at the WebSocket read limit: %v", err)
 	}
 }

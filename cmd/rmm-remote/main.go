@@ -29,6 +29,7 @@ import (
 	"encoding/json"
 	"flag"
 	"fmt"
+	"io"
 	"log"
 	"net/http"
 	"os"
@@ -156,16 +157,25 @@ type sessionOptions struct {
 // sessionParams is what the agent hands to a sidecar via -session.
 type sessionParams = e2e.SessionParams
 
-// readSessionFile consumes the file: the ticket and ephemeral delegation scalar
-// are single-use, so the file contents are wiped before unlinking.
+// readSessionFile reads the one-time parameters from a single handle. Never
+// reopen the pathname for writing during cleanup.
 func readSessionFile(path string) (sessionParams, error) {
 	var p sessionParams
-	b, err := os.ReadFile(path)
-	_ = os.WriteFile(path, nil, 0o600)
+	f, err := os.Open(path)
+	if err != nil {
+		return p, err
+	}
+	const maxSessionParams = 16 << 10
+	b, err := io.ReadAll(io.LimitReader(f, maxSessionParams+1))
+	_ = f.Close()
 	_ = os.Remove(path)
 	if err != nil {
 		return p, err
 	}
+	if len(b) > maxSessionParams {
+		return p, fmt.Errorf("session parameters exceed %d bytes", maxSessionParams)
+	}
+
 	if err := json.Unmarshal(b, &p); err != nil {
 		return p, err
 	}

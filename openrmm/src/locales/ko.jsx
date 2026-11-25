@@ -433,6 +433,7 @@
   'viewer.fullscreenDenied': "브라우저가 전체 화면 모드를 거부했습니다.",
   'viewer.encrypted': "종단 간 암호화 적용됨",
   'viewer.encryptionAgentUpdate': "암호화된 세션을 시작하려면 에이전트를 업데이트하세요",
+  'viewer.deviceKeyChanged': '장치의 ID 키가 변경되었거나 확인할 수 없습니다',
   'viewer.encryptionFailed': "암호화된 연결을 설정할 수 없습니다",
   'viewer.encryptedChatPending': "암호화된 채팅에 연결하는 중입니다",
   'viewer.uploadFailed': "업로드 실패",

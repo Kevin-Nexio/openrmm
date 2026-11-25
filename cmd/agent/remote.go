@@ -1,8 +1,6 @@
 package main
 
 import (
-	"crypto/rand"
-	"encoding/hex"
 	"encoding/json"
 	"errors"
 	"fmt"
@@ -246,20 +244,33 @@ func (a *agent) writeE2ESessionFile(rs protocol.RemoteStartMsg, relay, ticket st
 	if a.statePath != "" {
 		baseDir = filepath.Dir(a.statePath)
 	}
-	dir := filepath.Join(baseDir, "remote-sessions")
-	if err := os.MkdirAll(dir, 0o700); err != nil {
+	// A fresh directory inherits the protected install directory's ACL on
+	// Windows. Never reuse a directory left by an earlier installation.
+	dir, err := os.MkdirTemp(baseDir, "remote-session-")
+	if err != nil {
 		return "", err
 	}
-	var id [12]byte
-	if _, err := rand.Read(id[:]); err != nil {
+	path := filepath.Join(dir, "parameters.json")
+	cleanup := func() {
+		_ = os.Remove(path)
+		_ = os.Remove(dir)
+	}
+	if err := protectE2ESessionDir(dir); err != nil {
+		cleanup()
 		return "", err
 	}
-	path := filepath.Join(dir, "session-"+hex.EncodeToString(id[:])+".json")
-	if err := os.WriteFile(path, body, 0o600); err != nil {
+	file, err := os.OpenFile(path, os.O_WRONLY|os.O_CREATE|os.O_EXCL, 0o600)
+	if err != nil {
+		cleanup()
 		return "", err
 	}
-	// Safety cleanup if a spawned child crashes before reading its one-time file.
-	time.AfterFunc(2*time.Minute, func() { _ = os.Remove(path) })
+	_, writeErr := file.Write(body)
+	if err := errors.Join(writeErr, file.Close()); err != nil {
+		cleanup()
+		return "", err
+	}
+	// Clean up even if a child crashes before consuming its parameters.
+	time.AfterFunc(2*time.Minute, cleanup)
 	return path, nil
 }
 

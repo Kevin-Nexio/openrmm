@@ -386,9 +386,10 @@ exposes no secrets).
 
   Native sessions to agents with pinned keys use end-to-end authenticated
   encryption for desktop, terminal and file transfer. Guest chat uses a separate
-  room key sealed to each approved guest. The application origin and the
-  authenticated control channel remain trusted for session authorization and
-  public-key distribution. The relay can still observe traffic metadata.
+  room key sealed to each approved guest and rotates it on membership changes.
+  Group messages are encrypted before passing through the authenticated
+  application API. The application origin and control channel remain trusted
+  for session authorization and public-key distribution. The relay can still observe traffic metadata.
   Preferred mode allows legacy sessions with older agents. See
   [Remote access](08-remote-access.md#end-to-end-encryption-for-native-sessions).
 
