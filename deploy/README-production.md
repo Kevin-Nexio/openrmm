@@ -531,6 +531,11 @@ images/tag. Once a new migration was applied, stop writers and use `restore.sh`
 with the verified pre-upgrade backup before starting the previous application.
 Do not manually delete `schema_migrations` rows or change their checksums.
 
+A database can also contain settings the previous binary cannot read, even if
+the schema version stayed the same. Before reverting to **v0.12.1** from a version
+with explicit Client/Site alert-rule replacements, follow the
+[alert rule rollback steps](../docs/24-alert-rules.md#rollback-to-v0121).
+
 ## 9. Incident runbook
 
 1. Restrict or disable affected hostnames at the TLS edge; preserve operator

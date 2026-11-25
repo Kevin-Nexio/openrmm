@@ -20,6 +20,7 @@ const editProposal = { id: 'edit-check-e2e', kind: 'check', target_id: sharedChe
   status: 'pending', reason: 'Make the memory check easier to identify', proposed_by: 'ai:smoke', created_at: '2026-11-12T00:00:00Z' };
 
 const ruleChecks = [];
+let overrideManager = true;
 const extraChecks = Array.from({ length: 60 }, (_, i) => ({ id: 'sample-rule-' + (i + 1), name: 'Monitor ' + String(i + 1).padStart(2, '0'), type: 'ping', agent_id: 'dev-1', config: { host: '127.0.0.1' }, enabled: true, interval_sec: 300 }));
 const ruleDefaults = Object.fromEntries(['connectivity', 'job_failure', 'patch_failure', 'reboot_pending', 'agent_outdated'].map((type) => [type, { type, config: type === 'connectivity' ? { mode: 'alert', severity: 'error', after_min: 3 } : { mode: 'ignore', severity: 'warning' } }]));
 let rulePrefs = { mode: 'all', include_defaults: true, check_ids: [] };
@@ -199,6 +200,7 @@ const server = createServer(async (req, res) => {
       if (pathname === '/api/policies') return json(res, 200, { policies: [aiPolicy, sharedPolicy] });
       if (pathname === '/api/policies/pol-shared-e2e/assignments') return json(res, 200, { assignments: [] });
       if (pathname === '/api/policies/pol-shared-e2e/exclusions') return json(res, 200, { exclusions: [] });
+      if (pathname.startsWith('/api/checks/') && req.method === 'PUT') { const check = ruleChecks.find((c) => c.id === pathname.split('/').pop()); Object.assign(check, payload); return json(res, 200, check); }
       if (pathname === '/api/policies/pol-ai/assignments') {
         if (req.method === 'POST') {
           const a = { id: 'asg-' + (policyAssignments.length + 1), policy_id: 'pol-ai', ...payload };
@@ -210,7 +212,7 @@ const server = createServer(async (req, res) => {
       if (pathname === '/api/policies/pol-ai/review') {
         policyReviews++;
         return json(res, 200, { fingerprint: 'fp-' + policyReviews, policy: aiPolicy, assignments: [{ id: 'asg-1', policy_id: 'pol-ai', scope_type: 'agent', scope_id: 'dev-1' }],
-          tasks: policyReviews === 1 ? policyReviewTasks.slice(0, 1) : policyReviewTasks, checks: [], pending_tasks: policyReviews === 1 ? 1 : 2, pending_checks: 0 });
+          tasks: policyReviews === 1 ? policyReviewTasks.slice(0, 1) : policyReviewTasks, checks: ruleChecks.filter((c) => c.attachments?.some((a) => a.policy_id === 'pol-ai')), pending_tasks: policyReviews === 1 ? 1 : 2, pending_checks: 0 });
       }
       if (pathname === '/api/policies/pol-ai/activate' && req.method === 'POST') {
         if (payload?.fingerprint !== 'fp-' + policyReviews || policyReviews < 2) return json(res, 409, { error: 'conflict: it changed after this review was opened; review it again' });
@@ -248,7 +250,7 @@ const server = createServer(async (req, res) => {
       if (pathname === '/api/tasks/task-ai' && req.method === 'PUT') {
         Object.assign(aiTask, payload, { approved_by: user.id }); return json(res, 200, aiTask);
       }
-      if (pathname === '/api/alert-defaults') return json(res, 200, { defaults: ruleDefaults, can_manage: true });
+      if (pathname === '/api/alert-defaults') return json(res, 200, { defaults: ruleDefaults, can_manage: overrideManager });
       if (pathname.startsWith('/api/alert-defaults/') && req.method === 'PUT') {
         const type = pathname.split('/').at(-1);
         ruleDefaults[type] = { type, config: payload };
@@ -441,6 +443,45 @@ async function runMobileChrome(chrome, url, { width = 375, flow } = {}) {
 
 // Actual browser interactions against the bundled console and HTTP fixture.
 // This script starts listeners and is run only by the CI smoke step.
+async function parentRuleOverrideBrowserFlow() {
+  const wait = async (fn) => { for (let i=0;i<150;i++) { const x=fn(); if(x) return x; await new Promise((r)=>setTimeout(r,50)); } throw new Error('Parent override timed out: '+fn); };
+  const button = (text, root=document) => [...root.querySelectorAll('button')].find((el)=>el.textContent.trim()===text);
+  const choose = (el,value) => { Object.getOwnPropertyDescriptor(HTMLSelectElement.prototype,'value').set.call(el,value); el.dispatchEvent(new Event('change',{bubbles:true})); };
+  (await wait(()=>button('Checks'))).click();
+  (await wait(()=>button('New check'))).click();
+  choose(await wait(()=>[...document.querySelectorAll('select')].find((el)=>[...el.options].some((o)=>o.value==='connectivity'))),'connectivity');
+  (await wait(()=>button('Add a policy or device…'))).click();
+  (await wait(()=>button('AI workstations (policy)'))).click();
+  const label = await wait(()=>[...document.querySelectorAll('label')].find((el)=>el.textContent.includes('Replace the parent rule for Client/Site')));
+  label.querySelector('button').click();
+  const enabled=[...document.querySelectorAll('label')].find((el)=>el.textContent.trim()==='Enabled'); enabled.querySelector('button').click();
+  const name=document.querySelector('input[placeholder="Device connectivity"]');
+  Object.getOwnPropertyDescriptor(HTMLInputElement.prototype,'value').set.call(name,'Site explicit exception');name.dispatchEvent(new Event('input',{bubbles:true}));
+  (await wait(()=>button('Create check')&&!button('Create check').disabled&&button('Create check'))).click();
+  await wait(()=>!button('Create check'));
+  (await wait(()=>[...document.querySelectorAll('tr')].find((el)=>el.textContent.includes('Site explicit exception')))).click();
+  (await wait(()=>button('Edit'))).click();
+  (await wait(()=>button('Save check')&&!button('Save check').disabled&&button('Save check'))).click();
+  await wait(()=>!button('Save check'));
+  (await wait(()=>button('Policies'))).click();
+  (await wait(()=>[...document.querySelectorAll('button')].find((el)=>el.textContent.includes('AI workstations')))).click();
+  (await wait(()=>button('Activate'))).click();
+  const review=await wait(()=>[...document.querySelectorAll('[role="dialog"]')].find((d)=>(d.getAttribute('aria-label')||'').startsWith('Review and activate')));
+  await wait(()=>review.textContent.includes('Replace the parent rule for Client/Site') && review.textContent.includes('override_parent'));
+  document.documentElement.dataset.parentOverrideE2e='passed'; return true;
+}
+
+async function scopedParentRuleBrowserFlow() {
+  const wait=async(fn)=>{for(let i=0;i<150;i++){const x=fn();if(x)return x;await new Promise((r)=>setTimeout(r,50));}throw new Error('Scoped override timed out: '+fn);};
+  (await wait(()=>[...document.querySelectorAll('button')].find((el)=>el.textContent.trim()==='Checks'))).click();
+  const row=await wait(()=>[...document.querySelectorAll('tr')].find((el)=>el.textContent.includes('Site explicit exception')));
+  if(!row.querySelector('button')?.disabled)throw new Error('Scoped rule toggle was not disabled');
+  row.click();
+  await wait(()=>document.body.textContent.includes('Explicit parent rule replacement'));
+  if([...document.querySelectorAll('button')].some((el)=>el.textContent.trim()==='Edit'))throw new Error('Scoped rule edit was offered');
+  document.documentElement.dataset.scopedOverrideE2e='passed';return true;
+}
+
 async function alertRulesBrowserFlow() {
   const wait = async (fn) => {
     for (let i = 0; i < 150; i++) {
@@ -1348,6 +1389,20 @@ try {
     assert.ok(suppressions.find((s) => s.id === 'sup-active').canceled_at, 'the active window was canceled');
     const compatFlow = await runMobileChrome(chrome, baseURL + '/authenticated/', { width: 1280, flow: tailwindCompatBrowserFlow });
     assertBrowser(compatFlow, /data-tailwind-compat-e2e="passed"/);
+    policyAssignments.splice(0, policyAssignments.length, { id: 'override-site', policy_id: 'pol-ai', scope_type: 'site', scope_id: 'site-1' });
+    aiPolicy.enabled = false;
+    const overrideFlow = await runMobileChrome(chrome, baseURL + '/authenticated/', { width: 1280, flow: parentRuleOverrideBrowserFlow });
+    assertBrowser(overrideFlow, /data-parent-override-e2e="passed"/);
+    const overrideRequest = apiRequests.find((r) => r.method === 'POST' && r.pathname === '/api/checks' && r.payload?.name === 'Site explicit exception');
+    assert.equal(overrideRequest?.payload.config.override_parent, true);
+    assert.deepEqual(overrideRequest?.payload.attachments, [{policy_id:'pol-ai'}]);
+    assert.equal(overrideRequest?.payload.enabled, false);
+    assert.ok(apiRequests.some((r) => r.method === 'PUT' && r.pathname.startsWith('/api/checks/') && r.payload?.config.override_parent === true && r.payload?.enabled === false));
+    overrideManager = false;
+    const mutationCount = apiRequests.filter((r) => r.method !== 'GET').length;
+    const scopedFlow = await runMobileChrome(chrome, baseURL + '/authenticated/', { width: 1280, flow: scopedParentRuleBrowserFlow });
+    assertBrowser(scopedFlow, /data-scoped-override-e2e="passed"/);
+    assert.equal(apiRequests.filter((r) => r.method !== 'GET').length, mutationCount);
     assert.ok(apiRequests.some((request) => request.pathname === '/api/me' && request.token === 'smoke-token'), 'authenticated API requests must include the bearer token');
     assert.ok(apiRequests.some((request) => request.pathname === '/api/me' && request.token === 'expire-token'), '401 scenario must exercise an authenticated request');
   }

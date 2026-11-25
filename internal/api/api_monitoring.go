@@ -219,9 +219,12 @@ func (s *Server) createCheck(w http.ResponseWriter, r *http.Request) {
 		writeErr(w, http.StatusBadRequest, err.Error())
 		return
 	}
+	if c.OverridesParent() && !s.requireUnrestricted(w, r, "parent rule replacements") {
+		return
+	}
 	out, err := s.store.CreateCheck(r.Context(), &c)
 	if err != nil {
-		writeErr(w, http.StatusBadRequest, err.Error())
+		writeConfigError(w, err)
 		return
 	}
 	s.auditServerRule(r, out, "create")
@@ -247,14 +250,18 @@ func (s *Server) updateCheck(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	c.ID = id
+	c.Attachments = existing.Attachments
 	applyCheckDefaults(body, &c, existing)
 	if err := models.ValidateCheck(&c); err != nil {
 		writeErr(w, http.StatusBadRequest, err.Error())
 		return
 	}
+	if c.OverridesParent() && !s.requireUnrestricted(w, r, "parent rule replacements") {
+		return
+	}
 	c.ApprovedBy = acceptProposal(r, existing.ProposedBy, existing.ApprovedBy, c.Enabled)
 	if err := s.store.UpdateCheck(r.Context(), &c); err != nil {
-		writeErr(w, http.StatusInternalServerError, err.Error())
+		writeConfigError(w, err)
 		return
 	}
 	if existing.ProposedBy != "" && existing.ApprovedBy == "" && c.ApprovedBy != "" {
