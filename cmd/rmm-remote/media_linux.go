@@ -9,6 +9,8 @@ import (
 	"time"
 
 	"github.com/gorilla/websocket"
+
+	"github.com/p1ngu/rmm/internal/e2e"
 )
 
 // runMedia is the Linux (X11) media engine with seat-following: it attaches to
@@ -19,7 +21,7 @@ import (
 // chVideo tile frames + {t:"kf"}) so the same viewer drives both, including file
 // transfer (transfer_linux.go) and in-session chat (a native X11 window,
 // chat_linux.go).
-func runMedia(conn *websocket.Conn, opts sessionOptions) error {
+func runMedia(conn e2e.WSConn, opts sessionOptions) error {
 	allowFiles := opts.allowFiles
 	clipMirror := &clipboardMirror{}
 	type omsg struct {
@@ -148,16 +150,18 @@ func runMedia(conn *websocket.Conn, opts sessionOptions) error {
 
 	// Mirror the endpoint's clipboard to the technician for as long as the
 	// session lasts, so a copy on the remote screen can be pasted at home.
-	go watchClipboard(clipMirror, func(text string) {
-		b, err := json.Marshal(map[string]any{"t": "clip", "text": text})
-		if err != nil {
-			return
-		}
-		select {
-		case out <- omsg{websocket.TextMessage, b}:
-		case <-done:
-		}
-	}, done)
+	if opts.clipboard {
+		go watchClipboard(clipMirror, func(text string) {
+			b, err := json.Marshal(map[string]any{"t": "clip", "text": text})
+			if err != nil {
+				return
+			}
+			select {
+			case out <- omsg{websocket.TextMessage, b}:
+			case <-done:
+			}
+		}, done)
+	}
 
 	// reader / dispatcher
 	go func() {
@@ -185,6 +189,9 @@ func runMedia(conn *websocket.Conn, opts sessionOptions) error {
 			}
 			switch e.T {
 			case "clip":
+				if !opts.clipboard {
+					continue
+				}
 				var cm struct {
 					Text  string `json:"text"`
 					Paste bool   `json:"paste"`

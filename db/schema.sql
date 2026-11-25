@@ -1432,3 +1432,16 @@ CREATE TABLE IF NOT EXISTS edit_proposals (
 );
 CREATE UNIQUE INDEX IF NOT EXISTS uq_edit_proposals_open ON edit_proposals (kind, target_id) WHERE status = 'pending';
 CREATE INDEX IF NOT EXISTS idx_edit_proposals_status ON edit_proposals (status, created_at DESC);
+
+-- Migration 042: end-to-end encryption for native remote sessions and guest chat.
+ALTER TABLE agents
+    ADD COLUMN IF NOT EXISTS device_public_key TEXT NOT NULL DEFAULT '';
+
+ALTER TABLE remote_sessions
+    ADD COLUMN IF NOT EXISTS e2e BOOLEAN NOT NULL DEFAULT false;
+
+ALTER TABLE remote_shares
+    ADD COLUMN IF NOT EXISTS guest_public_key TEXT NOT NULL DEFAULT '',
+    ADD COLUMN IF NOT EXISTS guest_sign_key TEXT NOT NULL DEFAULT '',
+    ADD COLUMN IF NOT EXISTS wrapped_chat_key TEXT NOT NULL DEFAULT '',
+    ADD COLUMN IF NOT EXISTS chat_key_id TEXT NOT NULL DEFAULT '';

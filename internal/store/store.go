@@ -106,7 +106,8 @@ func scanAgent(row pgx.Row) (*models.Agent, error) {
 	var a models.Agent
 	err := row.Scan(&a.ID, &a.Hostname, &a.Description, &a.Note, &a.OS, &a.Arch, &a.Version, &a.Status,
 		&a.SiteID, &a.GroupID, &a.Tags, &a.MeshID, &a.LastSeen, &a.RevokedAt, &a.CreatedAt, &a.EnrollTokenID, &a.MonitoringScopeSince,
-		&a.OSRole, &a.RoleOverride, &a.LoggedInUser, &a.LoggedInUserSince, &a.LastLoggedInUser, &a.LastLoggedInUserAt, &a.LastBootAt)
+		&a.OSRole, &a.RoleOverride, &a.LoggedInUser, &a.LoggedInUserSince, &a.LastLoggedInUser, &a.LastLoggedInUserAt, &a.LastBootAt,
+		&a.DevicePublicKey)
 	if errors.Is(err, pgx.ErrNoRows) {
 		return nil, ErrNotFound
 	}
@@ -117,7 +118,7 @@ func scanAgent(row pgx.Row) (*models.Agent, error) {
 	return &a, nil
 }
 
-const agentCols = `id, hostname, description, note, os, arch, version, status, site_id, group_id, tags, mesh_id, last_seen, revoked_at, created_at, enroll_token_id, monitoring_scope_since, os_role, role_override, logged_in_user, logged_in_user_since, last_logged_in_user, last_logged_in_user_at, last_boot_at`
+const agentCols = `id, hostname, description, note, os, arch, version, status, site_id, group_id, tags, mesh_id, last_seen, revoked_at, created_at, enroll_token_id, monitoring_scope_since, os_role, role_override, logged_in_user, logged_in_user_since, last_logged_in_user, last_logged_in_user_at, last_boot_at, device_public_key`
 
 // SetAgentMeta updates the operator-editable identification fields: description
 // (shown in the device list) and note (a private observation, detail-only).
@@ -346,6 +347,42 @@ func (s *Store) TouchAgentSession(ctx context.Context, id string, user *string) 
 // ErrAgentOSChanged reports a re-registration that named a different OS than
 // the device enrolled with. The connection goes on; the OS on record is kept.
 var ErrAgentOSChanged = errors.New("the device reported a different OS than it enrolled with; the enrolled OS is kept")
+
+// ErrAgentKeyMismatch reports an agent presenting a different E2E identity
+// public key than the one already pinned for its agent_id.
+var ErrAgentKeyMismatch = errors.New("device E2E identity key does not match the pinned key")
+
+// VerifyOrPinAgentPublicKey enforces Trust-On-First-Use for an agent's E2E
+// identity key. On first contact with a non-empty pubKey it pins the key and
+// reports pinned=true. Subsequent registrations with a different non-empty key
+// fail with ErrAgentKeyMismatch; a pinned key is never cleared or overwritten,
+// so E2E remains permanently required for remote sessions on that device.
+func (s *Store) VerifyOrPinAgentPublicKey(ctx context.Context, id, pubKey string) (bool, error) {
+	if pubKey == "" {
+		return false, nil
+	}
+	tag, err := s.pool.Exec(ctx,
+		`UPDATE agents SET device_public_key=$2
+		 WHERE id=$1 AND revoked_at IS NULL AND device_public_key=''`, id, pubKey)
+	if err != nil {
+		return false, err
+	}
+	if tag.RowsAffected() == 1 {
+		return true, nil
+	}
+	var current string
+	if err := s.pool.QueryRow(ctx,
+		`SELECT device_public_key FROM agents WHERE id=$1 AND revoked_at IS NULL`, id).Scan(&current); err != nil {
+		if errors.Is(err, pgx.ErrNoRows) {
+			return false, ErrNotFound
+		}
+		return false, err
+	}
+	if current != pubKey {
+		return false, ErrAgentKeyMismatch
+	}
+	return false, nil
+}
 
 // RefreshAgentInfo updates the metadata an agent reports at (re-)registration,
 // so a binary upgrade is reflected (version/hostname/arch otherwise stay
@@ -796,10 +833,10 @@ func (s *Store) GetInventory(ctx context.Context, agentID string) (*models.Inven
 func (s *Store) CreateRemoteSession(ctx context.Context, rs *models.RemoteSession) error {
 	rs.ID = newID()
 	_, err := s.pool.Exec(ctx,
-		`INSERT INTO remote_sessions (id, agent_id, provider, status, token, connect_url, created_by, expires_at, viewer_ticket_hash, agent_ticket_hash)
-		 VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10)`,
+		`INSERT INTO remote_sessions (id, agent_id, provider, status, token, connect_url, created_by, expires_at, viewer_ticket_hash, agent_ticket_hash, e2e)
+		 VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11)`,
 		rs.ID, rs.AgentID, rs.Provider, rs.Status, rs.Token, rs.ConnectURL, rs.CreatedBy, rs.ExpiresAt,
-		hashIfSet(rs.ViewerTicket), hashIfSet(rs.AgentTicket))
+		hashIfSet(rs.ViewerTicket), hashIfSet(rs.AgentTicket), rs.E2E)
 	return err
 }
 
@@ -814,7 +851,7 @@ func hashIfSet(token string) *string {
 func scanRemoteSession(row pgx.Row) (*models.RemoteSession, error) {
 	var rs models.RemoteSession
 	err := row.Scan(&rs.ID, &rs.AgentID, &rs.Provider, &rs.Status, &rs.Token, &rs.ConnectURL,
-		&rs.CreatedBy, &rs.CreatedAt, &rs.ExpiresAt)
+		&rs.CreatedBy, &rs.CreatedAt, &rs.ExpiresAt, &rs.E2E)
 	if errors.Is(err, pgx.ErrNoRows) {
 		return nil, ErrNotFound
 	}
@@ -824,7 +861,7 @@ func scanRemoteSession(row pgx.Row) (*models.RemoteSession, error) {
 	return &rs, nil
 }
 
-const remoteSessionCols = `id, agent_id, provider, status, token, connect_url, created_by, created_at, expires_at`
+const remoteSessionCols = `id, agent_id, provider, status, token, connect_url, created_by, created_at, expires_at, e2e`
 
 // GetRemoteSessionForAuthorization returns non-secret session metadata used to
 // revalidate a viewer's current permission and device scope before ticket use.

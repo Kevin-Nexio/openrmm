@@ -35,15 +35,15 @@ func TestEnrollAgentRespectsTheDeviceLimitIntegration(t *testing.T) {
 		t.Fatal(err)
 	}
 	for i, name := range []string{"pc-1", "pc-2"} {
-		if _, err := st.EnrollAgent(ctx, tok.Token, 2, name, "windows", "amd64", "0.8.0", "hash-"+name); err != nil {
+		if _, err := st.EnrollAgent(ctx, tok.Token, 2, name, "windows", "amd64", "0.8.0", "hash-"+name, ""); err != nil {
 			t.Fatalf("enrolment %d within the limit: %v", i+1, err)
 		}
 	}
-	if _, err := st.EnrollAgent(ctx, tok.Token, 2, "pc-3", "windows", "amd64", "0.8.0", "hash-pc-3"); !errors.Is(err, devicelimit.ErrLimitReached) {
+	if _, err := st.EnrollAgent(ctx, tok.Token, 2, "pc-3", "windows", "amd64", "0.8.0", "hash-pc-3", ""); !errors.Is(err, devicelimit.ErrLimitReached) {
 		t.Fatalf("the third enrolment must be refused, got %v", err)
 	}
 	// Without a valid token the console says nothing about its limit.
-	if _, err := st.EnrollAgent(ctx, "not-a-token", 2, "pc-x", "windows", "amd64", "0.8.0", "hash-pc-x"); !errors.Is(err, ErrNotFound) {
+	if _, err := st.EnrollAgent(ctx, "not-a-token", 2, "pc-x", "windows", "amd64", "0.8.0", "hash-pc-x", ""); !errors.Is(err, ErrNotFound) {
 		t.Fatalf("an invalid token on a full console must read as an invalid token, got %v", err)
 	}
 	var uses int
@@ -65,15 +65,15 @@ func TestEnrollAgentRespectsTheDeviceLimitIntegration(t *testing.T) {
 	if err := st.DeleteAgent(ctx, agents[0].ID); err != nil {
 		t.Fatal(err)
 	}
-	if _, err := st.EnrollAgent(ctx, tok.Token, 2, "pc-3", "windows", "amd64", "0.8.0", "hash-pc-3"); err != nil {
+	if _, err := st.EnrollAgent(ctx, tok.Token, 2, "pc-3", "windows", "amd64", "0.8.0", "hash-pc-3", ""); err != nil {
 		t.Fatalf("a freed place can be taken: %v", err)
 	}
 
 	// No limit: anything goes, and an exhausted or unknown token is still refused.
-	if _, err := st.EnrollAgent(ctx, tok.Token, 0, "pc-4", "linux", "amd64", "0.8.0", "hash-pc-4"); err != nil {
+	if _, err := st.EnrollAgent(ctx, tok.Token, 0, "pc-4", "linux", "amd64", "0.8.0", "hash-pc-4", ""); err != nil {
 		t.Fatalf("no limit: %v", err)
 	}
-	if _, err := st.EnrollAgent(ctx, "no-such-token", 0, "pc-5", "linux", "amd64", "0.8.0", "hash-pc-5"); !errors.Is(err, ErrNotFound) {
+	if _, err := st.EnrollAgent(ctx, "no-such-token", 0, "pc-5", "linux", "amd64", "0.8.0", "hash-pc-5", ""); !errors.Is(err, ErrNotFound) {
 		t.Fatalf("unknown token: %v", err)
 	}
 }
@@ -96,7 +96,7 @@ func TestEnrollAgentLastPlaceIsNotDoubleBookedIntegration(t *testing.T) {
 		go func(i int) {
 			defer wg.Done()
 			name := "race-" + string(rune('a'+i))
-			_, err := st.EnrollAgent(ctx, tok.Token, limit, name, "linux", "amd64", "0.8.0", "hash-"+name)
+			_, err := st.EnrollAgent(ctx, tok.Token, limit, name, "linux", "amd64", "0.8.0", "hash-"+name, "")
 			mu.Lock()
 			defer mu.Unlock()
 			switch {

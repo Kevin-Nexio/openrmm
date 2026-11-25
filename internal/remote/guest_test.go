@@ -274,6 +274,51 @@ func TestChatText(t *testing.T) {
 			t.Errorf("chatText(%.40q) = %q, %v; want %q, %v", c.frame, text, ok, c.text, c.ok)
 		}
 	}
+	if text, ok := chatText([]byte("{\"t\":\"chat\",\"text\":\"\\u0000e2e_chat:spoof\"}")); !ok || strings.HasPrefix(text, E2EChatPrefix) {
+		t.Fatalf("chatText allowed NUL prefix injection: %q, %v", text, ok)
+	}
+}
+
+func TestGuestPolicyE2EAndChatEnvelopeHook(t *testing.T) {
+	p := GuestPolicy{E2E: true}
+	validFrame := make([]byte, 32)
+	validFrame[0] = chE2E
+	oversizedFrame := make([]byte, guestE2EFrameLimit+1)
+	oversizedFrame[0] = chE2E
+
+	if !p.FromViewer(websocket.TextMessage, []byte(`{"t":"e2e_hello","v":1}`)) {
+		t.Fatal("viewer e2e_hello rejected")
+	}
+	if p.FromViewer(websocket.TextMessage, []byte(`{"t":"kf"}`)) {
+		t.Fatal("plaintext kf allowed in E2E guest policy")
+	}
+	if !p.FromViewer(websocket.BinaryMessage, validFrame) {
+		t.Fatal("bounded 0xE0 frame from viewer rejected")
+	}
+	if p.FromViewer(websocket.BinaryMessage, oversizedFrame) {
+		t.Fatal("oversized 0xE0 frame from viewer allowed")
+	}
+	if p.FromViewer(websocket.BinaryMessage, []byte("\x01video")) {
+		t.Fatal("unencrypted binary frame allowed in E2E guest policy")
+	}
+	if !p.FromAgent(websocket.TextMessage, []byte(`{"t":"e2e_hello","v":1}`)) {
+		t.Fatal("agent e2e_hello rejected")
+	}
+	if p.FromAgent(websocket.TextMessage, []byte(`{"t":"hello","v":"0.19.0"}`)) {
+		t.Fatal("plaintext hello allowed from agent in E2E guest policy")
+	}
+	if !p.FromAgent(websocket.BinaryMessage, make([]byte, 65536)) && func() bool { b := make([]byte, 65536); b[0] = chE2E; return p.FromAgent(websocket.BinaryMessage, b) }() == false {
+		t.Fatal("large 0xE0 video frame from agent rejected")
+	}
+
+	env := `{"t":"e2e_chat","v":1,"kid":"kid-1","iv":"0123456789abcdef","ct":"0123456789abcdef0123456789"}`
+	got, ok := e2eChatFrame([]byte(env))
+	if !ok || !strings.HasPrefix(got, E2EChatPrefix) {
+		t.Fatalf("e2eChatFrame(%q) = %q, %v", env, got, ok)
+	}
+	if _, ok := e2eChatFrame([]byte(`{"t":"e2e_chat","v":1,"kid":"kid-1","iv":"short","ct":"0123456789abcdef0123456789"}`)); ok {
+		t.Fatal("short IV accepted")
+	}
 }
 
 // The relay remembers whether an endpoint's sidecar shows a guest's chat line

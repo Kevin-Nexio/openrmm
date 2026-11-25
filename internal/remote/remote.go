@@ -11,6 +11,7 @@ package remote
 import (
 	"context"
 	"encoding/json"
+	"errors"
 	"fmt"
 	"net/url"
 	"regexp"
@@ -19,6 +20,7 @@ import (
 	"time"
 
 	"github.com/p1ngu/rmm/internal/auth"
+	"github.com/p1ngu/rmm/internal/e2e"
 	"github.com/p1ngu/rmm/internal/hub"
 	"github.com/p1ngu/rmm/internal/models"
 	"github.com/p1ngu/rmm/internal/protocol"
@@ -27,6 +29,10 @@ import (
 
 // sessionTTL bounds how long a brokered session token stays valid.
 const sessionTTL = 2 * time.Minute
+
+// ErrAgentEncryptionRequired indicates that an older agent needs to update
+// before it can host a new native session under the required policy.
+var ErrAgentEncryptionRequired = errors.New("this device must update before starting an end-to-end encrypted remote session")
 
 // Provider opens a remote-access session to an agent.
 type Provider interface {
@@ -40,6 +46,11 @@ type StartOptions struct {
 	// guest's session, whose chat the server carries to the technician's.
 	// Sidecars before 0.18 open it anyway.
 	NoChat bool
+	// GuestMode ("view" or "control") marks a guest desktop session so an E2E
+	// sidecar enforces the guest allowlist and disables clipboard/files locally.
+	GuestMode string
+	// ViewerKey binds the relay handshake to the viewer authorized to open this session.
+	ViewerKey string
 	// Unrestricted is whether the caller has access to every device. OpenRMM's
 	// client scopes do not reach inside MeshCentral, where what an account
 	// sees is MeshCentral's own business, so a restricted caller never signs
@@ -68,6 +79,7 @@ type Manager struct {
 	// account of their own sign in as meshUser.
 	meshSharedAccount bool
 	rustdeskEnabled   bool
+	e2ePolicy         string
 	providers         map[string]Provider
 
 	// pending correlates on-demand remote_query requests with their replies.
@@ -109,10 +121,21 @@ func (m *Manager) SetRustDeskEnabled(enabled bool) {
 	m.rustdeskEnabled = enabled
 }
 
+// SetE2EPolicy updates the native relay end-to-end encryption policy ("preferred" | "required").
+func (m *Manager) SetE2EPolicy(policy string) {
+	if policy != "required" {
+		policy = "preferred"
+	}
+	m.mu.Lock()
+	defer m.mu.Unlock()
+	m.e2ePolicy = policy
+}
+
 // NewManager wires up all providers.
 func NewManager(s *store.Store, h *hub.Hub, meshURL, meshTokenKey, meshUser string, meshEnabled, rustdeskEnabled bool) *Manager {
 	m := &Manager{store: s, hub: h, meshURL: meshURL,
 		meshTokenKey: meshTokenKey, meshUser: meshUser, meshEnabled: meshEnabled, meshSharedAccount: true, rustdeskEnabled: rustdeskEnabled,
+		e2ePolicy: "preferred",
 		providers: map[string]Provider{}, pending: map[string]chan protocol.RemoteQueryResultMsg{}}
 	register := func(p Provider) { m.providers[p.Name()] = p }
 	register(&nativeProvider{m: m})
@@ -212,6 +235,9 @@ func (m *Manager) persist(ctx context.Context, rs *models.RemoteSession) error {
 		host = a.Hostname
 	}
 	fields := map[string]string{"provider": rs.Provider, "agent": rs.AgentID, "host": host}
+	if rs.Provider == "native" || rs.Provider == "files" || rs.Provider == "terminal" {
+		fields["e2e"] = fmt.Sprint(rs.E2E)
+	}
 	if rs.MatchedBy != "" {
 		// How an external provider found the device: a linked id, or a name
 		// that another computer could share.
@@ -232,28 +258,58 @@ func (m *Manager) persist(ctx context.Context, rs *models.RemoteSession) error {
 // agent and viewer. The relay pairs peers by non-secret session id. kind tells
 // the agent which module to attach (desktop sidecar vs. elevated terminal); it is
 // also recorded as the session provider so the audit/list reflect what was opened.
-func (m *Manager) brokerRelay(ctx context.Context, agent *models.Agent, createdBy, provider, kind string, allowFiles *bool, noChat bool) (*models.RemoteSession, error) {
+func (m *Manager) brokerRelay(ctx context.Context, agent *models.Agent, createdBy, provider, kind string, allowFiles *bool, noChat bool, guestMode, viewerKey string) (*models.RemoteSession, error) {
 	if !m.hub.IsOnline(agent.ID) {
 		return nil, fmt.Errorf("agent %s is offline", agent.ID)
 	}
+	m.mu.RLock()
+	e2ePolicy := m.e2ePolicy
+	m.mu.RUnlock()
+
+	// Once a device has pinned its P-256 identity key, E2E is permanently
+	// required for that device (anti-downgrade ratchet). Only pre-0.13 devices
+	// with no key yet may fall back to legacy relay mode under "preferred".
+	useE2E := agent.DevicePublicKey != ""
+	if !useE2E && e2ePolicy == "required" {
+		return nil, ErrAgentEncryptionRequired
+	}
+
+	if useE2E && e2e.ValidatePublicKey(viewerKey) != nil {
+		return nil, fmt.Errorf("a valid E2E viewer key is required")
+	}
+
 	viewerTicket := auth.NewToken()
 	agentTicket := auth.NewToken()
 
 	rs := &models.RemoteSession{
-		AgentID:      agent.ID,
-		Provider:     provider,
-		Status:       "pending",
-		ViewerTicket: viewerTicket,
-		AgentTicket:  agentTicket,
-		CreatedBy:    createdBy,
-		ExpiresAt:    time.Now().Add(sessionTTL),
+		AgentID:         agent.ID,
+		Provider:        provider,
+		Status:          "pending",
+		ViewerTicket:    viewerTicket,
+		AgentTicket:     agentTicket,
+		E2E:             useE2E,
+		DevicePublicKey: agent.DevicePublicKey,
+		CreatedBy:       createdBy,
+		ExpiresAt:       time.Now().Add(sessionTTL),
 	}
 	if err := m.persist(ctx, rs); err != nil {
 		return nil, err
 	}
 
 	// Tell the agent to connect the requested remote module to the relay.
-	start := protocol.RemoteStartMsg{SessionID: rs.ID, AgentTicket: agentTicket, Token: agentTicket, Kind: kind, AllowFiles: allowFiles, NoChat: noChat}
+	start := protocol.RemoteStartMsg{
+		SessionID:   rs.ID,
+		AgentTicket: agentTicket,
+		Token:       agentTicket,
+		Kind:        kind,
+		AllowFiles:  allowFiles,
+		NoChat:      noChat,
+		E2E:         useE2E,
+		GuestMode:   guestMode,
+	}
+	if useE2E {
+		start.ViewerKey = viewerKey
+	}
 	data, _ := json.Marshal(start)
 	frame, _ := json.Marshal(protocol.Envelope{Type: protocol.MsgRemoteStart, Data: data})
 	if !m.hub.Send(agent.ID, frame) {
@@ -270,7 +326,7 @@ func (p *nativeProvider) Name() string { return "native" }
 // StartSession brokers a relayed remote-desktop session (media sidecar).
 func (p *nativeProvider) StartSession(ctx context.Context, agent *models.Agent, createdBy string, opts StartOptions) (*models.RemoteSession, error) {
 	allowFiles := opts.AllowFiles
-	return p.m.brokerRelay(ctx, agent, createdBy, "native", protocol.RemoteKindDesktop, &allowFiles, opts.NoChat)
+	return p.m.brokerRelay(ctx, agent, createdBy, "native", protocol.RemoteKindDesktop, &allowFiles, opts.NoChat, opts.GuestMode, opts.ViewerKey)
 }
 
 // ---------- files (file transfer only — no screen capture) ----------
@@ -284,9 +340,9 @@ func (p *filesProvider) Name() string { return "files" }
 // streaming the screen. Opening "Remote ▸ File transfer" must NOT start a remote
 // desktop session — only this. (A desktop session can still open the file
 // browser in-band via the Files button, which stays the native provider.)
-func (p *filesProvider) StartSession(ctx context.Context, agent *models.Agent, createdBy string, _ StartOptions) (*models.RemoteSession, error) {
+func (p *filesProvider) StartSession(ctx context.Context, agent *models.Agent, createdBy string, opts StartOptions) (*models.RemoteSession, error) {
 	allowFiles := true
-	return p.m.brokerRelay(ctx, agent, createdBy, "files", protocol.RemoteKindFiles, &allowFiles, false)
+	return p.m.brokerRelay(ctx, agent, createdBy, "files", protocol.RemoteKindFiles, &allowFiles, false, "", opts.ViewerKey)
 }
 
 // ---------- terminal (elevated shell over the relay) ----------
@@ -299,8 +355,8 @@ func (p *terminalProvider) Name() string { return "terminal" }
 // shell on a PTY. The shell runs inside the agent process, so it inherits the
 // agent's privileges — and the agent runs as a system service (root on
 // Linux/macOS, SYSTEM on Windows), so the terminal session is elevated.
-func (p *terminalProvider) StartSession(ctx context.Context, agent *models.Agent, createdBy string, _ StartOptions) (*models.RemoteSession, error) {
-	return p.m.brokerRelay(ctx, agent, createdBy, "terminal", protocol.RemoteKindTerminal, nil, false)
+func (p *terminalProvider) StartSession(ctx context.Context, agent *models.Agent, createdBy string, opts StartOptions) (*models.RemoteSession, error) {
+	return p.m.brokerRelay(ctx, agent, createdBy, "terminal", protocol.RemoteKindTerminal, nil, false, "", opts.ViewerKey)
 }
 
 // ---------- meshcentral ----------

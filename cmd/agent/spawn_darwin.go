@@ -15,6 +15,8 @@ import (
 	"strings"
 	"syscall"
 	"time"
+
+	"github.com/p1ngu/rmm/internal/e2e"
 )
 
 // remoteAgentLabel is the per-user LaunchAgent that owns desktop sessions, and
@@ -120,6 +122,31 @@ func retireLegacyRemoteAgent(uid string) {
 // A LaunchAgent satisfies both: launchd starts it inside the user's session, as
 // that user, with an identity of its own.
 func launchSidecar(bin, relay, ticket string, extra ...string) error {
+	if len(extra) >= 2 && extra[0] == "-session" {
+		srcPath := extra[1]
+		raw, err := os.ReadFile(srcPath)
+		if err != nil {
+			return err
+		}
+		var sp e2e.SessionParams
+		if err := json.Unmarshal(raw, &sp); err != nil {
+			_ = os.Remove(srcPath)
+			return err
+		}
+		if os.Geteuid() != 0 || sp.FilesOnly {
+			return startDirect(bin, []string{"-session", srcPath})
+		}
+		_ = os.Remove(srcPath)
+		uid, err := consoleUID()
+		if err != nil {
+			return err
+		}
+		if err := ensureRemoteAgent(uid); err != nil {
+			return err
+		}
+		return startSessionJobParams(uid, sessionJobDir(), sp)
+	}
+
 	filesOnly := false
 	noFiles := false
 	noChat := false
@@ -167,6 +194,16 @@ func sessionJobDir() string {
 // console user's session, leaving any other session running. Jobs of sessions
 // that have ended are removed first.
 func startSessionJob(uid, dir, relay, ticket string, filesOnly, noFiles, noChat bool) error {
+	return startSessionJobParams(uid, dir, e2e.SessionParams{
+		Relay:     relay,
+		Ticket:    ticket,
+		FilesOnly: filesOnly,
+		NoFiles:   noFiles,
+		NoChat:    noChat,
+	})
+}
+
+func startSessionJobParams(uid, dir string, sp e2e.SessionParams) error {
 	if err := os.MkdirAll(dir, 0o755); err != nil {
 		return err
 	}
@@ -183,7 +220,7 @@ func startSessionJob(uid, dir, relay, ticket string, filesOnly, noFiles, noChat 
 	label := sessionJobPrefix + hex.EncodeToString(id[:])
 	params := filepath.Join(dir, label+".json")
 	plist := filepath.Join(dir, label+".plist")
-	if err := writeSessionFile(params, uid, relay, ticket, filesOnly, noFiles, noChat); err != nil {
+	if err := writeSessionParamsFile(params, uid, sp); err != nil {
 		return err
 	}
 	if err := os.WriteFile(plist, []byte(sessionJobPlist(label, params)), 0o644); err != nil {
@@ -303,9 +340,17 @@ func agentStateDir() string {
 // with no group or world access — never an argument, which `ps` shows to
 // everyone, and never an environment variable, which launchctl scopes globally.
 func writeSessionFile(path, uid, relay, ticket string, filesOnly, noFiles, noChat bool) error {
-	body, err := json.Marshal(map[string]any{
-		"relay": relay, "ticket": ticket, "files_only": filesOnly, "no_files": noFiles, "no_chat": noChat,
+	return writeSessionParamsFile(path, uid, e2e.SessionParams{
+		Relay:     relay,
+		Ticket:    ticket,
+		FilesOnly: filesOnly,
+		NoFiles:   noFiles,
+		NoChat:    noChat,
 	})
+}
+
+func writeSessionParamsFile(path, uid string, sp e2e.SessionParams) error {
+	body, err := json.Marshal(sp)
 	if err != nil {
 		return err
 	}

@@ -103,7 +103,7 @@ const suppressionQueries = [];
 
 const remoteConfig = {
   ai: { provider: 'openai-compatible', base_url: '', model: '', api_key_set: true, configured: true },
-  remote: { default: 'native', providers: ['native', 'meshcentral', 'rustdesk'], meshcentral_enabled: true, meshcentral_url: 'https://mesh.example.invalid', meshcentral_user: 'admin', meshcentral_token_set: true, meshcentral_shared_account: true, meshcentral_match_hostname: false, rustdesk_enabled: false, guest_access: false },
+  remote: { default: 'native', providers: ['native', 'meshcentral', 'rustdesk'], meshcentral_enabled: true, meshcentral_url: 'https://mesh.example.invalid', meshcentral_user: 'admin', meshcentral_token_set: true, meshcentral_shared_account: true, meshcentral_match_hostname: false, rustdesk_enabled: false, guest_access: false, e2e_policy: 'preferred' },
   jobs: { allow_unapproved: false }, server: { version: 'e2e', base_url: 'https://agents.example.invalid' },
 };
 
@@ -732,7 +732,9 @@ async function servicesAndRemoteSettingsBrowserFlow() {
   change(panel().querySelector('select'), 'rustdesk');
   tab('native').click();
   await wait(() => panel().id === 'remote-config-panel-native');
-  change(panel().querySelector('select'), 'on');
+  const selectContaining = (value) => panel().querySelector('option[value="' + value + '"]').parentElement;
+  change(selectContaining('on'), 'on');
+  change(selectContaining('required'), 'required');
   tab('meshcentral').click();
   await wait(() => panel().id === 'remote-config-panel-meshcentral');
   assert(panel().querySelector('input[type="password"]').value === 'e2e-token-placeholder', 'Unsaved token survives tab navigation');
@@ -1307,9 +1309,11 @@ try {
     assert.equal(saved?.remote.meshcentral_token_key, 'e2e-token-placeholder');
     assert.equal(saved?.remote.rustdesk_enabled, true);
     assert.equal(saved?.remote.guest_access, true);
+    assert.equal(saved?.remote.e2e_policy, 'required');
     assert.equal(saved?.jobs.allow_unapproved, false);
     assert.equal(remoteConfig.remote.default, 'rustdesk');
     assert.equal(remoteConfig.remote.rustdesk_enabled, true);
+    assert.equal(remoteConfig.remote.e2e_policy, 'required');
     assert.equal('meshcentral_token_key' in remoteConfig.remote, false, 'GET config stays write-only');
     const variablesFlow = await runMobileChrome(chrome, baseURL + '/authenticated/', { width: 1280, flow: scriptVariablesBrowserFlow });
     assertBrowser(variablesFlow, /data-script-variables-e2e="passed"/);

@@ -31,7 +31,7 @@ func (s *Store) CountAgents(ctx context.Context) (int, error) {
 // limit > 0 the agents are then counted under an advisory lock, and one that
 // would exceed the limit is refused with devicelimit.ErrLimitReached before the
 // token is spent: a refused install does not use up one of the token's uses.
-func (s *Store) EnrollAgent(ctx context.Context, enrollToken string, limit int, hostname, os, arch, version, tokenHash string) (*models.Agent, error) {
+func (s *Store) EnrollAgent(ctx context.Context, enrollToken string, limit int, hostname, os, arch, version, tokenHash, devicePublicKey string) (*models.Agent, error) {
 	tx, err := s.pool.Begin(ctx)
 	if err != nil {
 		return nil, err
@@ -68,11 +68,11 @@ func (s *Store) EnrollAgent(ctx context.Context, enrollToken string, limit int, 
 	id := newID()
 	// Same department rule as CreateAgent: honoured only inside the site.
 	if _, err := tx.Exec(ctx,
-		`INSERT INTO agents (id, hostname, os, arch, version, token_hash, site_id, group_id, status, last_seen, enroll_token_id)
+		`INSERT INTO agents (id, hostname, os, arch, version, token_hash, site_id, group_id, status, last_seen, enroll_token_id, device_public_key)
 		 VALUES ($1,$2,$3,$4,$5,$6,$7,
 		         (SELECT g.id FROM device_groups g WHERE g.id=$8 AND g.site_id=$7),
-		         'online',now(),$9)`,
-		id, hostname, os, arch, version, tokenHash, siteID, groupID, tokenID); err != nil {
+		         'online',now(),$9,$10)`,
+		id, hostname, os, arch, version, tokenHash, siteID, groupID, tokenID, devicePublicKey); err != nil {
 		return nil, err
 	}
 	if err := tx.Commit(ctx); err != nil {

@@ -26,6 +26,7 @@ import (
 	"github.com/p1ngu/rmm/internal/auth"
 	"github.com/p1ngu/rmm/internal/autonomy"
 	"github.com/p1ngu/rmm/internal/config"
+	"github.com/p1ngu/rmm/internal/e2e"
 	"github.com/p1ngu/rmm/internal/hub"
 	"github.com/p1ngu/rmm/internal/jobs"
 	"github.com/p1ngu/rmm/internal/mcpserver"
@@ -278,6 +279,7 @@ func (s *Server) Router() http.Handler {
 		r.With(shareRemote...).Get("/remote-shares/pending", s.pendingRemoteShares)
 		r.With(shareRemote...).Post("/remote-shares/{id}/accept", s.decideRemoteShare(true))
 		r.With(shareRemote...).Post("/remote-shares/{id}/reject", s.decideRemoteShare(false))
+		r.With(shareRemote...).Put("/remote-shares/{id}/chat-key", s.setRemoteShareChatKey)
 		r.With(s.requirePermissionAny(models.PermDevicesRemoteShare, models.PermUsersManage)).Delete("/remote-shares/{id}", s.closeRemoteShare)
 		r.With(s.requirePermission(models.PermDevicesManage)).Patch("/devices/{id}", s.updateDeviceMeta)
 		r.With(s.requirePermission(models.PermDevicesManage)).Patch("/devices/{id}/remote-ids", s.setDeviceRemoteIDs)
@@ -731,6 +733,7 @@ func (s *Server) getConfig(w http.ResponseWriter, r *http.Request) {
 			"meshcentral_shared_account": eff.MeshCentralSharedAccount,
 			"rustdesk_enabled":           eff.RustDeskEnabled,
 			"guest_access":               eff.RemoteGuestAccess,
+			"e2e_policy":                 eff.RemoteE2EPolicy,
 		},
 		"jobs": map[string]any{
 			"allow_unapproved": eff.JobsAllowUnapproved,
@@ -790,9 +793,13 @@ func (s *Server) updateConfig(w http.ResponseWriter, r *http.Request) {
 		writeErr(w, http.StatusBadRequest, "invalid remote provider")
 		return
 	}
+	if p := in.Remote.E2EPolicy; p != "" && p != "preferred" && p != "required" {
+		writeErr(w, http.StatusBadRequest, settings.ErrInvalidRemoteE2EPolicy.Error())
+		return
+	}
 	before, _ := settings.Effective(r.Context(), s.store, s.cfg)
 	eff, err := settings.Save(r.Context(), s.store, s.cfg, in)
-	if errors.Is(err, settings.ErrRustDeskDefaultDisabled) {
+	if errors.Is(err, settings.ErrRustDeskDefaultDisabled) || errors.Is(err, settings.ErrInvalidRemoteE2EPolicy) {
 		writeErr(w, http.StatusBadRequest, err.Error())
 		return
 	}
@@ -808,6 +815,7 @@ func (s *Server) updateConfig(w http.ResponseWriter, r *http.Request) {
 	s.remote.SetMeshMatchHostname(eff.MeshCentralMatchHostname)
 	s.remote.SetMeshSharedAccount(eff.MeshCentralSharedAccount)
 	s.remote.SetRustDeskEnabled(eff.RustDeskEnabled)
+	s.remote.SetE2EPolicy(eff.RemoteE2EPolicy)
 	if before.RemoteGuestAccess && !eff.RemoteGuestAccess {
 		// Turning it off withdraws every invitation and ends every guest's
 		// session now, not at their expiry.
@@ -861,6 +869,7 @@ func changedSettings(before, after settings.Editable, in settings.SaveRequest) [
 	add("remote.meshcentral_shared_account", before.MeshCentralSharedAccount != after.MeshCentralSharedAccount)
 	add("remote.rustdesk_enabled", before.RustDeskEnabled != after.RustDeskEnabled)
 	add("remote.guest_access", before.RemoteGuestAccess != after.RemoteGuestAccess)
+	add("remote.e2e_policy", before.RemoteE2EPolicy != after.RemoteE2EPolicy)
 	add("ai.autonomy_paused", before.AIAutonomyPaused != after.AIAutonomyPaused)
 	add("jobs.allow_unapproved", before.JobsAllowUnapproved != after.JobsAllowUnapproved)
 	return out
@@ -1416,7 +1425,8 @@ func (s *Server) startRemote(w http.ResponseWriter, r *http.Request) {
 		// Resume names the session this viewer had before its connection
 		// dropped. That one may be replaced without asking; any other is the
 		// operator's other tab, which is not ours to take.
-		Resume string `json:"resume"`
+		Resume    string `json:"resume"`
+		ViewerKey string `json:"viewer_key"`
 	}
 	_ = decode(r, &in)
 	if in.Provider == "" {
@@ -1455,6 +1465,16 @@ func (s *Server) startRemote(w http.ResponseWriter, r *http.Request) {
 		writeErr(w, http.StatusUnauthorized, "remote session requires an authenticated principal")
 		return
 	}
+	if in.Provider == "native" || in.Provider == "terminal" || in.Provider == "files" {
+		if in.ViewerKey != "" && e2e.ValidatePublicKey(in.ViewerKey) != nil {
+			writeErr(w, http.StatusBadRequest, "invalid E2E viewer key")
+			return
+		}
+		if agent.DevicePublicKey != "" && in.ViewerKey == "" {
+			writeCodedErr(w, http.StatusBadRequest, "remote_e2e_required", "a browser encryption key is required for this device")
+			return
+		}
+	}
 	if in.Provider == "native" {
 		live := s.presence.ForUser(agent.ID, principal, "native")
 		for _, v := range live {
@@ -1473,6 +1493,7 @@ func (s *Server) startRemote(w http.ResponseWriter, r *http.Request) {
 	}
 	opts := remote.StartOptions{
 		AllowFiles: hasPermission(r, models.PermDevicesFiles),
+		ViewerKey:  in.ViewerKey,
 		// OpenRMM's scopes do not reach inside MeshCentral: a restricted
 		// principal signs in there only with an account of their own.
 		Unrestricted: s.scopeUserID(r) == "",
@@ -1486,6 +1507,10 @@ func (s *Server) startRemote(w http.ResponseWriter, r *http.Request) {
 		opts.MeshUser = meshUser
 	}
 	sess, err := s.remote.Start(r.Context(), in.Provider, agent, principal, opts)
+	if errors.Is(err, remote.ErrAgentEncryptionRequired) {
+		writeCodedErr(w, http.StatusConflict, "remote_agent_update_required", err.Error())
+		return
+	}
 	if err != nil {
 		writeErr(w, http.StatusBadRequest, err.Error())
 		return

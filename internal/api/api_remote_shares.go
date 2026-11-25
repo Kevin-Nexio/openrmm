@@ -17,6 +17,7 @@ import (
 	"github.com/go-chi/chi/v5"
 
 	"github.com/p1ngu/rmm/internal/auth"
+	"github.com/p1ngu/rmm/internal/e2e"
 	"github.com/p1ngu/rmm/internal/models"
 	"github.com/p1ngu/rmm/internal/remote"
 	"github.com/p1ngu/rmm/internal/settings"
@@ -87,6 +88,7 @@ type guestSession struct {
 	shareID, sessionID, agentID, sponsor string
 	// name is the guest's, as they gave it when joining.
 	name  string
+	e2e   bool
 	timer *time.Timer
 }
 
@@ -582,7 +584,7 @@ func (s *Server) createRemoteShare(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	s.auditShare(r.Context(), actorOf(r), "remote.share.create", sh, map[string]string{"expires_at": sh.ExpiresAt.UTC().Format(time.RFC3339), "reusable": fmt.Sprint(sh.Reusable)})
-	writeJSON(w, http.StatusCreated, map[string]any{"share": s.viewShare(*sh, time.Now()), "token": token, "code": code})
+	writeJSON(w, http.StatusCreated, map[string]any{"share": s.viewShare(*sh, time.Now()), "token": token, "code": code, "device_public_key": agent.DevicePublicKey})
 }
 
 // listRemoteShares lists the caller's live invitations on a device.
@@ -658,7 +660,15 @@ func (s *Server) decideRemoteShare(accept bool) http.HandlerFunc {
 		if !s.requireAgent(w, r, sh.AgentID) {
 			return
 		}
+		var acceptBody struct {
+			WrappedChatKey string `json:"wrapped_chat_key"`
+			ChatKeyID      string `json:"chat_key_id"`
+			RedeemCount    int    `json:"redeem_count"`
+		}
 		if accept {
+			_ = decode(r, &acceptBody)
+			acceptBody.WrappedChatKey = strings.TrimSpace(acceptBody.WrappedChatKey)
+			acceptBody.ChatKeyID = strings.TrimSpace(acceptBody.ChatKeyID)
 			if !s.guestAccessEnabled(r.Context()) {
 				writeCodedErr(w, http.StatusForbidden, "guest_access_disabled", "guest access is turned off for this instance")
 				return
@@ -667,12 +677,31 @@ func (s *Server) decideRemoteShare(accept bool) http.HandlerFunc {
 				writeErr(w, http.StatusForbidden, err.Error())
 				return
 			}
-			if !s.sponsorOnDevice(sh.AgentID, principal) {
+			viewers := s.presence.ForUser(sh.AgentID, principal, "native")
+			if len(viewers) == 0 {
 				writeCodedErr(w, http.StatusConflict, "sponsor_session_required", "open your own remote session on this device to let the guest in")
 				return
 			}
+			keyedGuest := sh.GuestPublicKey != "" && sh.GuestSignKey != ""
+			if viewers[0].E2E || keyedGuest {
+				if !viewers[0].E2E || !keyedGuest {
+					writeCodedErr(w, http.StatusConflict, "remote_e2e_required", "reconnect the technician session and use a new encrypted invitation")
+					return
+				}
+				if acceptBody.WrappedChatKey == "" || acceptBody.ChatKeyID == "" || len(acceptBody.WrappedChatKey) > 4096 || len(acceptBody.ChatKeyID) > 64 {
+					writeErr(w, http.StatusBadRequest, "invalid wrapped chat key")
+					return
+				}
+				if sh.RedeemCount != acceptBody.RedeemCount {
+					writeErr(w, http.StatusConflict, "the guest request has changed")
+					return
+				}
+			} else if acceptBody.WrappedChatKey != "" || acceptBody.ChatKeyID != "" {
+				writeErr(w, http.StatusBadRequest, "unexpected encrypted chat key")
+				return
+			}
 		}
-		decided, err := s.store.DecideRemoteShare(r.Context(), sh.ID, principal, accept)
+		decided, err := s.store.DecideRemoteShare(r.Context(), sh.ID, principal, accept, sh.RedeemCount, acceptBody.WrappedChatKey, acceptBody.ChatKeyID)
 		if err != nil {
 			if errors.Is(err, store.ErrNotFound) {
 				writeErr(w, http.StatusConflict, "the guest is no longer waiting")
@@ -688,6 +717,54 @@ func (s *Server) decideRemoteShare(accept bool) http.HandlerFunc {
 		s.auditShare(r.Context(), actorOf(r), action, decided, nil)
 		writeJSON(w, http.StatusOK, map[string]any{"share": s.viewShare(*decided, time.Now())})
 	}
+}
+
+// setRemoteShareChatKey updates the sealed E2E chat room key on an accepted
+// guest share (for instance after the technician rotates K_chat or opens the
+// session in a fresh browser tab).
+func (s *Server) setRemoteShareChatKey(w http.ResponseWriter, r *http.Request) {
+	principal, ok := s.sharePrincipal(w, r)
+	if !ok {
+		return
+	}
+	sh, err := s.store.GetRemoteShare(r.Context(), chi.URLParam(r, "id"))
+	if err != nil || sh.CreatedBy != principal {
+		writeErr(w, http.StatusNotFound, "invitation not found")
+		return
+	}
+	if !s.requireAgent(w, r, sh.AgentID) {
+		return
+	}
+	var in struct {
+		WrappedChatKey string `json:"wrapped_chat_key"`
+		ChatKeyID      string `json:"chat_key_id"`
+		RedeemCount    int    `json:"redeem_count"`
+	}
+	if err := decode(r, &in); err != nil {
+		writeErr(w, http.StatusBadRequest, "invalid body")
+		return
+	}
+	in.WrappedChatKey = strings.TrimSpace(in.WrappedChatKey)
+	in.ChatKeyID = strings.TrimSpace(in.ChatKeyID)
+	if in.WrappedChatKey == "" || in.ChatKeyID == "" || len(in.WrappedChatKey) > 4096 || len(in.ChatKeyID) > 64 {
+		writeErr(w, http.StatusBadRequest, "invalid wrapped chat key")
+		return
+	}
+	viewers := s.presence.ForUser(sh.AgentID, principal, "native")
+	if len(viewers) == 0 || !viewers[0].E2E || sh.GuestPublicKey == "" || sh.RedeemCount != in.RedeemCount {
+		writeErr(w, http.StatusConflict, "the encrypted guest request is no longer active")
+		return
+	}
+	updated, err := s.store.SetRemoteShareChatKey(r.Context(), sh.ID, principal, in.RedeemCount, in.WrappedChatKey, in.ChatKeyID)
+	if err != nil {
+		if errors.Is(err, store.ErrNotFound) {
+			writeErr(w, http.StatusConflict, "the invitation is no longer active")
+			return
+		}
+		writeErr(w, http.StatusInternalServerError, err.Error())
+		return
+	}
+	writeJSON(w, http.StatusOK, map[string]any{"share": s.viewShare(*updated, time.Now())})
 }
 
 // closeRemoteShare revokes an invitation, or removes a guest who is in. The
@@ -778,13 +855,27 @@ func (s *Server) guestLookup(w http.ResponseWriter, r *http.Request) {
 // again.
 func (s *Server) guestJoin(w http.ResponseWriter, r *http.Request) {
 	var in struct {
-		Token string `json:"token"`
-		Code  string `json:"code"`
-		Name  string `json:"name"`
+		Token          string `json:"token"`
+		Code           string `json:"code"`
+		Name           string `json:"name"`
+		GuestPublicKey string `json:"guest_public_key"`
+		GuestSignKey   string `json:"guest_sign_key"`
 	}
 	if err := decode(r, &in); err != nil || in.Token == "" {
 		writeErr(w, http.StatusBadRequest, "invalid body")
 		return
+	}
+	in.GuestPublicKey = strings.TrimSpace(in.GuestPublicKey)
+	in.GuestSignKey = strings.TrimSpace(in.GuestSignKey)
+	if (in.GuestPublicKey == "") != (in.GuestSignKey == "") {
+		writeErr(w, http.StatusBadRequest, "both guest E2E public keys must be supplied together")
+		return
+	}
+	if in.GuestPublicKey != "" {
+		if e2e.ValidatePublicKey(in.GuestPublicKey) != nil || e2e.ValidatePublicKey(in.GuestSignKey) != nil {
+			writeErr(w, http.StatusBadRequest, "invalid guest E2E public key")
+			return
+		}
 	}
 	name := cleanGuestName(in.Name)
 	if name == "" {
@@ -804,7 +895,7 @@ func (s *Server) guestJoin(w http.ResponseWriter, r *http.Request) {
 	secret := auth.NewToken()
 	ip := cleanHeaderValue(clientIP(r, s.cfg.TrustProxyHeaders), guestIPMax)
 	ua := cleanHeaderValue(r.UserAgent(), guestUserAgentMax)
-	sh, err := s.store.RedeemRemoteShare(r.Context(), tokenHash, guestCodeHash(in.Token, code), auth.Hash(secret), name, ip, ua, guestCodeAttempts)
+	sh, err := s.store.RedeemRemoteShare(r.Context(), tokenHash, guestCodeHash(in.Token, code), auth.Hash(secret), name, ip, ua, in.GuestPublicKey, in.GuestSignKey, guestCodeAttempts)
 	switch {
 	case errors.Is(err, store.ErrRemoteShareCode):
 		if failed, lookupErr := s.store.GetRemoteShareByTokenHash(r.Context(), tokenHash); lookupErr == nil {
@@ -841,11 +932,13 @@ func (s *Server) guestRequest(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	writeJSON(w, http.StatusOK, map[string]any{
-		"status":          sh.EffectiveStatus(time.Now()),
-		"mode":            sh.Mode,
-		"technician":      s.technicianName(r.Context(), sh.CreatedBy),
-		"expires_at":      sh.ExpiresAt,
-		"sponsor_present": sh.Status == models.RemoteShareAccepted && s.sponsorOnDevice(sh.AgentID, sh.CreatedBy),
+		"status":           sh.EffectiveStatus(time.Now()),
+		"mode":             sh.Mode,
+		"technician":       s.technicianName(r.Context(), sh.CreatedBy),
+		"expires_at":       sh.ExpiresAt,
+		"sponsor_present":  sh.Status == models.RemoteShareAccepted && s.sponsorOnDevice(sh.AgentID, sh.CreatedBy),
+		"wrapped_chat_key": sh.WrappedChatKey,
+		"chat_key_id":      sh.ChatKeyID,
 	})
 }
 
@@ -869,13 +962,30 @@ func (s *Server) guestSession(w http.ResponseWriter, r *http.Request) {
 		writeCodedErr(w, http.StatusConflict, "share_ended", err.Error())
 		return
 	}
-	if !s.sponsorOnDevice(sh.AgentID, sh.CreatedBy) {
+	viewers := s.presence.ForUser(sh.AgentID, sh.CreatedBy, "native")
+	if len(viewers) == 0 {
 		writeCodedErr(w, http.StatusConflict, "sponsor_absent", "the technician is not in a session on the device right now")
 		return
 	}
 	agent, err := s.store.GetAgent(r.Context(), sh.AgentID)
 	if err != nil || agent.Status == models.AgentRevoked {
 		writeCodedErr(w, http.StatusConflict, "share_ended", "the device is no longer available")
+		return
+	}
+	var in struct {
+		ViewerKey string `json:"viewer_key"`
+	}
+	_ = decode(r, &in)
+	if in.ViewerKey != "" && e2e.ValidatePublicKey(in.ViewerKey) != nil {
+		writeErr(w, http.StatusBadRequest, "invalid E2E viewer key")
+		return
+	}
+	if (agent.DevicePublicKey != "") != viewers[0].E2E {
+		writeCodedErr(w, http.StatusConflict, "sponsor_absent", "the technician needs to reconnect")
+		return
+	}
+	if agent.DevicePublicKey != "" && (in.ViewerKey == "" || sh.WrappedChatKey == "" || sh.ChatKeyID == "") {
+		writeCodedErr(w, http.StatusBadRequest, "remote_e2e_required", "an encrypted browser and invitation are required for this device")
 		return
 	}
 	if !s.guests.allowBroker(sh.ID, now) {
@@ -891,12 +1001,12 @@ func (s *Server) guestSession(w http.ResponseWriter, r *http.Request) {
 	}
 	// No chat window of its own on the endpoint: the guest's chat is carried to
 	// the technician's session (api_guest_chat.go).
-	rs, err := s.remote.Start(r.Context(), "native", agent, models.GuestPrincipal(sh.ID), remote.StartOptions{AllowFiles: false, NoChat: true})
+	rs, err := s.remote.Start(r.Context(), "native", agent, models.GuestPrincipal(sh.ID), remote.StartOptions{AllowFiles: false, NoChat: true, GuestMode: sh.Mode, ViewerKey: in.ViewerKey})
 	if err != nil {
 		writeCodedErr(w, http.StatusServiceUnavailable, "device_unavailable", err.Error())
 		return
 	}
-	gs := &guestSession{shareID: sh.ID, sessionID: rs.ID, agentID: sh.AgentID, sponsor: sh.CreatedBy, name: sh.GuestName}
+	gs := &guestSession{shareID: sh.ID, sessionID: rs.ID, agentID: sh.AgentID, sponsor: sh.CreatedBy, name: sh.GuestName, e2e: rs.E2E}
 	shareID := sh.ID
 	gs.timer = time.AfterFunc(time.Until(sh.ExpiresAt), func() {
 		s.endGuest(shareID, remote.CloseGuestExpired, "guest_share_expired")
@@ -904,7 +1014,7 @@ func (s *Server) guestSession(w http.ResponseWriter, r *http.Request) {
 	s.guests.start(gs)
 	s.ensureGuestSweeper()
 	s.auditShare(r.Context(), "guest", "remote.share.guest_start", sh, map[string]string{"session": rs.ID})
-	writeJSON(w, http.StatusCreated, map[string]any{"id": rs.ID, "viewer_ticket": rs.ViewerTicket, "mode": sh.Mode})
+	writeJSON(w, http.StatusCreated, map[string]any{"id": rs.ID, "viewer_ticket": rs.ViewerTicket, "mode": sh.Mode, "e2e": rs.E2E, "agent_id": rs.AgentID})
 }
 
 // owns reports whether a session is the one a share currently holds.

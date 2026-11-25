@@ -354,9 +354,28 @@ endpoint ↔ your **hbbs/hbbr** (self-hosted or a plan) ↔ the technician's vie
   full-motion video. The Linux engine assumes a TrueColor little-endian X server
   and captures the active screen; **login-screen capture requires an Xorg greeter**
   (set GDM `WaylandEnable=false`, or use LightDM) — a Wayland greeter only exposes
-  Xwayland, which can't capture native Wayland surfaces. End-to-end media
-  encryption is still open (today the relay is the trust boundary; terminate
-  WSS — see `07`).
+  Xwayland, which can't capture native Wayland surfaces.
+
+### End-to-end encryption for native sessions
+
+The native desktop, interactive terminal and file transfer support encryption
+between the browser and the endpoint. A lock appears next to the connection
+status after the browser verifies the device key and both peers confirm the
+session keys. The browser requires a secure context with Web Crypto.
+
+In **Settings ▸ Remote access ▸ Native**, **Prefer encryption** permits legacy
+sessions on agents that have yet to register an encryption key. **Require
+encryption** blocks new native sessions on those agents. After an agent registers
+its key, subsequent native sessions require encryption even in preferred mode.
+If the agent loses its identity key, enroll it as a new device.
+
+OpenRMM's application origin and authenticated control channel authorize the
+session and distribute public keys. The relay forwards encrypted data and can
+still observe session timing, frequency and frame sizes. Encrypted invitations
+also carry the device fingerprint in the link fragment, which the guest's
+browser checks against the endpoint. Reissue links created before the device
+registered an encryption key. Guest chat uses a separate key and preserves the
+existing view and control restrictions.
 
 ### One desktop session per operator per device
 
@@ -438,7 +457,7 @@ the guest appears as a chip with **Remove**, and in the device's presence as
 "Guest <name> (via <technician>)".
 
 **What a guest can do.** The guest gets a session of their own (their own relay
-pair and sidecar, never the technician's stream), and the relay filters every
+pair and sidecar, never the technician's stream), and OpenRMM filters every
 frame of it in both directions (`internal/remote/guest.go`):
 
 - to the device: keyframe requests and the monitor choice; in *view and

@@ -384,11 +384,17 @@ exposes no secrets).
   `RMM_ALLOW_LEGACY_AGENT_RELAY` for upgrades and is disabled by default. Both
   ticket roles are invalidated by expiry or device revocation.
 
+  Native sessions to agents with pinned keys use end-to-end authenticated
+  encryption for desktop, terminal and file transfer. Guest chat uses a separate
+  room key sealed to each approved guest. The application origin and the
+  authenticated control channel remain trusted for session authorization and
+  public-key distribution. The relay can still observe traffic metadata.
+  Preferred mode allows legacy sessions with older agents. See
+  [Remote access](08-remote-access.md#end-to-end-encryption-for-native-sessions).
+
 **Remaining (tracked):**
 - **TLS** and source ACLs must be enforced by the trusted edge in production (see
   the deploy runbook).
 - **Script sandboxing** remains a roadmap item; privileged jobs and the terminal
   intentionally run with the system-service account today.
-- Native relay media is not end-to-end encrypted; the relay and TLS edge remain
-  trust boundaries.
 - Release Ed25519 signatures are not Authenticode or Apple notarization.

@@ -157,7 +157,13 @@ func launchInUserSession(bin, relay, ticket string, extra []string) error {
 		defer procDestroyEnvironmentBlock.Call(env)
 	}
 
-	args := fmt.Sprintf("\"%s\" %s", bin, strings.Join(sidecarArgs(relay, ticket, extra), " "))
+	rawArgs := sidecarArgs(relay, ticket, extra)
+	escapedArgs := make([]string, 0, len(rawArgs)+1)
+	escapedArgs = append(escapedArgs, syscall.EscapeArg(bin))
+	for _, arg := range rawArgs {
+		escapedArgs = append(escapedArgs, syscall.EscapeArg(arg))
+	}
+	args := strings.Join(escapedArgs, " ")
 	cmdline, _ := syscall.UTF16PtrFromString(args)
 	desktop, _ := syscall.UTF16PtrFromString("winsta0\\default")
 	si := startupInfoW{lpDesktop: uintptr(unsafe.Pointer(desktop))}

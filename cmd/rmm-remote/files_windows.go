@@ -5,7 +5,7 @@ package main
 import (
 	"os"
 
-	"github.com/gorilla/websocket"
+	"github.com/p1ngu/rmm/internal/e2e"
 )
 
 // runFilesOnly serves a Windows file-transfer session with NO screen capture.
@@ -14,7 +14,7 @@ import (
 // so "Remote ▸ File transfer" opens only the file browser, not a remote desktop.
 // Input/chat/kf frames that arrive are harmlessly ignored (no worker drains
 // them). Mirrors the POSIX runFilesOnly in files.go.
-func runFilesOnly(conn *websocket.Conn, _ sessionOptions) error {
+func runFilesOnly(conn e2e.WSConn, _ sessionOptions) error {
 	s := &session{conn: conn, out: make(chan wsMsg, 32), done: make(chan struct{}),
 		uploads: map[uint8]*os.File{}, allowFiles: true}
 	defer close(s.done)

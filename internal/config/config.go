@@ -79,6 +79,12 @@ type Config struct {
 	// is installed out-of-band; the agent only reads its id on demand and the UI
 	// opens rustdesk://<id>. Off by default.
 	RustDeskEnabled bool
+	// RemoteE2EPolicy controls native relay end-to-end encryption rollout
+	// (RMM_REMOTE_E2E_POLICY: "preferred" | "required"). "preferred" enforces an
+	// irreversible ratchet once an agent registers its P-256 identity key while
+	// keeping pre-0.13 agents reachable during upgrade; "required" refuses
+	// native sessions to agents that have not registered a key yet.
+	RemoteE2EPolicy string
 
 	// SMTP* configure the account mail transport: password resets only. Unlike
 	// the AI and MeshCentral settings this one is env-only and has no console
@@ -338,6 +344,7 @@ func Load() (*Config, error) {
 		MeshCentralMatchHostname:   os.Getenv("RMM_MESHCENTRAL_MATCH_HOSTNAME") == "true",
 		MeshCentralSharedAccount:   os.Getenv("RMM_MESHCENTRAL_SHARED_ACCOUNT") != "false",
 		RustDeskEnabled:            os.Getenv("RMM_RUSTDESK_ENABLED") == "true",
+		RemoteE2EPolicy:            strings.ToLower(strings.TrimSpace(env("RMM_REMOTE_E2E_POLICY", "preferred"))),
 		SMTPHost:                   strings.TrimSpace(os.Getenv("RMM_SMTP_HOST")),
 		SMTPPort:                   envInt("RMM_SMTP_PORT", 587),
 		SMTPUsername:               os.Getenv("RMM_SMTP_USERNAME"),
@@ -453,6 +460,9 @@ func Load() (*Config, error) {
 	}
 	if c.EnforceConsoleRelayIngress && !c.TrustProxyHeaders {
 		return nil, fmt.Errorf("RMM_ENFORCE_CONSOLE_RELAY_INGRESS requires RMM_TRUST_PROXY_HEADERS=true behind a trusted proxy")
+	}
+	if c.RemoteE2EPolicy != "preferred" && c.RemoteE2EPolicy != "required" {
+		return nil, fmt.Errorf("RMM_REMOTE_E2E_POLICY must be \"preferred\" or \"required\"")
 	}
 	return c, nil
 }

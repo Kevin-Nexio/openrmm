@@ -17,6 +17,8 @@ import (
 	"unsafe"
 
 	"github.com/gorilla/websocket"
+
+	"github.com/p1ngu/rmm/internal/e2e"
 )
 
 // ---- Win32 bindings (CGO-free, via lazy DLLs) ----
@@ -432,7 +434,7 @@ type wsMsg struct {
 // A single writer goroutine serializes all sends (gorilla forbids concurrent
 // writes).
 type session struct {
-	conn       *websocket.Conn
+	conn       e2e.WSConn
 	out        chan wsMsg
 	done       chan struct{}
 	inputCh    chan []byte // input events handed to the desktop worker
@@ -446,6 +448,7 @@ type session struct {
 	monReq     atomic.Bool        // the selection changed; rebuild the capturer
 	clipMirror *clipboardMirror   // what has already crossed, so nothing bounces back
 	allowFiles bool
+	clipboard  bool
 }
 
 func (s *session) send(mt int, data []byte) {
@@ -460,17 +463,19 @@ func (s *session) sendJSON(v any) {
 	s.send(websocket.TextMessage, b)
 }
 
-func runMedia(conn *websocket.Conn, opts sessionOptions) error {
+func runMedia(conn e2e.WSConn, opts sessionOptions) error {
 	allowFiles := opts.allowFiles
 	s := &session{conn: conn, out: make(chan wsMsg, 32), done: make(chan struct{}),
 		inputCh: make(chan []byte, 256), uploads: map[uint8]*os.File{}, allowFiles: allowFiles,
-		clipMirror: &clipboardMirror{}}
+		clipboard: opts.clipboard, clipMirror: &clipboardMirror{}}
 	defer close(s.done)
 	// Mirror the endpoint's clipboard for as long as the session lasts, so a
 	// copy on the remote screen can be pasted on the technician's machine.
-	go watchClipboard(s.clipMirror, func(text string) {
-		s.sendJSON(map[string]any{"t": "clip", "text": text})
-	}, s.done)
+	if opts.clipboard {
+		go watchClipboard(s.clipMirror, func(text string) {
+			s.sendJSON(map[string]any{"t": "clip", "text": text})
+		}, s.done)
+	}
 	if opts.chat {
 		s.chat = newChatWindow("OpenRMM — Chat with technician", func(text string) {
 			s.sendJSON(map[string]any{"t": "chat", "from": "user", "text": text})
@@ -705,6 +710,9 @@ func (s *session) onMessage(mt int, data []byte) {
 			s.monReq.Store(true)
 		}
 	case "clip":
+		if !s.clipboard {
+			return
+		}
 		var cm struct {
 			Text  string `json:"text"`
 			Paste bool   `json:"paste"`

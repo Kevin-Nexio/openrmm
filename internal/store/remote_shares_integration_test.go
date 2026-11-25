@@ -52,7 +52,7 @@ func TestRemoteSharesIntegration(t *testing.T) {
 			wg.Add(1)
 			go func(i int) {
 				defer wg.Done()
-				_, err := st.RedeemRemoteShare(ctx, "race", "code-race", "secret-"+uuid.NewString(), "guest", "ip", "ua", 5)
+				_, err := st.RedeemRemoteShare(ctx, "race", "code-race", "secret-"+uuid.NewString(), "guest", "ip", "ua", "", "", 5)
 				if err == nil {
 					mu.Lock()
 					wins++
@@ -69,7 +69,7 @@ func TestRemoteSharesIntegration(t *testing.T) {
 	t.Run("wrong codes count, and the last allowed one revokes", func(t *testing.T) {
 		sh := newShare("guess", time.Now().Add(time.Hour))
 		for i := 0; i < 3; i++ {
-			if _, err := st.RedeemRemoteShare(ctx, "guess", "nope", "s", "g", "ip", "ua", 3); !errors.Is(err, ErrRemoteShareCode) {
+			if _, err := st.RedeemRemoteShare(ctx, "guess", "nope", "s", "g", "ip", "ua", "", "", 3); !errors.Is(err, ErrRemoteShareCode) {
 				t.Fatalf("wrong code %d: %v", i+1, err)
 			}
 		}
@@ -77,7 +77,7 @@ func TestRemoteSharesIntegration(t *testing.T) {
 		if err != nil || got.Status != models.RemoteShareRevoked || got.FailedAttempts != 3 {
 			t.Fatalf("after three wrong codes: %+v %v", got, err)
 		}
-		if _, err := st.RedeemRemoteShare(ctx, "guess", "code-guess", "s2", "g", "ip", "ua", 3); !errors.Is(err, ErrNotFound) {
+		if _, err := st.RedeemRemoteShare(ctx, "guess", "code-guess", "s2", "g", "ip", "ua", "", "", 3); !errors.Is(err, ErrNotFound) {
 			t.Fatalf("the right code opened a revoked link: %v", err)
 		}
 	})
@@ -87,23 +87,23 @@ func TestRemoteSharesIntegration(t *testing.T) {
 		if _, err := st.OpenRemoteShareByToken(ctx, "stale"); !errors.Is(err, ErrNotFound) {
 			t.Fatalf("lookup of an expired link: %v", err)
 		}
-		if _, err := st.RedeemRemoteShare(ctx, "stale", "code-stale", "s3", "g", "ip", "ua", 5); !errors.Is(err, ErrNotFound) {
+		if _, err := st.RedeemRemoteShare(ctx, "stale", "code-stale", "s3", "g", "ip", "ua", "", "", 5); !errors.Is(err, ErrNotFound) {
 			t.Fatalf("redeem of an expired link: %v", err)
 		}
 	})
 
 	t.Run("only the creator decides, once", func(t *testing.T) {
 		sh := newShare("decide", time.Now().Add(time.Hour))
-		if _, err := st.RedeemRemoteShare(ctx, "decide", "code-decide", "s4", "g", "ip", "ua", 5); err != nil {
+		if _, err := st.RedeemRemoteShare(ctx, "decide", "code-decide", "s4", "g", "ip", "ua", "pub-1", "sign-1", 5); err != nil {
 			t.Fatal(err)
 		}
-		if _, err := st.DecideRemoteShare(ctx, sh.ID, uuid.NewString(), true); !errors.Is(err, ErrNotFound) {
+		if _, err := st.DecideRemoteShare(ctx, sh.ID, uuid.NewString(), true, 1, "", ""); !errors.Is(err, ErrNotFound) {
 			t.Fatalf("someone else decided: %v", err)
 		}
-		if got, err := st.DecideRemoteShare(ctx, sh.ID, tech.ID, true); err != nil || got.Status != models.RemoteShareAccepted {
+		if got, err := st.DecideRemoteShare(ctx, sh.ID, tech.ID, true, 1, "wrapped-1", "kid-1"); err != nil || got.Status != models.RemoteShareAccepted || got.WrappedChatKey != "wrapped-1" || got.ChatKeyID != "kid-1" || got.GuestPublicKey != "pub-1" || got.GuestSignKey != "sign-1" {
 			t.Fatalf("accept: %+v %v", got, err)
 		}
-		if _, err := st.DecideRemoteShare(ctx, sh.ID, tech.ID, false); !errors.Is(err, ErrNotFound) {
+		if _, err := st.DecideRemoteShare(ctx, sh.ID, tech.ID, false, 1, "", ""); !errors.Is(err, ErrNotFound) {
 			t.Fatalf("a decided guest was decided again: %v", err)
 		}
 		if got, err := st.CloseRemoteShare(ctx, sh.ID); err != nil || got.Status != models.RemoteShareEnded {
@@ -113,31 +113,31 @@ func TestRemoteSharesIntegration(t *testing.T) {
 
 	t.Run("a single-use link takes its code once", func(t *testing.T) {
 		newShare("once", time.Now().Add(time.Hour))
-		if _, err := st.RedeemRemoteShare(ctx, "once", "code-once", "s5", "g", "ip", "ua", 5); err != nil {
+		if _, err := st.RedeemRemoteShare(ctx, "once", "code-once", "s5", "g", "ip", "ua", "", "", 5); err != nil {
 			t.Fatal(err)
 		}
 		if _, err := st.OpenRemoteShareByToken(ctx, "once"); !errors.Is(err, ErrNotFound) {
 			t.Fatalf("lookup of a used single-use link: %v", err)
 		}
-		if _, err := st.RedeemRemoteShare(ctx, "once", "code-once", "s6", "g", "ip", "ua", 5); !errors.Is(err, ErrNotFound) {
+		if _, err := st.RedeemRemoteShare(ctx, "once", "code-once", "s6", "g", "ip", "ua", "", "", 5); !errors.Is(err, ErrNotFound) {
 			t.Fatalf("a used single-use link took its code again: %v", err)
 		}
 	})
 
 	t.Run("a reusable link takes its code again, for one guest at a time", func(t *testing.T) {
 		sh := newShareOf("again", time.Now().Add(time.Hour), true)
-		first, err := st.RedeemRemoteShare(ctx, "again", "code-again", "first-secret", "Ana", "ip1", "ua", 5)
+		first, err := st.RedeemRemoteShare(ctx, "again", "code-again", "first-secret", "Ana", "ip1", "ua", "pub1", "sign1", 5)
 		if err != nil || first.RedeemCount != 1 || !first.Reusable {
 			t.Fatalf("first use: %+v %v", first, err)
 		}
-		if _, err := st.DecideRemoteShare(ctx, sh.ID, tech.ID, true); err != nil {
+		if _, err := st.DecideRemoteShare(ctx, sh.ID, tech.ID, true, 1, "wrap1", "kid1"); err != nil {
 			t.Fatal(err)
 		}
 		if _, err := st.OpenRemoteShareByToken(ctx, "again"); err != nil {
 			t.Fatalf("lookup of a live reusable link: %v", err)
 		}
-		second, err := st.RedeemRemoteShare(ctx, "again", "code-again", "second-secret", "Ana", "ip2", "ua", 5)
-		if err != nil || second.Status != models.RemoteSharePending || second.RedeemCount != 2 || second.DecidedAt != nil || second.GuestIP != "ip2" {
+		second, err := st.RedeemRemoteShare(ctx, "again", "code-again", "second-secret", "Ana", "ip2", "ua", "pub2", "sign2", 5)
+		if err != nil || second.Status != models.RemoteSharePending || second.RedeemCount != 2 || second.DecidedAt != nil || second.GuestIP != "ip2" || second.WrappedChatKey != "" || second.ChatKeyID != "" || second.GuestPublicKey != "pub2" {
 			t.Fatalf("coming back: %+v %v", second, err)
 		}
 		if _, err := st.RemoteShareByGuestSecret(ctx, "first-secret"); !errors.Is(err, ErrNotFound) {
@@ -146,31 +146,44 @@ func TestRemoteSharesIntegration(t *testing.T) {
 		if got, err := st.RemoteShareByGuestSecret(ctx, "second-secret"); err != nil || got.ID != sh.ID {
 			t.Fatalf("the new credential: %+v %v", got, err)
 		}
+		if _, err := st.DecideRemoteShare(ctx, sh.ID, tech.ID, true, 1, "stale-wrap", "old-kid"); !errors.Is(err, ErrNotFound) {
+			t.Fatalf("a decision prepared for the previous guest was accepted: %v", err)
+		}
+		if _, err := st.DecideRemoteShare(ctx, sh.ID, tech.ID, true, 2, "wrap2", "kid2"); err != nil {
+			t.Fatalf("decision with the current guest generation failed: %v", err)
+		}
+		if _, err := st.SetRemoteShareChatKey(ctx, sh.ID, tech.ID, 1, "stale-wrap", "old-kid"); !errors.Is(err, ErrNotFound) {
+			t.Fatalf("a room key prepared for the previous guest was stored: %v", err)
+		}
+		updated, err := st.SetRemoteShareChatKey(ctx, sh.ID, tech.ID, 2, "rotated-wrap", "rotated-kid")
+		if err != nil || updated.WrappedChatKey != "rotated-wrap" {
+			t.Fatalf("room key update with the current guest generation: %+v %v", updated, err)
+		}
 		// Wrong codes still count over the link's whole life.
-		if _, err := st.RedeemRemoteShare(ctx, "again", "nope", "s", "g", "ip", "ua", 5); !errors.Is(err, ErrRemoteShareCode) {
+		if _, err := st.RedeemRemoteShare(ctx, "again", "nope", "s", "g", "ip", "ua", "", "", 5); !errors.Is(err, ErrRemoteShareCode) {
 			t.Fatalf("a wrong code on a reusable link: %v", err)
 		}
 	})
 
 	t.Run("a reusable link is over once the technician says so", func(t *testing.T) {
 		rejected := newShareOf("rejected", time.Now().Add(time.Hour), true)
-		if _, err := st.RedeemRemoteShare(ctx, "rejected", "code-rejected", "s7", "g", "ip", "ua", 5); err != nil {
+		if _, err := st.RedeemRemoteShare(ctx, "rejected", "code-rejected", "s7", "g", "ip", "ua", "", "", 5); err != nil {
 			t.Fatal(err)
 		}
-		if _, err := st.DecideRemoteShare(ctx, rejected.ID, tech.ID, false); err != nil {
+		if _, err := st.DecideRemoteShare(ctx, rejected.ID, tech.ID, false, 1, "", ""); err != nil {
 			t.Fatal(err)
 		}
-		if _, err := st.RedeemRemoteShare(ctx, "rejected", "code-rejected", "s8", "g", "ip", "ua", 5); !errors.Is(err, ErrNotFound) {
+		if _, err := st.RedeemRemoteShare(ctx, "rejected", "code-rejected", "s8", "g", "ip", "ua", "", "", 5); !errors.Is(err, ErrNotFound) {
 			t.Fatalf("a rejected guest came back: %v", err)
 		}
 		removed := newShareOf("removed", time.Now().Add(time.Hour), true)
-		if _, err := st.RedeemRemoteShare(ctx, "removed", "code-removed", "s9", "g", "ip", "ua", 5); err != nil {
+		if _, err := st.RedeemRemoteShare(ctx, "removed", "code-removed", "s9", "g", "ip", "ua", "", "", 5); err != nil {
 			t.Fatal(err)
 		}
 		if _, err := st.CloseRemoteShare(ctx, removed.ID); err != nil {
 			t.Fatal(err)
 		}
-		if _, err := st.RedeemRemoteShare(ctx, "removed", "code-removed", "s10", "g", "ip", "ua", 5); !errors.Is(err, ErrNotFound) {
+		if _, err := st.RedeemRemoteShare(ctx, "removed", "code-removed", "s10", "g", "ip", "ua", "", "", 5); !errors.Is(err, ErrNotFound) {
 			t.Fatalf("a removed guest came back: %v", err)
 		}
 	})

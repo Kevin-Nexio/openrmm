@@ -20,6 +20,10 @@ import (
 type GuestPolicy struct {
 	// Control adds pointer and keyboard input to the view-only set.
 	Control bool
+	// E2E restricts transport frames to the E2E handshake (e2e_hello) and
+	// bounded 0xE0 encrypted binary frames; inner message filtering runs inside
+	// the endpoint's e2e.Conn after decryption.
+	E2E bool
 }
 
 // Close codes a guest's page reads (relay.go has the operator's). Each tells
@@ -38,6 +42,16 @@ const (
 // guestFrameLimit bounds a text frame from a guest. Input events are a few
 // dozen bytes; anything larger is not one of them.
 const guestFrameLimit = 4096
+
+// guestE2EFrameLimit bounds a 0xE0 ciphertext frame from a guest (4096B inner
+// cap + 26B AEAD framing + small headroom) so bulk upload/exfiltration is
+// blocked at the relay edge even without seeing plaintext.
+const (
+	guestE2EFrameLimit       = guestFrameLimit + 128
+	guestE2EViewerHelloLimit = 1024
+	guestE2EAgentHelloLimit  = 2048
+	chE2E                    = 0xE0
+)
 
 // Binary channels (cmd/rmm-remote/encoder.go). Only the screen reaches a guest.
 const chVideo = 0x01
@@ -58,6 +72,16 @@ func frameType(data []byte) (string, bool) {
 
 // FromViewer reports whether a frame from the guest may reach the endpoint.
 func (p GuestPolicy) FromViewer(mt int, data []byte) bool {
+	if p.E2E {
+		if mt == websocket.BinaryMessage {
+			return len(data) >= 26 && len(data) <= guestE2EFrameLimit && data[0] == chE2E
+		}
+		if mt != websocket.TextMessage || len(data) > guestE2EViewerHelloLimit {
+			return false
+		}
+		t, ok := frameType(data)
+		return ok && t == "e2e_hello"
+	}
 	if mt != websocket.TextMessage || len(data) > guestFrameLimit {
 		return false
 	}
@@ -77,6 +101,16 @@ func (p GuestPolicy) FromViewer(mt int, data []byte) bool {
 // FromAgent reports whether a frame from the endpoint may reach the guest: the
 // screen itself, and the few messages that describe it.
 func (p GuestPolicy) FromAgent(mt int, data []byte) bool {
+	if p.E2E {
+		if mt == websocket.BinaryMessage {
+			return len(data) >= 26 && data[0] == chE2E
+		}
+		if mt != websocket.TextMessage || len(data) > guestE2EAgentHelloLimit {
+			return false
+		}
+		t, ok := frameType(data)
+		return ok && t == "e2e_hello"
+	}
 	if mt == websocket.BinaryMessage {
 		return len(data) > 0 && data[0] == chVideo
 	}

@@ -160,6 +160,8 @@ import (
 	"unsafe"
 
 	"github.com/gorilla/websocket"
+
+	"github.com/p1ngu/rmm/internal/e2e"
 )
 
 // macDisplay is one active display. Bounds are in POINTS, the space CGEvent
@@ -385,7 +387,7 @@ func postKey(browserCode int, down bool) {
 
 // ---- relay loop ----
 
-func runMedia(conn *websocket.Conn, opts sessionOptions) error {
+func runMedia(conn e2e.WSConn, opts sessionOptions) error {
 	allowFiles := opts.allowFiles
 	type omsg struct {
 		mt int
@@ -464,9 +466,11 @@ func runMedia(conn *websocket.Conn, opts sessionOptions) error {
 	clipMirror := &clipboardMirror{}
 	// Mirror the endpoint's clipboard to the technician for as long as the
 	// session lasts, so a copy on the remote screen can be pasted at home.
-	go watchClipboard(clipMirror, func(text string) {
-		sendJSON(map[string]any{"t": "clip", "text": text})
-	}, done)
+	if opts.clipboard {
+		go watchClipboard(clipMirror, func(text string) {
+			sendJSON(map[string]any{"t": "clip", "text": text})
+		}, done)
+	}
 	probe := permissionProbe{
 		screenGranted: func() bool { return C.rmmScreenGranted() != 0 },
 		inputGranted:  func() bool { return C.rmmInputGranted() != 0 },
@@ -542,6 +546,9 @@ func runMedia(conn *websocket.Conn, opts sessionOptions) error {
 					monReq.Store(true)
 				}
 			case "clip":
+				if !opts.clipboard {
+					continue
+				}
 				var cm struct {
 					Text  string `json:"text"`
 					Paste bool   `json:"paste"`

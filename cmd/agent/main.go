@@ -34,6 +34,7 @@ import (
 	"github.com/shirou/gopsutil/v3/mem"
 	gnet "github.com/shirou/gopsutil/v3/net"
 
+	"github.com/p1ngu/rmm/internal/e2e"
 	"github.com/p1ngu/rmm/internal/protocol"
 	"github.com/p1ngu/rmm/internal/scriptvars"
 )
@@ -51,6 +52,8 @@ type state struct {
 	PendingRotationID     string `json:"pending_rotation_id,omitempty"`
 	PreviousAgentToken    string `json:"previous_agent_token,omitempty"`
 	PendingCancellationID string `json:"pending_cancellation_id,omitempty"`
+	DevicePrivateKey      string `json:"device_private_key,omitempty"`
+	DevicePublicKey       string `json:"device_public_key,omitempty"`
 }
 
 type agent struct {
@@ -355,14 +358,19 @@ func (a *agent) runOnce() error {
 // returned identity.
 func (a *agent) handshake(conn *websocket.Conn) error {
 	hostname, _ := os.Hostname()
+	_, pubKey, idErr := a.ensureDeviceIdentity()
+	if idErr != nil {
+		return fmt.Errorf("prepare device E2E identity: %w", idErr)
+	}
 	a.mu.Lock()
 	st := a.st
 	a.mu.Unlock()
 	reg := protocol.RegisterReq{
-		Hostname: hostname,
-		OS:       runtime.GOOS,
-		Arch:     runtime.GOARCH,
-		Version:  agentVersion,
+		Hostname:        hostname,
+		OS:              runtime.GOOS,
+		Arch:            runtime.GOARCH,
+		Version:         agentVersion,
+		DevicePublicKey: pubKey,
 	}
 	if st.AgentID != "" && st.AgentToken != "" {
 		reg.AgentID = st.AgentID
@@ -878,6 +886,39 @@ func (a *agent) saveState() error {
 		return err
 	}
 	return nil
+}
+
+// ensureDeviceIdentity returns the agent's durable P-256 identity keypair,
+// generating and durably saving one on first run before the public key is ever
+// sent to the server.
+func (a *agent) ensureDeviceIdentity() (priv, pub string, err error) {
+	a.mu.Lock()
+	defer a.mu.Unlock()
+	if a.st.DevicePrivateKey != "" {
+		if derived, derr := e2e.PublicKeyFromPrivate(a.st.DevicePrivateKey); derr == nil {
+			if a.st.DevicePublicKey != derived {
+				a.st.DevicePublicKey = derived
+				if a.statePath != "" {
+					_ = a.saveState()
+				}
+			}
+			return a.st.DevicePrivateKey, derived, nil
+		}
+	}
+	priv, pub, err = e2e.GenerateKeyPair()
+	if err != nil {
+		return "", "", err
+	}
+	prev := a.st
+	a.st.DevicePrivateKey = priv
+	a.st.DevicePublicKey = pub
+	if a.statePath != "" {
+		if err := a.saveState(); err != nil {
+			a.st = prev
+			return "", "", err
+		}
+	}
+	return priv, pub, nil
 }
 
 // writeDurableFile replaces a small state file only after its new contents are

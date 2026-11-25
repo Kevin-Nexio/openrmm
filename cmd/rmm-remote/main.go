@@ -38,6 +38,8 @@ import (
 	"time"
 
 	"github.com/gorilla/websocket"
+
+	"github.com/p1ngu/rmm/internal/e2e"
 )
 
 func main() {
@@ -64,11 +66,13 @@ func main() {
 	// are not, so the agent leaves them in a file owned by the session user and
 	// kickstarts the job. Reading them here also keeps the ticket out of the
 	// process arguments, where `ps` shows it to every user on the machine.
+	var sp sessionParams
 	if *session != "" {
 		p, err := readSessionFile(*session)
 		if err != nil {
 			log.Fatalf("rmm-remote: session file: %v", err)
 		}
+		sp = p
 		*relay, *ticket, *filesOnly, *noFiles, *noChat = p.Relay, p.Ticket, p.FilesOnly, p.NoFiles, p.NoChat
 	}
 	if *relay == "" {
@@ -89,29 +93,53 @@ func main() {
 	// Five attempts over under four seconds: enough for macOS to finish
 	// refreshing its Local Network cache after an update, short enough that a
 	// relay that is really unreachable still fails promptly.
-	conn, err := retryDial(func() (*websocket.Conn, error) {
+	rawConn, err := retryDial(func() (*websocket.Conn, error) {
 		c, _, err := websocket.DefaultDialer.Dial(*relay, headers)
 		return c, err
 	}, func(err error) bool { return dialRetryable(runtime.GOOS, err) }, 5, 250*time.Millisecond, time.Sleep, log.Printf)
 	if err != nil {
 		log.Fatalf("rmm-remote: dial relay: %v%s", err, dialHint(runtime.GOOS, err))
 	}
-	defer conn.Close()
+	defer rawConn.Close()
 
+	var conn e2e.WSConn = rawConn
+	if sp.E2E {
+		e2eConn, err := e2e.HandshakeAgent(rawConn, e2e.AgentHandshakeOpts{
+			SessionID: sp.SessionID,
+			AgentID:   sp.AgentID,
+			Kind:      sp.Kind,
+			GuestMode: sp.GuestMode,
+			EKPriv:    sp.EKPriv,
+			ViewerKey: sp.ViewerKey,
+			IKPub:     sp.IKPub,
+			Exp:       sp.Exp,
+			SigDel:    sp.SigDel,
+		})
+		if err != nil {
+			log.Fatalf("rmm-remote: e2e handshake: %v", err)
+		}
+		conn = e2eConn
+	}
+
+	isGuest := sp.GuestMode != ""
 	run := runMedia
 	if *filesOnly {
 		run = runFilesOnly // file transfer without screen capture
 	}
-	opts := sessionOptions{allowFiles: !*noFiles, chat: !*noChat}
+	opts := sessionOptions{
+		allowFiles: !*noFiles && !isGuest,
+		chat:       !*noChat && !isGuest,
+		clipboard:  !isGuest,
+	}
 	if *filesOnly {
-		opts.allowFiles = true
+		opts.allowFiles = !isGuest
 	}
 	if err := runPlatformUI(!*filesOnly, func() error { return run(conn, opts) }); err != nil {
 		log.Printf("rmm-remote: session ended: %v", err)
 	}
 }
 
-const remoteVersion = "0.18.0"
+const remoteVersion = "0.19.0"
 
 // sessionOptions is what the agent asked of one session.
 type sessionOptions struct {
@@ -120,23 +148,20 @@ type sessionOptions struct {
 	// has none: the server carries the guest's chat to the technician's
 	// session, whose window is the one conversation.
 	chat bool
+	// clipboard mirrors the host clipboard and accepts remote paste events;
+	// disabled in guest sessions.
+	clipboard bool
 }
 
-// sessionParams is what the agent hands to a LaunchAgent-started sidecar.
-type sessionParams struct {
-	Relay     string `json:"relay"`
-	Ticket    string `json:"ticket"`
-	FilesOnly bool   `json:"files_only"`
-	NoFiles   bool   `json:"no_files"`
-	NoChat    bool   `json:"no_chat"`
-}
+// sessionParams is what the agent hands to a sidecar via -session.
+type sessionParams = e2e.SessionParams
 
-// readSessionFile consumes the file: the ticket is single-use, and leaving it on
-// disk after the session starts would widen the window in which it is stealable
-// beyond the moment it is actually needed.
+// readSessionFile consumes the file: the ticket and ephemeral delegation scalar
+// are single-use, so the file contents are wiped before unlinking.
 func readSessionFile(path string) (sessionParams, error) {
 	var p sessionParams
 	b, err := os.ReadFile(path)
+	_ = os.WriteFile(path, nil, 0o600)
 	_ = os.Remove(path)
 	if err != nil {
 		return p, err

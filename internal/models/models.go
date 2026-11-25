@@ -175,6 +175,9 @@ type Agent struct {
 	// LastBootAt is when the device last booted: when the server stored its
 	// latest inventory minus the uptime reported in it. Nil until then.
 	LastBootAt *time.Time `json:"last_boot_at,omitempty"`
+	// DevicePublicKey is the device's pinned ECDSA P-256 identity key for E2E
+	// remote sessions (empty only on pre-0.13 agents before upgrade).
+	DevicePublicKey string `json:"device_public_key,omitempty"`
 }
 
 // Job is a unit of work targeted at an agent (currently: run a script).
@@ -268,6 +271,10 @@ type RemoteSession struct {
 	AgentTicket  string `json:"-"`
 	Token        string `json:"-"` // retained for external-provider internals
 	ConnectURL   string `json:"connect_url"`
+	// E2E reports whether the relayed session uses end-to-end encryption;
+	// DevicePublicKey carries the agent's pinned P-256 key when brokered.
+	E2E             bool   `json:"e2e"`
+	DevicePublicKey string `json:"device_public_key,omitempty"`
 	// MatchedBy says how an external provider finds the device: "node" (a
 	// linked id) or "hostname" (a name another computer could share). It is
 	// recorded in the remote.start audit entry and not stored with the session.

@@ -7,6 +7,8 @@ import (
 	"log"
 
 	"github.com/gorilla/websocket"
+
+	"github.com/p1ngu/rmm/internal/e2e"
 )
 
 // runFilesOnly serves a file-transfer session WITHOUT capturing or streaming the
@@ -17,7 +19,7 @@ import (
 // own runFilesOnly in files_windows.go, reusing its session-bound file ops.)
 // Opening file transfer therefore never starts a remote-desktop session; only an
 // explicit desktop session does (and it can still open the file browser in-band).
-func runFilesOnly(conn *websocket.Conn, _ sessionOptions) error {
+func runFilesOnly(conn e2e.WSConn, _ sessionOptions) error {
 	type omsg struct {
 		mt int
 		b  []byte

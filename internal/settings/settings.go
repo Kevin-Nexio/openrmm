@@ -36,6 +36,8 @@ const (
 	// KeyRemoteGuestAccess allows technicians holding devices.remote.share to
 	// invite guests without an account. Off unless an administrator turns it on.
 	KeyRemoteGuestAccess = "remote.guest_access"
+	// KeyRemoteE2EPolicy sets native remote E2E policy ("preferred" | "required").
+	KeyRemoteE2EPolicy = "remote.e2e_policy"
 	// KeyAIAutonomyPaused turns off everything the AI may do without approval,
 	// for every role, at once (docs/23-ai-autonomy.md). Read on every call.
 	KeyAIAutonomyPaused = "ai.autonomy_paused"
@@ -59,6 +61,7 @@ var publicKeys = map[string]bool{
 	KeyMeshCentralSharedAccount: true,
 	KeyRustDeskEnabled:          true,
 	KeyRemoteGuestAccess:        true,
+	KeyRemoteE2EPolicy:          true,
 	KeyAIAutonomyPaused:         true,
 	KeyJobsAllowUnapproved:      true,
 }
@@ -78,12 +81,17 @@ type Editable struct {
 	MeshCentralSharedAccount bool
 	RustDeskEnabled          bool
 	RemoteGuestAccess        bool
+	RemoteE2EPolicy          string
 	AIAutonomyPaused         bool
 	JobsAllowUnapproved      bool
 }
 
 // FromConfig builds the env-only baseline.
 func FromConfig(cfg *config.Config) Editable {
+	e2ePolicy := cfg.RemoteE2EPolicy
+	if e2ePolicy != "preferred" && e2ePolicy != "required" {
+		e2ePolicy = "preferred"
+	}
 	return Editable{
 		AIProvider:               cfg.AIProvider,
 		AIBaseURL:                cfg.AIBaseURL,
@@ -97,6 +105,7 @@ func FromConfig(cfg *config.Config) Editable {
 		MeshCentralMatchHostname: cfg.MeshCentralMatchHostname,
 		MeshCentralSharedAccount: cfg.MeshCentralSharedAccount,
 		RustDeskEnabled:          cfg.RustDeskEnabled,
+		RemoteE2EPolicy:          e2ePolicy,
 		// The environment is only the starting value: once an administrator
 		// saves the setting, the stored value wins.
 		JobsAllowUnapproved: cfg.AllowUnapprovedJobs,
@@ -117,6 +126,7 @@ func (e Editable) ApplyToConfig(cfg *config.Config) {
 	cfg.MeshCentralMatchHostname = e.MeshCentralMatchHostname
 	cfg.MeshCentralSharedAccount = e.MeshCentralSharedAccount
 	cfg.RustDeskEnabled = e.RustDeskEnabled
+	cfg.RemoteE2EPolicy = e.RemoteE2EPolicy
 }
 
 // Effective returns env config overlaid with DB settings.
@@ -145,7 +155,7 @@ func Effective(ctx context.Context, st *store.Store, cfg *config.Config) (Editab
 		}
 		return row.Value, true, nil
 	}
-	for _, key := range []string{KeyAIProvider, KeyAIBaseURL, KeyAIModel, KeyAIAPIKey, KeyRemoteDefaultProvider, KeyMeshCentralURL, KeyMeshCentralUser, KeyMeshCentralTokenKey, KeyMeshCentralEnabled, KeyMeshCentralMatchHostname, KeyMeshCentralSharedAccount, KeyRustDeskEnabled, KeyRemoteGuestAccess, KeyAIAutonomyPaused, KeyJobsAllowUnapproved} {
+	for _, key := range []string{KeyAIProvider, KeyAIBaseURL, KeyAIModel, KeyAIAPIKey, KeyRemoteDefaultProvider, KeyMeshCentralURL, KeyMeshCentralUser, KeyMeshCentralTokenKey, KeyMeshCentralEnabled, KeyMeshCentralMatchHostname, KeyMeshCentralSharedAccount, KeyRustDeskEnabled, KeyRemoteGuestAccess, KeyRemoteE2EPolicy, KeyAIAutonomyPaused, KeyJobsAllowUnapproved} {
 		v, ok, err := get(key)
 		if err != nil {
 			return out, fmt.Errorf("load %s: %w", key, err)
@@ -180,6 +190,10 @@ func Effective(ctx context.Context, st *store.Store, cfg *config.Config) (Editab
 			out.RustDeskEnabled = v == "true"
 		case KeyRemoteGuestAccess:
 			out.RemoteGuestAccess = v == "true"
+		case KeyRemoteE2EPolicy:
+			if v == "preferred" || v == "required" {
+				out.RemoteE2EPolicy = v
+			}
 		case KeyAIAutonomyPaused:
 			out.AIAutonomyPaused = v == "true"
 		case KeyJobsAllowUnapproved:
@@ -209,6 +223,7 @@ type SaveRequest struct {
 		MeshSharedAccount  *bool  `json:"meshcentral_shared_account"` // nil = preserve current
 		RustDeskEnabled    *bool  `json:"rustdesk_enabled"`           // nil = preserve current
 		GuestAccess        *bool  `json:"guest_access"`               // nil = preserve current
+		E2EPolicy          string `json:"e2e_policy"`                 // "" = preserve current
 	} `json:"remote"`
 	Jobs struct {
 		AllowUnapproved *bool `json:"allow_unapproved"` // nil = preserve current
@@ -220,8 +235,14 @@ type SaveRequest struct {
 // an explicit provider would then fail.
 var ErrRustDeskDefaultDisabled = errors.New("RustDesk must be enabled to be the default remote provider")
 
+// ErrInvalidRemoteE2EPolicy refuses an unknown native E2E policy.
+var ErrInvalidRemoteE2EPolicy = errors.New("invalid remote E2E policy: must be preferred or required")
+
 // Save persists editable settings. Secret empty strings preserve existing values.
 func Save(ctx context.Context, st *store.Store, cfg *config.Config, in SaveRequest) (Editable, error) {
+	if p := in.Remote.E2EPolicy; p != "" && p != "preferred" && p != "required" {
+		return Editable{}, ErrInvalidRemoteE2EPolicy
+	}
 	current, err := Effective(ctx, st, cfg)
 	if err != nil {
 		return current, err
@@ -284,6 +305,13 @@ func Save(ctx context.Context, st *store.Store, cfg *config.Config, in SaveReque
 	if in.Remote.GuestAccess != nil {
 		guestAccess = *in.Remote.GuestAccess
 	}
+	e2ePolicy := current.RemoteE2EPolicy
+	if p := strings.TrimSpace(in.Remote.E2EPolicy); p != "" {
+		e2ePolicy = p
+	}
+	if e2ePolicy == "" {
+		e2ePolicy = "preferred"
+	}
 	autonomyPaused := current.AIAutonomyPaused
 	if in.AI.AutonomyPaused != nil {
 		autonomyPaused = *in.AI.AutonomyPaused
@@ -304,6 +332,7 @@ func Save(ctx context.Context, st *store.Store, cfg *config.Config, in SaveReque
 		{KeyMeshCentralSharedAccount, strconv.FormatBool(meshSharedAccount)},
 		{KeyRustDeskEnabled, strconv.FormatBool(rustdesk)},
 		{KeyRemoteGuestAccess, strconv.FormatBool(guestAccess)},
+		{KeyRemoteE2EPolicy, e2ePolicy},
 		{KeyAIAutonomyPaused, strconv.FormatBool(autonomyPaused)},
 		{KeyJobsAllowUnapproved, strconv.FormatBool(allowUnapproved)},
 	} {

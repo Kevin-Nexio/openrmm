@@ -2,9 +2,11 @@ package api
 
 import (
 	"encoding/json"
+	"strings"
 	"time"
 
 	"github.com/p1ngu/rmm/internal/models"
+	"github.com/p1ngu/rmm/internal/remote"
 )
 
 // One conversation across a technician's session and their guests'.
@@ -69,7 +71,8 @@ func (s *Server) queueChat(agentID, sessionID, role, text string) {
 // carryChat delivers one line to the sessions that share its conversation.
 func (s *Server) carryChat(line chatLine) {
 	viewer, ok := s.presence.Session(line.agentID, line.sessionID)
-	if !ok || viewer.Kind != "native" {
+	rawEnv, encrypted := strings.CutPrefix(line.text, remote.E2EChatPrefix)
+	if !ok || viewer.Kind != "native" || viewer.E2E != encrypted {
 		return
 	}
 	if shareID, isGuest := models.GuestShareID(viewer.User); isGuest {
@@ -80,13 +83,20 @@ func (s *Server) carryChat(line chatLine) {
 	if len(guests) == 0 {
 		return
 	}
+	if encrypted {
+		frame := []byte(rawEnv)
+		for _, id := range guests {
+			s.sendToGuest(id, frame, true)
+		}
+		return
+	}
 	from := "user"
 	if line.role == "viewer" {
 		from = "tech"
 	}
 	frame := chatFrame(from, "", cleanChatLine(line.text))
 	for _, id := range guests {
-		s.sendToGuest(id, frame)
+		s.sendToGuest(id, frame, false)
 	}
 }
 
@@ -95,6 +105,24 @@ func (s *Server) carryChat(line chatLine) {
 func (s *Server) carryGuestChat(line chatLine, shareID string) {
 	gs := s.guests.session(shareID)
 	if gs == nil || gs.sessionID != line.sessionID || gs.agentID != line.agentID {
+		return
+	}
+	if rawEnv, ok := strings.CutPrefix(line.text, remote.E2EChatPrefix); ok {
+		if line.role != "viewer" || !s.guests.allowChat(shareID, time.Now()) {
+			return
+		}
+		frame := []byte(rawEnv)
+		for _, tech := range s.presence.ForUser(gs.agentID, gs.sponsor, "native") {
+			if tech.E2E {
+				_ = s.relay.Send(tech.SessionID, "agent", frame)
+				_ = s.relay.Send(tech.SessionID, "viewer", frame)
+			}
+		}
+		for _, id := range s.guests.sponsoredBy(gs.agentID, gs.sponsor) {
+			if id != shareID {
+				s.sendToGuest(id, frame, true)
+			}
+		}
 		return
 	}
 	text := cleanChatLine(line.text)
@@ -112,6 +140,9 @@ func (s *Server) carryGuestChat(line chatLine, shareID string) {
 		// side as the technician's, so for it the name goes in the line itself.
 		legacy := chatFrame("tech", "", gs.name+" (guest): "+text)
 		for _, tech := range s.presence.ForUser(gs.agentID, gs.sponsor, "native") {
+			if tech.E2E {
+				continue
+			}
 			toEndpoint := legacy
 			if s.relay.GuestChat(tech.SessionID) {
 				toEndpoint = toViewers
@@ -122,17 +153,19 @@ func (s *Server) carryGuestChat(line chatLine, shareID string) {
 		toViewers = chatFrame("user", "", text)
 	}
 	for _, tech := range s.presence.ForUser(gs.agentID, gs.sponsor, "native") {
-		_ = s.relay.Send(tech.SessionID, "viewer", toViewers)
+		if !tech.E2E {
+			_ = s.relay.Send(tech.SessionID, "viewer", toViewers)
+		}
 	}
 	for _, id := range s.guests.sponsoredBy(gs.agentID, gs.sponsor) {
 		if id != shareID {
-			s.sendToGuest(id, toViewers)
+			s.sendToGuest(id, toViewers, false)
 		}
 	}
 }
 
-func (s *Server) sendToGuest(shareID string, frame []byte) {
-	if gs := s.guests.session(shareID); gs != nil {
+func (s *Server) sendToGuest(shareID string, frame []byte, encrypted bool) {
+	if gs := s.guests.session(shareID); gs != nil && gs.e2e == encrypted {
 		_ = s.relay.Send(gs.sessionID, "viewer", frame)
 	}
 }

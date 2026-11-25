@@ -16,7 +16,8 @@ import (
 var ErrRemoteShareCode = errors.New("wrong code")
 
 const remoteShareCols = `id, agent_id, created_by, mode, status, failed_attempts, guest_name, guest_ip,
-	guest_user_agent, created_at, expires_at, requested_at, decided_at, ended_at, reusable, redeem_count`
+	guest_user_agent, created_at, expires_at, requested_at, decided_at, ended_at, reusable, redeem_count,
+	guest_public_key, guest_sign_key, wrapped_chat_key, chat_key_id`
 
 // redeemableShare is the condition under which a link's code is checked: a
 // link never used, or one the technician let the guest come back to while it
@@ -27,7 +28,7 @@ func scanRemoteShare(row pgx.Row) (*models.RemoteShare, error) {
 	var s models.RemoteShare
 	err := row.Scan(&s.ID, &s.AgentID, &s.CreatedBy, &s.Mode, &s.Status, &s.FailedAttempts, &s.GuestName,
 		&s.GuestIP, &s.GuestUserAgent, &s.CreatedAt, &s.ExpiresAt, &s.RequestedAt, &s.DecidedAt, &s.EndedAt,
-		&s.Reusable, &s.RedeemCount)
+		&s.Reusable, &s.RedeemCount, &s.GuestPublicKey, &s.GuestSignKey, &s.WrappedChatKey, &s.ChatKeyID)
 	if errors.Is(err, pgx.ErrNoRows) {
 		return nil, ErrNotFound
 	}
@@ -95,7 +96,7 @@ func (s *Store) OpenRemoteShareByToken(ctx context.Context, tokenHash string) (*
 //
 // The row is locked for the check, so two guesses racing each other are
 // counted one after the other rather than both read the same count.
-func (s *Store) RedeemRemoteShare(ctx context.Context, tokenHash, codeHash, guestSecretHash, name, ip, userAgent string, maxAttempts int) (*models.RemoteShare, error) {
+func (s *Store) RedeemRemoteShare(ctx context.Context, tokenHash, codeHash, guestSecretHash, name, ip, userAgent, guestPubKey, guestSignKey string, maxAttempts int) (*models.RemoteShare, error) {
 	tx, err := s.pool.Begin(ctx)
 	if err != nil {
 		return nil, err
@@ -127,8 +128,8 @@ func (s *Store) RedeemRemoteShare(ctx context.Context, tokenHash, codeHash, gues
 	}
 	share, err := scanRemoteShare(tx.QueryRow(ctx, `UPDATE remote_shares SET status='pending', guest_secret_hash=$2,
 		guest_name=$3, guest_ip=$4, guest_user_agent=$5, requested_at=now(), decided_at=NULL,
-		redeem_count=redeem_count+1
-		WHERE id=$1 RETURNING `+remoteShareCols, id, guestSecretHash, name, ip, userAgent))
+		redeem_count=redeem_count+1, guest_public_key=$6, guest_sign_key=$7, wrapped_chat_key='', chat_key_id=''
+		WHERE id=$1 RETURNING `+remoteShareCols, id, guestSecretHash, name, ip, userAgent, guestPubKey, guestSignKey))
 	if err != nil {
 		return nil, err
 	}
@@ -147,14 +148,26 @@ func (s *Store) RemoteShareByGuestSecret(ctx context.Context, secretHash string)
 
 // DecideRemoteShare records the technician's answer to a waiting guest. Only
 // the share's creator decides, and only while the guest is still waiting.
-func (s *Store) DecideRemoteShare(ctx context.Context, id, createdBy string, accept bool) (*models.RemoteShare, error) {
+func (s *Store) DecideRemoteShare(ctx context.Context, id, createdBy string, accept bool, redeemCount int, wrappedChatKey, chatKeyID string) (*models.RemoteShare, error) {
 	status := models.RemoteShareRejected
 	if accept {
 		status = models.RemoteShareAccepted
+	} else {
+		wrappedChatKey, chatKeyID = "", ""
 	}
-	return scanRemoteShare(s.pool.QueryRow(ctx, `UPDATE remote_shares SET status=$3, decided_at=now()
-		WHERE id=$1 AND created_by=$2 AND status='pending' AND expires_at > now()
-		RETURNING `+remoteShareCols, id, createdBy, status))
+	return scanRemoteShare(s.pool.QueryRow(ctx, `UPDATE remote_shares SET status=$3, decided_at=now(),
+		wrapped_chat_key=$4, chat_key_id=$5
+		WHERE id=$1 AND created_by=$2 AND status='pending' AND expires_at > now() AND redeem_count=$6
+		RETURNING `+remoteShareCols, id, createdBy, status, wrappedChatKey, chatKeyID, redeemCount))
+}
+
+// SetRemoteShareChatKey updates the sealed E2E chat room key on an accepted,
+// live share (used when the technician rotates K_chat or reconnects in a new tab).
+func (s *Store) SetRemoteShareChatKey(ctx context.Context, id, createdBy string, redeemCount int, wrappedChatKey, chatKeyID string) (*models.RemoteShare, error) {
+	return scanRemoteShare(s.pool.QueryRow(ctx, `UPDATE remote_shares
+		SET wrapped_chat_key=$3, chat_key_id=$4
+		WHERE id=$1 AND created_by=$2 AND status='accepted' AND expires_at > now() AND redeem_count=$5
+		RETURNING `+remoteShareCols, id, createdBy, wrappedChatKey, chatKeyID, redeemCount))
 }
 
 // CloseRemoteShare withdraws a live share: revoked when the guest never got

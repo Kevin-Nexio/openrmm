@@ -15,6 +15,7 @@ import (
 
 	"github.com/p1ngu/rmm/internal/auth"
 	"github.com/p1ngu/rmm/internal/devicelimit"
+	"github.com/p1ngu/rmm/internal/e2e"
 	"github.com/p1ngu/rmm/internal/models"
 	"github.com/p1ngu/rmm/internal/protocol"
 	"github.com/p1ngu/rmm/internal/remote"
@@ -149,12 +150,17 @@ func (s *Server) attachAgentConnection(ctx context.Context, agentID string, conn
 // minted agent token; on re-auth the returned token is empty (the agent keeps
 // the one it already stored).
 func (s *Server) registerAgent(ctx context.Context, reg *protocol.RegisterReq) (id, token, cancelCredentialRotationID string, err error) {
+	if reg.DevicePublicKey != "" {
+		if err := e2e.ValidatePublicKey(reg.DevicePublicKey); err != nil {
+			return "", "", "", errors.New("invalid device E2E public key")
+		}
+	}
 	if reg.EnrollToken != "" {
 		// The plan's device limit, when one is enforced, is checked in the same
 		// transaction that consumes the token and creates the agent.
 		limit := s.enforcedDeviceLimit(time.Now())
 		token = auth.NewToken()
-		a, err := s.store.EnrollAgent(ctx, reg.EnrollToken, limit, reg.Hostname, reg.OS, reg.Arch, reg.Version, auth.Hash(token))
+		a, err := s.store.EnrollAgent(ctx, reg.EnrollToken, limit, reg.Hostname, reg.OS, reg.Arch, reg.Version, auth.Hash(token), reg.DevicePublicKey)
 		if errors.Is(err, devicelimit.ErrLimitReached) {
 			go s.observeDeviceLimitNow()
 			return "", "", "", errors.New(devicelimit.RefusalMessage(limit))
@@ -173,6 +179,10 @@ func (s *Server) registerAgent(ctx context.Context, reg *protocol.RegisterReq) (
 		detail, _ := json.Marshal(map[string]any{"enroll_token_id": a.EnrollTokenID, "hostname": a.Hostname,
 			"os": a.OS, "arch": a.Arch, "site_id": a.SiteID, "group_id": a.GroupID})
 		_ = s.store.AddAudit(ctx, "agent", "device.enrolled", a.ID, detail)
+		if a.DevicePublicKey != "" {
+			pinDetail, _ := json.Marshal(map[string]string{"fingerprint": e2e.DisplayFingerprint(a.DevicePublicKey)})
+			_ = s.store.AddAudit(ctx, "agent", "device.e2e_key_pinned", a.ID, pinDetail)
+		}
 		return a.ID, token, "", nil
 	}
 	if reg.AgentID == "" || reg.AgentToken == "" {
@@ -181,6 +191,12 @@ func (s *Server) registerAgent(ctx context.Context, reg *protocol.RegisterReq) (
 	valid, err := s.store.AuthenticateAgentToken(ctx, reg.AgentID, auth.Hash(reg.AgentToken))
 	if err != nil || !valid {
 		return "", "", "", errors.New("invalid agent token")
+	}
+	if pinned, err := s.store.VerifyOrPinAgentPublicKey(ctx, reg.AgentID, reg.DevicePublicKey); err != nil {
+		return "", "", "", err
+	} else if pinned {
+		pinDetail, _ := json.Marshal(map[string]string{"fingerprint": e2e.DisplayFingerprint(reg.DevicePublicKey)})
+		_ = s.store.AddAudit(ctx, "agent", "device.e2e_key_pinned", reg.AgentID, pinDetail)
 	}
 	// The OS on record is the enrolled one; a device naming another is not
 	// believed (policies filter on the OS) and is worth an operator's look.
@@ -460,6 +476,7 @@ func (s *Server) handleRelayWS(w http.ResponseWriter, r *http.Request) {
 			AgentID:   sess.AgentID,
 			User:      viewerSubject,
 			Kind:      sess.Provider,
+			E2E:       sess.E2E,
 			Since:     time.Now().UTC(),
 		}
 		leave := func() {}
@@ -485,7 +502,7 @@ func (s *Server) handleRelayWS(w http.ResponseWriter, r *http.Request) {
 		}
 		defer leave()
 		if guestShare != nil {
-			policy := remote.GuestPolicy{Control: guestShare.Mode == models.RemoteShareControl}
+			policy := remote.GuestPolicy{Control: guestShare.Mode == models.RemoteShareControl, E2E: sess.E2E}
 			if err := s.relay.JoinGuest(sess.ID, sess.AgentID, conn, policy); err != nil {
 				log.Printf("remote relay session=%s guest=%s rejected: %v", sess.ID, guestShare.ID, err)
 			}
