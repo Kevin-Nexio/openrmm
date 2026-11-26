@@ -65,6 +65,7 @@ func (s *Server) handleAgentWS(w http.ResponseWriter, r *http.Request) {
 	}
 	conn.SetReadLimit(agentWSReadLimit)
 	ctx := context.Background()
+	ip := clientIP(r, s.cfg.TrustProxyHeaders)
 
 	conn.SetReadDeadline(time.Now().Add(90 * time.Second))
 	_, raw, err := conn.ReadMessage()
@@ -84,22 +85,22 @@ func (s *Server) handleAgentWS(w http.ResponseWriter, r *http.Request) {
 	var agentID, token, cancelCredentialRotationID string
 	var ch chan []byte
 	if reg.EnrollToken != "" {
-		agentID, token, cancelCredentialRotationID, err = s.registerAgent(ctx, &reg)
+		agentID, token, cancelCredentialRotationID, err = s.registerAgent(ctx, &reg, ip)
 		if err == nil {
 			unlock := s.lockAgentLifecycle(agentID)
 			agent, getErr := s.store.GetAgent(ctx, agentID)
 			if getErr != nil || agent.Status == models.AgentRevoked {
 				err = errors.New("agent was revoked during enrollment")
 			} else {
-				ch, err = s.attachAgentConnection(ctx, agentID, conn)
+				ch, err = s.attachAgentConnection(ctx, agentID, ip, reg.Version, conn)
 			}
 			unlock()
 		}
 	} else {
 		unlock := s.lockAgentLifecycle(reg.AgentID)
-		agentID, token, cancelCredentialRotationID, err = s.registerAgent(ctx, &reg)
+		agentID, token, cancelCredentialRotationID, err = s.registerAgent(ctx, &reg, ip)
 		if err == nil {
-			ch, err = s.attachAgentConnection(ctx, agentID, conn)
+			ch, err = s.attachAgentConnection(ctx, agentID, ip, reg.Version, conn)
 		}
 		unlock()
 	}
@@ -137,19 +138,20 @@ func (s *Server) handleAgentWS(w http.ResponseWriter, r *http.Request) {
 	}
 }
 
-func (s *Server) attachAgentConnection(ctx context.Context, agentID string, conn *websocket.Conn) (chan []byte, error) {
-	ch := s.hub.Add(agentID, func() { _ = conn.Close() })
+func (s *Server) attachAgentConnection(ctx context.Context, agentID, ip, version string, conn *websocket.Conn) (chan []byte, error) {
+	ch, replaced := s.hub.AddReplacing(agentID, func() { _ = conn.Close() })
 	if err := s.store.SetAgentStatus(ctx, agentID, models.AgentOnline); err != nil {
 		s.hub.Remove(agentID, ch)
 		return nil, err
 	}
+	s.watchAgentConnection(ctx, agentID, ip, version, replaced)
 	return ch, nil
 }
 
 // registerAgent validates the handshake. On enrollment it returns a freshly
 // minted agent token; on re-auth the returned token is empty (the agent keeps
 // the one it already stored).
-func (s *Server) registerAgent(ctx context.Context, reg *protocol.RegisterReq) (id, token, cancelCredentialRotationID string, err error) {
+func (s *Server) registerAgent(ctx context.Context, reg *protocol.RegisterReq, ip string) (id, token, cancelCredentialRotationID string, err error) {
 	if reg.DevicePublicKey != "" {
 		if err := e2e.ValidatePublicKey(reg.DevicePublicKey); err != nil {
 			return "", "", "", errors.New("invalid device E2E public key")
@@ -192,12 +194,17 @@ func (s *Server) registerAgent(ctx context.Context, reg *protocol.RegisterReq) (
 	if err != nil || !valid {
 		return "", "", "", errors.New("invalid agent token")
 	}
-	if pinned, err := s.store.VerifyOrPinAgentPublicKey(ctx, reg.AgentID, reg.DevicePublicKey); err != nil {
+	// A key other than the pinned one, or none, does not refuse the
+	// connection: the token authenticates this channel. The device is marked
+	// for review and its native remote sessions pause (api_device_key.go).
+	outcome, err := s.store.CheckAgentDeviceKey(ctx, reg.AgentID, store.DeviceKeyPresentation{
+		Key:         reg.DevicePublicKey,
+		Unavailable: reg.DeviceKeyStatus == protocol.DeviceKeyUnavailable,
+	}, ip, reg.Version)
+	if err != nil {
 		return "", "", "", err
-	} else if pinned {
-		pinDetail, _ := json.Marshal(map[string]string{"fingerprint": e2e.DisplayFingerprint(reg.DevicePublicKey)})
-		_ = s.store.AddAudit(ctx, "agent", "device.e2e_key_pinned", reg.AgentID, pinDetail)
 	}
+	s.reportDeviceKeyOutcome(ctx, reg.AgentID, reg.Hostname, ip, reg.Version, outcome)
 	// The OS on record is the enrolled one; a device naming another is not
 	// believed (policies filter on the OS) and is worth an operator's look.
 	if err := s.store.RefreshAgentInfo(ctx, reg.AgentID, reg.Hostname, reg.OS, reg.Arch, reg.Version); errors.Is(err, store.ErrAgentOSChanged) {

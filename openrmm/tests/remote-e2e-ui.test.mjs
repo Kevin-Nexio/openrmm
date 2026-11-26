@@ -351,6 +351,7 @@ test('GuestJoinScreen parses E2E and legacy fragments, generates guest keys, and
 test('TerminalViewer completes E2E handshake, pins device key, renders lock badge, and blocks legacy downgrade', async () => {
   const termCode = [
     between(devicesSrc, 'function relayProtocols(', '// Why a guest'),
+    between(devicesSrc, 'function useDeviceKeyChange(', 'function ShareAccessModal('),
     between(devicesSrc, 'function RemoteEncryptionStatus(', 'window.TerminalViewer ='),
   ].join('\n');
   const compiled = transformSync(termCode, { loader: 'jsx', jsxFragment: 'React.Fragment' }).code;

@@ -32,7 +32,7 @@ import (
 // TestRemoteE2EFullLifecycle exercises the complete server-side PR #313 flow
 // against a real PostgreSQL database, real /ws/agent and /ws/remote WebSockets,
 // real e2e.HandshakeAgent/HandshakeViewer, and the authenticated encrypted chat
-// HTTP APIs (including key pinning, keyless-reconnect refusal, policy switching,
+// HTTP APIs (including key pinning, review of a changed or missing key, policy switching,
 // E2E guest invitations, 3-party encrypted chat, key rotation, and immediate
 // room suspension on guest removal).
 func TestRemoteE2EFullLifecycle(t *testing.T) {
@@ -141,23 +141,36 @@ func TestRemoteE2EFullLifecycle(t *testing.T) {
 		t.Fatal("expected device.e2e_key_pinned audit entry on enrollment")
 	}
 
-	// Reconnect with mismatched key -> refused!
+	// A different key does not refuse the connection: the device stays online,
+	// keeps its pinned key, and its native sessions pause for review.
 	cBadKey, badKeyEnv := registerWS(protocol.RegisterReq{
 		AgentID: pinnedID, AgentToken: pinnedTok, Hostname: "e2e-host", OS: "linux", Arch: "amd64", Version: "0.13.0",
 		DevicePublicKey: roguePub,
 	})
 	_ = cBadKey.Close()
-	if badKeyEnv.Type != protocol.MsgError {
-		t.Fatalf("mismatched public key reconnect was accepted: %s %s", badKeyEnv.Type, badKeyEnv.Data)
+	if badKeyEnv.Type != protocol.MsgRegistered {
+		t.Fatalf("a different key took the device offline: %s %s", badKeyEnv.Type, badKeyEnv.Data)
+	}
+	if a, err := st.GetAgent(ctx, pinnedID); err != nil || a.DevicePublicKey != ikPub || a.DeviceKeyIssue != models.DeviceKeyChanged || a.PendingDevicePublicKey != roguePub {
+		t.Fatalf("after a different key: %+v %v", a, err)
 	}
 
-	// Reconnect with empty key (keyless downgrade attack) -> refused!
+	// No key (a downgrade): still online, never back to the unencrypted relay.
 	cKeyless, keylessEnv := registerWS(protocol.RegisterReq{
 		AgentID: pinnedID, AgentToken: pinnedTok, Hostname: "e2e-host", OS: "linux", Arch: "amd64", Version: "0.13.0",
 	})
 	_ = cKeyless.Close()
-	if keylessEnv.Type != protocol.MsgError {
-		t.Fatalf("keyless reconnect on pinned device was accepted: %s %s", keylessEnv.Type, keylessEnv.Data)
+	if keylessEnv.Type != protocol.MsgRegistered {
+		t.Fatalf("a keyless reconnect took the device offline: %s %s", keylessEnv.Type, keylessEnv.Data)
+	}
+	_, reviewViewer, err := e2e.GenerateKeyPair()
+	must(err)
+	if kc, kb := httpCall(http.MethodPost, "/api/devices/"+pinnedID+"/remote", asTech, map[string]any{"provider": "native", "viewer_key": reviewViewer}); kc != http.StatusConflict || !strings.Contains(string(kb), "remote_device_key_issue") {
+		t.Fatalf("native start under review: %d %s", kc, kb)
+	}
+	// The administrator keeps the pinned key.
+	if kc, kb := httpCall(http.MethodPost, "/api/devices/"+pinnedID+"/device-key/dismiss", asTech, map[string]any{"reason": "test rogue key"}); kc != http.StatusOK {
+		t.Fatalf("dismiss: %d %s", kc, kb)
 	}
 
 	// Reconnect with matching key -> stays online for the rest of the test!

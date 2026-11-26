@@ -576,6 +576,10 @@ func (s *Server) createRemoteShare(w http.ResponseWriter, r *http.Request) {
 		writeErr(w, http.StatusConflict, "device credential is revoked; enroll it again to restore access")
 		return
 	}
+	if agent.DeviceKeyIssue != "" {
+		writeDeviceKeyIssue(w, agent.DeviceKeyIssue)
+		return
+	}
 	token := auth.NewToken()
 	code, err := guestShareCode()
 	if err != nil {

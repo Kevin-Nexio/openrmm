@@ -47,7 +47,7 @@ func TestEnrolmentStopsAtTheDeviceLimitIntegration(t *testing.T) {
 		t.Fatal(err)
 	}
 	enrol := func(host string) error {
-		_, _, _, err := s.registerAgent(ctx, &protocol.RegisterReq{EnrollToken: tok.Token, Hostname: host, OS: "linux", Arch: "amd64", Version: "0.8.0"})
+		_, _, _, err := s.registerAgent(ctx, &protocol.RegisterReq{EnrollToken: tok.Token, Hostname: host, OS: "linux", Arch: "amd64", Version: "0.8.0"}, "")
 		return err
 	}
 
@@ -80,7 +80,7 @@ func TestEnrolmentStopsAtTheDeviceLimitIntegration(t *testing.T) {
 		t.Fatalf("refused with the installer's message, got %v", err)
 	}
 	// A stranger without a token learns nothing about the plan.
-	if _, _, _, err := s.registerAgent(ctx, &protocol.RegisterReq{EnrollToken: "guess", Hostname: "x", OS: "linux", Arch: "amd64", Version: "0.8.0"}); err == nil ||
+	if _, _, _, err := s.registerAgent(ctx, &protocol.RegisterReq{EnrollToken: "guess", Hostname: "x", OS: "linux", Arch: "amd64", Version: "0.8.0"}, ""); err == nil ||
 		strings.Contains(err.Error(), "limit") || strings.Contains(err.Error(), "3 devices") {
 		t.Fatalf("an invalid token must not reveal the limit, got %v", err)
 	}

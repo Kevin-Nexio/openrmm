@@ -34,6 +34,11 @@ const sessionTTL = 2 * time.Minute
 // before it can host a new native session under the required policy.
 var ErrAgentEncryptionRequired = errors.New("this device must update before starting an end-to-end encrypted remote session")
 
+// ErrDeviceKeyIssue: the device presented another identity key than the pinned
+// one, or none, and an administrator has yet to review it. Native sessions stay
+// paused meanwhile; they never fall back to the unencrypted relay.
+var ErrDeviceKeyIssue = errors.New("this device's encryption identity needs an administrator's review before a remote session")
+
 // Provider opens a remote-access session to an agent.
 type Provider interface {
 	Name() string
@@ -270,6 +275,9 @@ func (m *Manager) brokerRelay(ctx context.Context, agent *models.Agent, createdB
 	// required for that device (anti-downgrade ratchet). Only pre-0.13 devices
 	// with no key yet may fall back to legacy relay mode under "preferred".
 	useE2E := agent.DevicePublicKey != ""
+	if agent.DeviceKeyIssue != "" {
+		return nil, ErrDeviceKeyIssue
+	}
 	if !useE2E && e2ePolicy == "required" {
 		return nil, ErrAgentEncryptionRequired
 	}

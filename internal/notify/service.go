@@ -405,6 +405,51 @@ func (s *Service) QueueAIReleaseRevoked(ctx context.Context, agentID, hostname, 
 	})
 }
 
+// QueueDeviceKeyIssue alerts the people who can see a device that its
+// encryption identity changed, went missing or is used by more than one
+// machine. Only fingerprints are sent, never a key.
+func (s *Service) QueueDeviceKeyIssue(ctx context.Context, agentID, hostname, issue, pinnedFingerprint, presentedFingerprint, ip string) {
+	_, consoleURL, err := s.config(ctx)
+	if err != nil {
+		consoleURL = ""
+	}
+	var b strings.Builder
+	switch issue {
+	case models.DeviceKeyChanged:
+		fmt.Fprintf(&b, "The device %s presented a different encryption key than the one it was first seen with.\n", hostname)
+	case models.DeviceKeyMissing:
+		fmt.Fprintf(&b, "The agent on %s could not read its encryption key.\n", hostname)
+	case models.DeviceKeyOutdated:
+		fmt.Fprintf(&b, "An agent without encryption support connected as %s, whose key is pinned.\n", hostname)
+	case models.DeviceKeyDuplicate:
+		fmt.Fprintf(&b, "More than one machine is connecting as %s.\n", hostname)
+	default:
+		fmt.Fprintf(&b, "The encryption identity of %s needs review.\n", hostname)
+	}
+	b.WriteString("Remote desktop, terminal and file transfer to it are paused until an administrator reviews it.\n\n")
+	if pinnedFingerprint != "" {
+		fmt.Fprintf(&b, "Pinned key: %s\n", pinnedFingerprint)
+	}
+	if presentedFingerprint != "" {
+		fmt.Fprintf(&b, "Presented key: %s\n", presentedFingerprint)
+	}
+	if ip != "" {
+		fmt.Fprintf(&b, "From: %s\n", ip)
+	}
+	b.WriteString("\nIf you did not expect this, do not approve the new key: someone may hold this device's credentials.\n")
+	if consoleURL != "" {
+		fmt.Fprintf(&b, "\nOpen the console: %s\n", strings.TrimRight(consoleURL, "/"))
+	}
+	s.Queue(ctx, Event{
+		Type:      store.NotifyDeviceKeyIssue,
+		AgentID:   agentID,
+		Hostname:  hostname,
+		Subject:   fmt.Sprintf("[OpenRMM] %s — %s", labelFor(store.NotifyDeviceKeyIssue), hostname),
+		Body:      b.String(),
+		DedupeKey: "device_key_issue:" + agentID + ":" + issue + ":" + presentedFingerprint,
+	})
+}
+
 // SendPasswordReset delivers a reset link directly, deliberately bypassing the
 // outbox that every alert goes through.
 //
@@ -468,6 +513,8 @@ func labelFor(eventType string) string {
 		return "Job failed"
 	case store.NotifyAIReleaseRevoked:
 		return "AI release withdrawn"
+	case store.NotifyDeviceKeyIssue:
+		return "Device encryption key needs review"
 	case store.NotifyCheckRecovered:
 		return "Recovered"
 	}

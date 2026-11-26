@@ -100,6 +100,11 @@ type Server struct {
 	// authentication, lease attachment, frames, revocation, and credential
 	// transitions without allowing slow DB I/O from one endpoint to stall others.
 	agentLifecycle sync.Map // agent id -> *sync.Mutex
+
+	// keyNotifier alerts on device key issues; conns watches for machines that
+	// share one identity (api_device_key.go).
+	keyNotifier DeviceKeyNotifier
+	conns       connectionWatch
 }
 
 // New builds the API server.
@@ -287,6 +292,8 @@ func (s *Server) Router() http.Handler {
 		r.With(s.requirePermission(models.PermDevicesManage)).Patch("/devices/{id}/remote-ids", s.setDeviceRemoteIDs)
 		r.With(s.requirePermission(models.PermDevicesManage)).Put("/devices/{id}/role", s.setDeviceRole)
 		r.With(s.requirePermission(models.PermDevicesDelete)).Post("/devices/{id}/revoke", s.revokeDevice)
+		r.With(s.requirePermission(models.PermDevicesDelete)).Post("/devices/{id}/device-key/approve", s.approveDeviceKey)
+		r.With(s.requirePermission(models.PermDevicesDelete)).Post("/devices/{id}/device-key/dismiss", s.dismissDeviceKeyIssue)
 		r.With(s.requirePermission(models.PermDevicesDelete)).Post("/devices/{id}/rotate-credential", s.rotateDeviceCredential)
 		r.With(s.requirePermission(models.PermDevicesDelete)).Post("/devices/{id}/cancel-credential-rotation", s.cancelDeviceCredentialRotation)
 		r.With(s.requirePermission(models.PermDevicesDelete)).Delete("/devices/{id}", s.deleteDevice)
@@ -1468,6 +1475,12 @@ func (s *Server) startRemote(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	if in.Provider == "native" || in.Provider == "terminal" || in.Provider == "files" {
+		// Before anything else, so a refused start never ends the session the
+		// technician already has open.
+		if agent.DeviceKeyIssue != "" {
+			writeDeviceKeyIssue(w, agent.DeviceKeyIssue)
+			return
+		}
 		if in.ViewerKey != "" && e2e.ValidatePublicKey(in.ViewerKey) != nil {
 			writeErr(w, http.StatusBadRequest, "invalid E2E viewer key")
 			return
@@ -1511,6 +1524,10 @@ func (s *Server) startRemote(w http.ResponseWriter, r *http.Request) {
 	sess, err := s.remote.Start(r.Context(), in.Provider, agent, principal, opts)
 	if errors.Is(err, remote.ErrAgentEncryptionRequired) {
 		writeCodedErr(w, http.StatusConflict, "remote_agent_update_required", err.Error())
+		return
+	}
+	if errors.Is(err, remote.ErrDeviceKeyIssue) {
+		writeDeviceKeyIssue(w, agent.DeviceKeyIssue)
 		return
 	}
 	if err != nil {

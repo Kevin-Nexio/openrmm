@@ -112,6 +112,10 @@ type Envelope struct {
 	Data json.RawMessage `json:"data,omitempty"`
 }
 
+// DeviceKeyUnavailable is RegisterReq.DeviceKeyStatus when an agent that
+// supports encryption could not read its identity key.
+const DeviceKeyUnavailable = "unavailable"
+
 // RegisterReq is the first message an agent sends. On first enrollment it carries
 // an EnrollToken; afterwards it carries its AgentID + AgentToken.
 type RegisterReq struct {
@@ -123,6 +127,10 @@ type RegisterReq struct {
 	Arch            string `json:"arch"`
 	Version         string `json:"version"`
 	DevicePublicKey string `json:"device_public_key,omitempty"`
+	// DeviceKeyStatus is "unavailable" when an agent that supports encryption
+	// could not read its identity key (DevicePublicKey is then empty). An older
+	// agent never sends it, which tells the two cases apart.
+	DeviceKeyStatus string `json:"device_key_status,omitempty"`
 }
 
 // RegisterResp returns the durable identity the agent should persist locally.

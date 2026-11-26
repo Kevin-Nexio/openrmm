@@ -279,6 +279,8 @@ const api = {
   getDevice(id) { return GET('/api/devices/' + id); },
   async getInventory(id) { return adaptInventory(await GET('/api/devices/' + id + '/inventory')); },
   startRemote(id, provider, opts) { return POST('/api/devices/' + id + '/remote', { provider, ...(opts || {}) }); },
+  approveDeviceKey(id, pendingKey, reason) { return POST('/api/devices/' + id + '/device-key/approve', { pending_device_public_key: pendingKey, reason }); },
+  dismissDeviceKeyIssue(id, reason) { return POST('/api/devices/' + id + '/device-key/dismiss', { reason }); },
   // Guest invitations: issued for a device, decided from the technician's own
   // remote session (docs/08-remote-access.md).
   createRemoteShare(id, body) { return POST('/api/devices/' + id + '/remote-shares', body); },

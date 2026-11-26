@@ -368,7 +368,6 @@ In **Settings ▸ Remote access ▸ Native**, **Prefer encryption** permits lega
 sessions on agents that have yet to register an encryption key. **Require
 encryption** blocks new native sessions on those agents. After an agent registers
 its key, subsequent native sessions require encryption even in preferred mode.
-If the agent loses its identity key, enroll it as a new device.
 
 OpenRMM's application origin and authenticated control channel authorize the
 session and distribute public keys. The relay forwards encrypted data and can
@@ -379,6 +378,57 @@ registered an encryption key. Guest chat uses a separate key and preserves the
 existing view and control restrictions. Group messages pass through the
 authenticated application API as ciphertext. The room key rotates when the
 approved membership changes, and sending pauses while the new key is installed.
+
+#### When a device's key changes
+
+The server pins each device's key the first time it sees it. A device that later
+presents another key, or none, stays online: its jobs, monitoring and updates go
+on. Only its native desktop, terminal and file transfer pause, and the device
+page says why. Sessions never fall back to the unencrypted relay meanwhile.
+The server records the change in the audit log (`device.e2e_key_issue`) and
+alerts the people who can see the device (**Device encryption key needs
+review**, on unless they turn it off).
+
+| Device page says | Usual cause | What to do |
+|---|---|---|
+| **Presented a different key** | The agent's state file was restored or replaced. Someone holding the device's credentials looks the same. | Compare the fingerprint on the device, then approve the presented key, or keep the pinned one. |
+| **Could not read its key** | The key in the state file is damaged. The agent never makes up a new one. | Restore the state file from a backup, or enroll the device again. |
+| **Agent without encryption support** | An older agent was installed over a newer one, or the machine was restored from a snapshot. | Update the agent. The warning clears when the pinned key comes back. |
+| **More than one machine** | A disk image was cloned after the agent enrolled. The copies keep taking the connection from each other, or present different keys. | Enroll each copy again, so each machine has its own identity. |
+
+To compare a fingerprint, run the agent on the device as root or Administrator:
+
+```sh
+# Linux
+sudo /usr/local/bin/rmm-agent -state /etc/rmm-agent/state.json -fingerprint
+# macOS
+sudo /usr/local/libexec/openrmm/rmm-agent -state /etc/rmm-agent/state.json -fingerprint
+```
+
+```powershell
+# Windows
+& "$Env:ProgramData\rmm-agent\rmm-agent.exe" -state "$Env:ProgramData\rmm-agent\state.json" -fingerprint
+```
+
+The agent also logs its fingerprint each time it connects. Approving or keeping
+a key takes **Delete devices** and an account without an access scope, and both
+ask for a reason that goes to the audit log (`device.e2e_key_approved`,
+`device.e2e_key_issue_dismissed`). Approval pins exactly the key the device
+presented: if it presents yet another one before you approve, approve again
+after checking it. A browser that remembered the previous key shows both
+fingerprints and who approved the change, and connects only after the
+technician accepts.
+
+A hostname is not evidence here: the agent reports it, clones share it, and
+machines get renamed. The page shows it, with the address and agent version
+of the last connection, to help you tell what happened.
+
+**Mass deployment.** Installing with a multi-use enrollment token (a GPO, Intune
+or a script) gives each machine its own device, credentials and key, so they
+never conflict. Do not enroll the agent in a disk image you will clone: install
+it on each machine, or have the image run the installer with the enrollment
+token on first boot. Clones behind one NAT address that share one key look like
+one machine.
 
 ### One desktop session per operator per device
 

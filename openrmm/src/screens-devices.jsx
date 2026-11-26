@@ -651,6 +651,7 @@ function DeviceDetail({ id, onClose, navigate, sites, clients }) {
               </div>
               <button onClick={onClose} className="text-faint hover:text-ink p-1.5 -mr-1.5"><Icon name="close" size={18} /></button>
             </div>
+            <DeviceKeyReview device={d} canReview={can('devices.delete')} onChanged={() => devQ.refetch()} />
 
             <div className="flex items-center gap-2 mt-4 flex-wrap">
               {(can('devices.remote') || can('devices.terminal') || can('devices.files')) && <Dropdown align="left" width="w-60" trigger={
@@ -851,8 +852,146 @@ function GuestRequests({ deviceId, accept, sync }) {
 
 // ShareAccessModal issues an invitation for a device and lists the caller's
 // open ones. The link and the code are shown once: only their hashes are kept.
+// How to read a device's key fingerprint on the device itself, per OS.
+const FINGERPRINT_COMMAND = {
+  windows: '& "$Env:ProgramData\\rmm-agent\\rmm-agent.exe" -state "$Env:ProgramData\\rmm-agent\\state.json" -fingerprint',
+  darwin: 'sudo /usr/local/libexec/openrmm/rmm-agent -state /etc/rmm-agent/state.json -fingerprint',
+  linux: 'sudo /usr/local/bin/rmm-agent -state /etc/rmm-agent/state.json -fingerprint',
+};
+
+// A device presented another encryption key than the pinned one, none, or is
+// used by more than one machine. The server keeps it online and pauses only its
+// native remote sessions. An administrator compares the fingerprint on the
+// device, then approves exactly the key it presented, or keeps the pinned one.
+function DeviceKeyReview({ device, canReview, onChanged }) {
+  const toast = useToast();
+  const issue = device.device_key_issue;
+  const pending = device.pending_device_public_key || '';
+  const [fps, setFps] = useState({ pinned: '', pending: '' });
+  const [action, setAction] = useState(''); // '' | 'approve' | 'dismiss'
+  const [checked, setChecked] = useState(false);
+  const [reason, setReason] = useState('');
+  const [busy, setBusy] = useState(false);
+  useEffect(() => {
+    let live = true;
+    const show = (k) => (k ? RemoteCrypto.displayFingerprint(k).catch(() => '') : Promise.resolve(''));
+    Promise.all([show(device.device_public_key), show(pending)]).then(([a, b]) => { if (live) setFps({ pinned: a, pending: b }); });
+    return () => { live = false; };
+  }, [device.device_public_key, pending]);
+  useEffect(() => { setAction(''); setChecked(false); setReason(''); }, [issue, pending]);
+  if (!issue) return null;
+  const command = FINGERPRINT_COMMAND[device.os] || FINGERPRINT_COMMAND.linux;
+  const approving = action === 'approve';
+  const submit = async () => {
+    setBusy(true);
+    try {
+      if (approving) {
+        await api.approveDeviceKey(device.id, pending, reason.trim());
+        toast.success(t('devkey.approvedToast'));
+      } else {
+        await api.dismissDeviceKeyIssue(device.id, reason.trim());
+        toast.success(t('devkey.dismissedToast'));
+      }
+      setAction('');
+      onChanged?.();
+    } catch (e) { toast.error(t('common.failed'), e.message); } finally { setBusy(false); }
+  };
+  return (
+    <div className="mt-3 rounded-xl border border-warn/40 bg-warn/10 p-3 text-[12.5px] text-ink" data-testid="device-key-review">
+      <div className="flex items-start gap-2">
+        <Icon name="alert" size={15} className="text-warn mt-0.5 shrink-0" />
+        <div className="flex-1 min-w-0 space-y-1.5">
+          <div className="font-semibold">{t('devkey.title.' + issue)}</div>
+          <div className="text-muted leading-relaxed">{t('devkey.body.' + issue)} {t('devkey.paused')}</div>
+          <div className="grid grid-cols-[auto,1fr] gap-x-3 gap-y-0.5">
+            {fps.pinned && <><span className="text-faint">{t('devkey.pinned')}</span><span className="font-mono" data-testid="device-key-pinned">{fps.pinned}</span></>}
+            {fps.pending && <><span className="text-faint">{t('devkey.presented')}</span><span className="font-mono" data-testid="device-key-pending">{fps.pending}</span></>}
+          </div>
+          {device.device_key_issue_seen_at && <div className="text-faint">{t('devkey.seen', {
+            when: timeAgo(device.device_key_issue_seen_at), ip: device.device_key_issue_ip || '—',
+            version: device.device_key_issue_version || '—', count: device.device_key_issue_count || 1,
+          })}</div>}
+          <div className="text-faint">{t('devkey.howToCheck')}</div>
+          <code className="block rounded-lg bg-elevated/60 px-2 py-1 font-mono text-[11.5px] break-all">{command}</code>
+          {canReview && (
+            <div className="flex gap-2 pt-1 flex-wrap">
+              {issue === 'changed' && pending && <Button size="sm" variant="primary" onClick={() => setAction('approve')}>{t('devkey.approve')}</Button>}
+              <Button size="sm" variant="ghost" onClick={() => setAction('dismiss')}>{t('devkey.dismiss')}</Button>
+            </div>
+          )}
+        </div>
+      </div>
+      <Modal open={!!action} onClose={() => { if (!busy) setAction(''); }} width="max-w-md">
+        <div className="p-5 space-y-3">
+          <div className="text-[15px] font-semibold text-ink">{t(approving ? 'devkey.approveTitle' : 'devkey.dismissTitle')}</div>
+          <div className="text-[13px] text-muted leading-relaxed">{approving ? t('devkey.approveBody') : t('devkey.dismissBody.' + issue)}</div>
+          {approving && <div className="font-mono text-[13px] text-ink">{fps.pending}</div>}
+          {approving && (
+            <label className="flex items-start gap-2 text-[12.5px] text-ink">
+              <input type="checkbox" checked={checked} onChange={(e) => setChecked(e.target.checked)} className="mt-0.5" data-testid="device-key-checked" />
+              <span>{t('devkey.checked')}</span>
+            </label>
+          )}
+          <Field label={t('devkey.reason')}><Input value={reason} onChange={(e) => setReason(e.target.value)} maxLength={200} data-testid="device-key-reason" /></Field>
+          <div className="flex justify-end gap-2 pt-1">
+            <Button variant="ghost" onClick={() => setAction('')} disabled={busy}>{t('action.cancel')}</Button>
+            <Button variant="primary" loading={busy} disabled={!reason.trim() || (approving && !checked)} onClick={submit} data-testid="device-key-submit">
+              {t(approving ? 'devkey.approve' : 'devkey.dismiss')}
+            </Button>
+          </div>
+        </div>
+      </Modal>
+    </div>
+  );
+}
+
+// This browser remembered a device's key and refuses another one. When an
+// administrator approved the new key on the server, show both fingerprints and
+// who approved it, and continue only if the technician accepts. A key the
+// server did not record as approved is refused, as before.
+function useDeviceKeyChange() {
+  const [prompt, setPrompt] = useState(null);
+  const check = async (deviceId, deviceKey) => {
+    if (RemoteCrypto.deviceIdentity(deviceId, deviceKey)) return true;
+    const known = RemoteCrypto.knownDeviceKey(deviceId);
+    if (!known || !deviceKey) return false;
+    let d = null;
+    try { d = await api.getDevice(deviceId); } catch (e) { return false; }
+    if (!d || d.device_public_key !== deviceKey || !d.device_key_changed_by || d.device_key_issue) return false;
+    let before, after;
+    try {
+      [before, after] = await Promise.all([RemoteCrypto.displayFingerprint(known), RemoteCrypto.displayFingerprint(deviceKey)]);
+    } catch {
+      return false;
+    }
+    const accepted = await new Promise((resolve) => setPrompt({ before, after, by: d.device_key_changed_by, at: d.device_key_changed_at, resolve }));
+    setPrompt(null);
+    return accepted && RemoteCrypto.rememberDeviceKey(deviceId, deviceKey, known);
+  };
+  const element = (
+    <Modal open={!!prompt} onClose={() => prompt?.resolve(false)} width="max-w-md">
+      {prompt && (
+        <div className="p-5 space-y-3" data-testid="device-key-change">
+          <div className="text-[15px] font-semibold text-ink">{t('viewer.keyChangeTitle')}</div>
+          <div className="text-[13px] text-muted leading-relaxed">{t('viewer.keyChangeBody', { who: prompt.by, when: prompt.at ? timeAgo(prompt.at) : '—' })}</div>
+          <div className="grid grid-cols-[auto,1fr] gap-x-3 gap-y-1 text-[12.5px]">
+            <span className="text-faint">{t('viewer.keyChangeOld')}</span><span className="font-mono text-ink">{prompt.before}</span>
+            <span className="text-faint">{t('viewer.keyChangeNew')}</span><span className="font-mono text-ink">{prompt.after}</span>
+          </div>
+          <div className="flex justify-end gap-2 pt-1">
+            <Button variant="ghost" onClick={() => prompt.resolve(false)}>{t('action.cancel')}</Button>
+            <Button variant="primary" onClick={() => prompt.resolve(true)} data-testid="device-key-change-accept">{t('viewer.keyChangeAccept')}</Button>
+          </div>
+        </div>
+      )}
+    </Modal>
+  );
+  return [check, element];
+}
+
 function ShareAccessModal({ open, onClose, device }) {
   const toast = useToast();
+  const [checkKey, keyChangePrompt] = useDeviceKeyChange();
   const [mode, setMode] = useState('view');
   const [minutes, setMinutes] = useState('60');
   // A guest who closes the page may come back with the same link and code
@@ -866,11 +1005,11 @@ function ShareAccessModal({ open, onClose, device }) {
   const create = async () => {
     setBusy(true);
     try {
-      if (!RemoteCrypto.deviceIdentity(device.id, device.device_public_key)) throw new Error(t('viewer.deviceKeyChanged'));
+      if (!(await checkKey(device.id, device.device_public_key))) throw new Error(t('viewer.deviceKeyChanged'));
       if (device.device_public_key && !globalThis.crypto?.subtle) throw new Error(t('viewer.encryptionFailed'));
       const r = await api.createRemoteShare(device.id, { mode, minutes: Number(minutes), reusable: !singleUse });
       const abort = (msg) => { api.closeRemoteShare(r.share.id).catch(() => {}); throw new Error(msg); };
-      if (!RemoteCrypto.deviceIdentity(device.id, r.device_public_key)) abort(t('viewer.deviceKeyChanged'));
+      if (!(await checkKey(device.id, r.device_public_key))) abort(t('viewer.deviceKeyChanged'));
       if (r.device_public_key && !globalThis.crypto?.subtle) abort(t('viewer.encryptionFailed'));
       const pin = r.device_public_key ? '.' + await RemoteCrypto.fingerprint(r.device_public_key) : '';
       const link = new URL((window.__BASE_PATH__ || '/') + 'join', location.origin).toString() + '#' + r.token + pin;
@@ -878,7 +1017,7 @@ function ShareAccessModal({ open, onClose, device }) {
       listQ.refetch();
       toast.success(t('share.created'));
     } catch (e) {
-      toast.error(t('share.failed'), e.code === 'guest_access_disabled' ? t('share.disabled') : e.message);
+      toast.error(t('share.failed'), e.code === 'guest_access_disabled' ? t('share.disabled') : e.code === 'remote_device_key_issue' ? t('viewer.deviceKeyIssue') : e.message);
     } finally { setBusy(false); }
   };
   const close = async (id) => {
@@ -887,6 +1026,7 @@ function ShareAccessModal({ open, onClose, device }) {
   };
   const shares = listQ.data?.shares || [];
   return (
+    <>
     <Modal open={open} onClose={onClose} width="max-w-xl">
       <div className="p-5 space-y-4">
         <div className="flex items-start gap-3">
@@ -943,6 +1083,8 @@ function ShareAccessModal({ open, onClose, device }) {
         </div>
       </div>
     </Modal>
+    {keyChangePrompt}
+    </>
   );
 }
 
@@ -1086,6 +1228,7 @@ window.GuestJoinScreen = GuestJoinScreen;
 // and only sends mouse and keyboard events when the guest has control.
 function RemoteViewer({ deviceId, hostname, os, filesOnly, onClose, guest, theme, onToggleTheme }) {
   const toast = useToast();
+  const [checkKey, keyChangePrompt] = useDeviceKeyChange();
   const auth = useAuth() || { can: () => false };
   const can = auth.can;
   const guestRef = useRef(guest); guestRef.current = guest;
@@ -1357,8 +1500,9 @@ function RemoteViewer({ deviceId, hostname, os, filesOnly, onClose, guest, theme
         const options = { viewer_key: ephemeral?.pub, replace: !!replace, resume: sessionId || undefined };
         session = g ? await g.broker(ephemeral?.pub) : await api.startRemote(deviceId, filesOnly ? 'files' : 'native', options);
       } catch (e) {
-        if (!stopped && ['remote_e2e_required', 'remote_agent_update_required'].includes(e.code)) {
-          const message = t(e.code === 'remote_agent_update_required' ? 'viewer.encryptionAgentUpdate' : 'viewer.encryptionFailed');
+        if (!stopped && ['remote_e2e_required', 'remote_agent_update_required', 'remote_device_key_issue'].includes(e.code)) {
+          const message = t(e.code === 'remote_agent_update_required' ? 'viewer.encryptionAgentUpdate'
+            : e.code === 'remote_device_key_issue' ? 'viewer.deviceKeyIssue' : 'viewer.encryptionFailed');
           setStatus('closed'); setNotice(message); toast.error(message); return;
         }
         // A guest's broker refuses for a reason the guest page explains
@@ -1372,9 +1516,11 @@ function RemoteViewer({ deviceId, hostname, os, filesOnly, onClose, guest, theme
       }
       if (stopped) return;
       const deviceKey = session.device_public_key;
-      if (!g && !RemoteCrypto.deviceIdentity(deviceId, deviceKey)) {
-        setStatus('closed'); setNotice(t('viewer.deviceKeyChanged')); toast.error(t('viewer.deviceKeyChanged')); return;
+      if (!g && !(await checkKey(deviceId, deviceKey))) {
+        if (!stopped) { setStatus('closed'); setNotice(t('viewer.deviceKeyChanged')); toast.error(t('viewer.deviceKeyChanged')); }
+        return;
       }
+      if (stopped) return;
       if ((session.e2e && (!ephemeral || !(g ? g.fingerprint : deviceKey))) ||
           (!session.e2e && (g?.fingerprint || deviceKey))) {
         setStatus('closed'); setNotice(t('viewer.encryptionFailed')); toast.error(t('viewer.encryptionFailed')); return;
@@ -1839,6 +1985,7 @@ function RemoteViewer({ deviceId, hostname, os, filesOnly, onClose, guest, theme
         validate={(v) => ((v.name || '').trim() ? '' : t('ui.valueRequired'))} submitLabel={t('action.save')} onSubmit={submitFbAsk} />
       <ConfirmDialog open={fbConfirmDel} onClose={() => setFbConfirmDel(false)} onConfirm={confirmFbDelete} danger
         title={t('viewer.deletePrompt', { items: tn('viewer.items', fbSel.length), host: hostname })} body="" confirmLabel={t('action.delete')} />
+      {keyChangePrompt}
     </div>
   );
 }
@@ -1918,6 +2065,7 @@ function RemoteEncryptionStatus() {
 
 function TerminalViewer({ deviceId, hostname, onClose }) {
   const toast = useToast();
+  const [checkKey, keyChangePrompt] = useDeviceKeyChange();
   const elRef = useRef(null);
   const wsRef = useRef(null);
   const fitRef = useRef(null);
@@ -1958,15 +2106,18 @@ function TerminalViewer({ deviceId, hostname, onClose }) {
         if (!stopped) {
           setStatus('closed');
           const message = e.code === 'remote_agent_update_required' ? t('viewer.encryptionAgentUpdate')
-            : e.code === 'remote_e2e_required' ? t('viewer.encryptionFailed') : e.message;
+            : e.code === 'remote_device_key_issue' ? t('viewer.deviceKeyIssue')
+              : e.code === 'remote_e2e_required' ? t('viewer.encryptionFailed') : e.message;
           toast.error(t('term.failed'), message);
         }
         return;
       }
       if (stopped) return;
-      if (!RemoteCrypto.deviceIdentity(deviceId, session.device_public_key)) {
-        setStatus('closed'); toast.error(t('viewer.deviceKeyChanged')); return;
+      if (!(await checkKey(deviceId, session.device_public_key))) {
+        if (!stopped) { setStatus('closed'); toast.error(t('viewer.deviceKeyChanged')); }
+        return;
       }
+      if (stopped) return;
       if ((session.e2e && (!ephemeral || !session.device_public_key)) || (!session.e2e && session.device_public_key)) {
         setStatus('closed'); toast.error(t('viewer.encryptionFailed')); return;
       }
@@ -2035,6 +2186,7 @@ function TerminalViewer({ deviceId, hostname, onClose }) {
         </div>
       </div>
       <div ref={elRef} className="flex-1 overflow-hidden p-2" />
+      {keyChangePrompt}
     </div>
   );
 }

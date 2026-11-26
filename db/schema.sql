@@ -1445,3 +1445,15 @@ ALTER TABLE remote_shares
     ADD COLUMN IF NOT EXISTS guest_sign_key TEXT NOT NULL DEFAULT '',
     ADD COLUMN IF NOT EXISTS wrapped_chat_key TEXT NOT NULL DEFAULT '',
     ADD COLUMN IF NOT EXISTS chat_key_id TEXT NOT NULL DEFAULT '';
+
+-- Migration 043: review of a device E2E identity key that changed or went missing.
+ALTER TABLE agents
+    ADD COLUMN IF NOT EXISTS device_key_issue TEXT NOT NULL DEFAULT '',
+    ADD COLUMN IF NOT EXISTS pending_device_public_key TEXT NOT NULL DEFAULT '',
+    ADD COLUMN IF NOT EXISTS device_key_issue_since TIMESTAMPTZ,
+    ADD COLUMN IF NOT EXISTS device_key_issue_seen_at TIMESTAMPTZ,
+    ADD COLUMN IF NOT EXISTS device_key_issue_ip TEXT NOT NULL DEFAULT '',
+    ADD COLUMN IF NOT EXISTS device_key_issue_version TEXT NOT NULL DEFAULT '',
+    ADD COLUMN IF NOT EXISTS device_key_issue_count INTEGER NOT NULL DEFAULT 0,
+    ADD COLUMN IF NOT EXISTS device_key_changed_at TIMESTAMPTZ,
+    ADD COLUMN IF NOT EXISTS device_key_changed_by TEXT NOT NULL DEFAULT '';

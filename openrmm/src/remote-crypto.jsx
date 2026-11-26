@@ -54,6 +54,27 @@ const RemoteCrypto = (() => {
       return !deviceKey && !remember;
     }
   }
+  // The key this browser remembered for a device, or '' when it has none.
+  function knownDeviceKey(agentID) {
+    try { return (agentID && globalThis.localStorage.getItem('rmm-device-key:' + agentID)) || ''; } catch { return ''; }
+  }
+  // Replace a remembered key only when it is still the one the technician saw
+  // and accepted to change, and the new one is a valid point.
+  function rememberDeviceKey(agentID, deviceKey, previous) {
+    try {
+      const name = 'rmm-device-key:' + agentID;
+      if (!agentID || !deviceKey || globalThis.localStorage.getItem(name) !== previous) return false;
+      point(deviceKey);
+      globalThis.localStorage.setItem(name, deviceKey);
+      return true;
+    } catch { return false; }
+  }
+  // XXXX-XXXX-XXXX-XXXX: the first 64 bits of SHA-256 over the key, the same
+  // fingerprint the server shows and `rmm-agent -fingerprint` prints.
+  async function displayFingerprint(pub) {
+    const hex = Array.from((await digest(point(pub))).subarray(0, 8), (b) => b.toString(16).padStart(2, '0')).join('').toUpperCase();
+    return hex.match(/.{4}/g).join('-');
+  }
   const aes = (raw) => subtle().importKey('raw', raw, 'AES-GCM', false, ['encrypt', 'decrypt']);
   const expiry = (exp) => Number.isSafeInteger(exp) && exp > Math.floor(Date.now() / 1000);
   const signature = { name: 'ECDSA', hash: 'SHA-256' };
@@ -209,7 +230,7 @@ const RemoteCrypto = (() => {
     return facade;
   }
 
-  return { utf8, decoder, random, encode, decode, point, concat, uint64, tuple, fingerprint, deviceIdentity, aes, expiry, keyPair, verify, sign, sharedKey, hkdf, connect };
+  return { utf8, decoder, random, encode, decode, point, concat, uint64, tuple, fingerprint, displayFingerprint, deviceIdentity, knownDeviceKey, rememberDeviceKey, aes, expiry, keyPair, verify, sign, sharedKey, hkdf, connect };
 })();
 
 globalThis.RemoteCrypto = RemoteCrypto;
