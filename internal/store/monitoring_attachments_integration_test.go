@@ -412,8 +412,11 @@ func TestMonitoringAttachmentsMigrationIntegration(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	agent, err := st.CreateAgent(ctx, "MIG-PC", "linux", "amd64", "0.11.4", "hash-mig", &site.ID, nil)
-	if err != nil {
+	// Keep this fixture on schema 036. The current GetAgent query also
+	// reads columns from later migrations, including the device key.
+	agentID := newID()
+	if _, err := st.pool.Exec(ctx, `INSERT INTO agents (id, hostname, os, arch, version, token_hash, site_id, status, last_seen)
+		VALUES ($1,'MIG-PC','linux','amd64','0.11.4','hash-mig',$2,'online',now())`, agentID, site.ID); err != nil {
 		t.Fatal(err)
 	}
 	policyID, policyCheck, deviceCheck, policyTask, deviceTask := newID(), newID(), newID(), newID(), newID()
@@ -425,16 +428,16 @@ func TestMonitoringAttachmentsMigrationIntegration(t *testing.T) {
 		{`INSERT INTO policies (id, name) VALUES ($1,'old')`, []any{policyID}},
 		{`INSERT INTO policy_assignments (id, policy_id, scope_type, scope_id) VALUES ($1,$2,'client',$3)`, []any{newID(), policyID, client.ID}},
 		{`INSERT INTO checks (id, policy_id, type, name, config, created_at) VALUES ($1,$2,'memory','p','{}',$3)`, []any{policyCheck, policyID, made}},
-		{`INSERT INTO checks (id, agent_id, type, name, config, created_at) VALUES ($1,$2,'memory','d','{}',$3)`, []any{deviceCheck, agent.ID, made}},
+		{`INSERT INTO checks (id, agent_id, type, name, config, created_at) VALUES ($1,$2,'memory','d','{}',$3)`, []any{deviceCheck, agentID, made}},
 		{`INSERT INTO tasks (id, policy_id, name, script, created_at) VALUES ($1,$2,'p','true',$3)`, []any{policyTask, policyID, made}},
-		{`INSERT INTO tasks (id, agent_id, name, script, created_at) VALUES ($1,$2,'d','true',$3)`, []any{deviceTask, agent.ID, made}},
+		{`INSERT INTO tasks (id, agent_id, name, script, created_at) VALUES ($1,$2,'d','true',$3)`, []any{deviceTask, agentID, made}},
 	} {
 		if _, err := st.pool.Exec(ctx, q.sql, q.args...); err != nil {
 			t.Fatalf("%s: %v", q.sql, err)
 		}
 	}
 	var scopeSince time.Time
-	if err := st.pool.QueryRow(ctx, `SELECT monitoring_scope_since FROM agents WHERE id=$1`, agent.ID).Scan(&scopeSince); err != nil {
+	if err := st.pool.QueryRow(ctx, `SELECT monitoring_scope_since FROM agents WHERE id=$1`, agentID).Scan(&scopeSince); err != nil {
 		t.Fatal(err)
 	}
 	deviceSilence, policySilence := newID(), newID()
@@ -448,19 +451,19 @@ func TestMonitoringAttachmentsMigrationIntegration(t *testing.T) {
 		t.Fatal(err)
 	}
 
-	for id, want := range map[string]models.Attachment{policyCheck: {PolicyID: &policyID}, deviceCheck: {AgentID: &agent.ID}} {
+	for id, want := range map[string]models.Attachment{policyCheck: {PolicyID: &policyID}, deviceCheck: {AgentID: &agentID}} {
 		c, err := st.GetCheck(ctx, id)
 		if err != nil || len(c.Attachments) != 1 || c.Attachments[0].Key() != want.Key() || !c.Attachments[0].AddedAt.Equal(made) {
 			t.Fatalf("check %s attachments = %+v %v", id, c.Attachments, err)
 		}
 	}
-	for id, want := range map[string]models.Attachment{policyTask: {PolicyID: &policyID}, deviceTask: {AgentID: &agent.ID}} {
+	for id, want := range map[string]models.Attachment{policyTask: {PolicyID: &policyID}, deviceTask: {AgentID: &agentID}} {
 		tk, err := st.GetTask(ctx, id)
 		if err != nil || len(tk.Attachments) != 1 || tk.Attachments[0].Key() != want.Key() {
 			t.Fatalf("task %s attachments = %+v %v", id, tk.Attachments, err)
 		}
 	}
-	checks, err := st.ChecksForAgent(ctx, agent.ID, nil, nil)
+	checks, err := st.ChecksForAgent(ctx, agentID, nil, nil)
 	if err != nil || len(checks) != 2 {
 		t.Fatalf("the device's checks after the migration = %v %v", checkIDs(checks), err)
 	}
@@ -470,7 +473,7 @@ func TestMonitoringAttachmentsMigrationIntegration(t *testing.T) {
 		t.Fatalf("a policy check's silence must follow the check: %v %v", covers, err)
 	}
 	if err := st.pool.QueryRow(ctx, `SELECT count(*) FROM alert_suppression_agents WHERE suppression_id=$1 AND agent_id=$2 AND monitoring_scope_since=$3`,
-		deviceSilence, agent.ID, scopeSince).Scan(&recorded); err != nil || recorded != 1 {
+		deviceSilence, agentID, scopeSince).Scan(&recorded); err != nil || recorded != 1 {
 		t.Fatalf("a device check's silence must record its device: %d %v", recorded, err)
 	}
 	var owners int

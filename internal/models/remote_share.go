@@ -28,6 +28,12 @@ type RemoteShare struct {
 	Reusable bool `json:"reusable"`
 	// RedeemCount is how many times the code was accepted.
 	RedeemCount int `json:"redeem_count"`
+	// Ephemeral P-256 public keys the guest generated in-browser when joining,
+	// and the chat room key sealed to GuestPublicKey by the technician on accept.
+	GuestPublicKey string `json:"guest_public_key,omitempty"`
+	GuestSignKey   string `json:"guest_sign_key,omitempty"`
+	WrappedChatKey string `json:"wrapped_chat_key,omitempty"`
+	ChatKeyID      string `json:"chat_key_id,omitempty"`
 }
 
 // What a guest may do. View only passes keyframe requests and the monitor

@@ -78,7 +78,8 @@ test('remote settings separate provider fields and preserve unsaved values when 
   const labels = () => ui.find(ui.panel(), (n) => n.type === 'Field').map((n) => n.props.label);
   assert.deepEqual(labels(), ['cfg.defaultProvider']);
   ui.selectTab('native');
-  assert.deepEqual(labels(), ['cfg.guestAccess']);
+  assert.deepEqual(labels(), ['cfg.remoteEncryption', 'cfg.guestAccess']);
+  ui.change('cfg.remoteEncryption', 'required');
   ui.change('cfg.guestAccess', 'on');
   ui.selectTab('meshcentral');
   assert.deepEqual(labels(), ['MeshCentral', 'cfg.meshUrl', 'cfg.meshUser', 'cfg.meshToken', 'cfg.meshSharedAccount', 'cfg.meshMatchHostname']);
@@ -100,7 +101,7 @@ test('remote settings separate provider fields and preserve unsaved values when 
   assert.equal(ui.find(ui.panel(), (n) => n.type === 'Input' && n.props.type === 'password')[0].props.value, 'test-token-not-a-real-secret');
   assert.equal(ui.calls.length, 0, 'switching tabs makes no write request');
   await ui.save();
-  assert.deepEqual(ui.calls[0].remote, { ...Object.fromEntries(Object.entries(config.remote).filter(([k]) => !['providers', 'meshcentral_token_set'].includes(k))), default: 'meshcentral', meshcentral_url: 'https://new-mesh.example.invalid', meshcentral_token_key: 'test-token-not-a-real-secret', meshcentral_shared_account: false, rustdesk_enabled: true, guest_access: true });
+  assert.deepEqual(ui.calls[0].remote, { ...Object.fromEntries(Object.entries(config.remote).filter(([k]) => !['providers', 'meshcentral_token_set'].includes(k))), default: 'meshcentral', meshcentral_url: 'https://new-mesh.example.invalid', meshcentral_token_key: 'test-token-not-a-real-secret', meshcentral_shared_account: false, rustdesk_enabled: true, guest_access: true, e2e_policy: 'required' });
   assert.equal(ui.find(ui.panel(), (n) => n.type === 'Input' && n.props.type === 'password')[0].props.value, '');
   assert.equal(ui.calls[0].ai.api_key, '');
   assert.equal(ui.calls[0].jobs.allow_unapproved, false);

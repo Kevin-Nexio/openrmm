@@ -34,6 +34,7 @@ import (
 	"github.com/shirou/gopsutil/v3/mem"
 	gnet "github.com/shirou/gopsutil/v3/net"
 
+	"github.com/p1ngu/rmm/internal/e2e"
 	"github.com/p1ngu/rmm/internal/protocol"
 	"github.com/p1ngu/rmm/internal/scriptvars"
 )
@@ -51,6 +52,8 @@ type state struct {
 	PendingRotationID     string `json:"pending_rotation_id,omitempty"`
 	PreviousAgentToken    string `json:"previous_agent_token,omitempty"`
 	PendingCancellationID string `json:"pending_cancellation_id,omitempty"`
+	DevicePrivateKey      string `json:"device_private_key,omitempty"`
+	DevicePublicKey       string `json:"device_public_key,omitempty"`
 }
 
 type agent struct {
@@ -112,6 +115,7 @@ func main() {
 	updateVerify := flag.String("update-verify", envOr("RMM_UPDATE_VERIFY", "strict"), "update verification mode: strict, warn, or off")
 	healthPath := flag.String("health-file", os.Getenv("RMM_HEALTH_FILE"), "write a health marker after authenticated connection")
 	printVer := flag.Bool("print-version", false, "print the agent version and exit (used to validate a self-update download)")
+	printFingerprint := flag.Bool("fingerprint", false, "print this device's encryption key fingerprint from the -state file and exit (compare it with the one an administrator reviews in the console)")
 	checkUpgradeFrom := flag.String("check-upgrade-from", "", "exit unsuccessfully if this build is older than the supplied version")
 	emergencyUpdateRollback := flag.Bool("emergency-update-rollback", false, "restore only the previous binary recorded by a signed pending update")
 	verifyOwnSignature := flag.String("verify-own-signature", "", "check this binary against the given detached signature under -update-public-key and exit (used by install.sh when its OpenSSL cannot check Ed25519)")
@@ -119,6 +123,15 @@ func main() {
 
 	if *printVer {
 		fmt.Println(agentVersion)
+		return
+	}
+	if *printFingerprint {
+		fp, err := stateFingerprint(*statePath)
+		if err != nil {
+			log.Print(err)
+			os.Exit(2)
+		}
+		fmt.Println(fp)
 		return
 	}
 	if *checkUpgradeFrom != "" {
@@ -325,6 +338,9 @@ func (a *agent) runOnce() error {
 		a.connMu.Unlock()
 	}()
 	log.Printf("registered as %s", a.st.AgentID)
+	if fp := a.deviceFingerprint(); fp != "" {
+		log.Printf("device encryption key fingerprint %s (compare it in the console when a key change is reviewed)", fp)
+	}
 	if err := a.writeHealthMarker(); err != nil {
 		log.Printf("health: could not write marker: %v", err)
 	}
@@ -355,14 +371,25 @@ func (a *agent) runOnce() error {
 // returned identity.
 func (a *agent) handshake(conn *websocket.Conn) error {
 	hostname, _ := os.Hostname()
+	// Without a usable key the agent still connects, saying so: the server
+	// keeps it online and pauses only its encrypted remote sessions. It never
+	// makes up a new key for a pinned device (see ensureDeviceIdentity).
+	keyStatus := ""
+	_, pubKey, idErr := a.ensureDeviceIdentity()
+	if idErr != nil {
+		log.Printf("device E2E identity unavailable, connecting without it: %v", idErr)
+		pubKey, keyStatus = "", protocol.DeviceKeyUnavailable
+	}
 	a.mu.Lock()
 	st := a.st
 	a.mu.Unlock()
 	reg := protocol.RegisterReq{
-		Hostname: hostname,
-		OS:       runtime.GOOS,
-		Arch:     runtime.GOARCH,
-		Version:  agentVersion,
+		Hostname:        hostname,
+		OS:              runtime.GOOS,
+		Arch:            runtime.GOARCH,
+		Version:         agentVersion,
+		DevicePublicKey: pubKey,
+		DeviceKeyStatus: keyStatus,
 	}
 	if st.AgentID != "" && st.AgentToken != "" {
 		reg.AgentID = st.AgentID
@@ -878,6 +905,48 @@ func (a *agent) saveState() error {
 		return err
 	}
 	return nil
+}
+
+// errDeviceKeyUnreadable: the state file holds an identity key that does not
+// parse. Restore the state file from a backup, or enroll the device again.
+var errDeviceKeyUnreadable = errors.New("the device identity key in the state file is unreadable; restore the state file or enroll the device again")
+
+// ensureDeviceIdentity returns the agent's durable P-256 identity keypair,
+// generating and durably saving one on first run before the public key is ever
+// sent to the server.
+func (a *agent) ensureDeviceIdentity() (priv, pub string, err error) {
+	a.mu.Lock()
+	defer a.mu.Unlock()
+	if a.st.DevicePrivateKey != "" {
+		derived, derr := e2e.PublicKeyFromPrivate(a.st.DevicePrivateKey)
+		if derr != nil {
+			// Never replace a damaged key with a new one: the server pinned the
+			// old one, and a new key would look like another machine. The state
+			// file keeps the damaged value for whoever investigates.
+			return "", "", errDeviceKeyUnreadable
+		}
+		if a.st.DevicePublicKey != derived {
+			a.st.DevicePublicKey = derived
+			if a.statePath != "" {
+				_ = a.saveState()
+			}
+		}
+		return a.st.DevicePrivateKey, derived, nil
+	}
+	priv, pub, err = e2e.GenerateKeyPair()
+	if err != nil {
+		return "", "", err
+	}
+	prev := a.st
+	a.st.DevicePrivateKey = priv
+	a.st.DevicePublicKey = pub
+	if a.statePath != "" {
+		if err := a.saveState(); err != nil {
+			a.st = prev
+			return "", "", err
+		}
+	}
+	return priv, pub, nil
 }
 
 // writeDurableFile replaces a small state file only after its new contents are
@@ -1989,4 +2058,41 @@ func parseDarwinSoftware(out []byte) []map[string]string {
 		sw = append(sw, map[string]string{"name": a.Name, "version": a.Version, "manufacturer": manufacturer})
 	}
 	return capSoftware(sw)
+}
+
+// deviceFingerprint is the display fingerprint of the key this agent holds, or
+// "" when it has none it can read.
+func (a *agent) deviceFingerprint() string {
+	a.mu.Lock()
+	priv := a.st.DevicePrivateKey
+	a.mu.Unlock()
+	if priv == "" {
+		return ""
+	}
+	pub, err := e2e.PublicKeyFromPrivate(priv)
+	if err != nil {
+		return ""
+	}
+	return e2e.DisplayFingerprint(pub)
+}
+
+// stateFingerprint reads only the state file: it never creates a key, so the
+// running service stays the only writer.
+func stateFingerprint(path string) (string, error) {
+	raw, err := os.ReadFile(path)
+	if err != nil {
+		return "", fmt.Errorf("read the state file (run as root or Administrator, with -state <path>): %w", err)
+	}
+	var st state
+	if err := json.Unmarshal(raw, &st); err != nil {
+		return "", fmt.Errorf("parse the state file: %w", err)
+	}
+	if st.DevicePrivateKey == "" {
+		return "", errors.New("this device has no encryption key yet: it is created the first time the agent connects")
+	}
+	pub, err := e2e.PublicKeyFromPrivate(st.DevicePrivateKey)
+	if err != nil {
+		return "", errDeviceKeyUnreadable
+	}
+	return e2e.DisplayFingerprint(pub), nil
 }

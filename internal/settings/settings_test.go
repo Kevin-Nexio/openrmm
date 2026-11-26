@@ -1,7 +1,9 @@
 package settings
 
 import (
+	"context"
 	"encoding/base64"
+	"errors"
 	"strings"
 	"testing"
 
@@ -81,5 +83,32 @@ func TestDedicatedKeyDecouplesFromAdminToken(t *testing.T) {
 	dec, err := decrypt(&config.Config{SettingsEncryptionKey: "dedicated", AdminToken: "admin-2-rotated"}, enc)
 	if err != nil || dec != "secret" {
 		t.Fatalf("dedicated key should decrypt regardless of admin token: got %q err %v", dec, err)
+	}
+}
+
+func TestRemoteE2EPolicyConfigAndValidation(t *testing.T) {
+	ed := FromConfig(&config.Config{RemoteE2EPolicy: ""})
+	if ed.RemoteE2EPolicy != "preferred" {
+		t.Fatalf("empty RemoteE2EPolicy normalized to %q, want preferred", ed.RemoteE2EPolicy)
+	}
+	ed = FromConfig(&config.Config{RemoteE2EPolicy: "unknown"})
+	if ed.RemoteE2EPolicy != "preferred" {
+		t.Fatalf("unknown RemoteE2EPolicy normalized to %q, want preferred", ed.RemoteE2EPolicy)
+	}
+	ed = FromConfig(&config.Config{RemoteE2EPolicy: "required"})
+	if ed.RemoteE2EPolicy != "required" {
+		t.Fatalf("required RemoteE2EPolicy = %q, want required", ed.RemoteE2EPolicy)
+	}
+
+	dst := &config.Config{}
+	ed.ApplyToConfig(dst)
+	if dst.RemoteE2EPolicy != "required" {
+		t.Fatalf("ApplyToConfig RemoteE2EPolicy = %q, want required", dst.RemoteE2EPolicy)
+	}
+
+	var req SaveRequest
+	req.Remote.E2EPolicy = "disabled"
+	if _, err := Save(context.Background(), nil, &config.Config{}, req); !errors.Is(err, ErrInvalidRemoteE2EPolicy) {
+		t.Fatalf("Save with invalid E2EPolicy err = %v, want ErrInvalidRemoteE2EPolicy", err)
 	}
 }

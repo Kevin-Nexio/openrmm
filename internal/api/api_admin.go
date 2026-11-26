@@ -439,6 +439,7 @@ func (s *Server) closeRetiredDeviceMonitoring(r *http.Request, id, kind string) 
 // attached between the durable state change and this teardown.
 func (s *Server) terminateAgentTransport(ctx context.Context, id string) {
 	s.hub.Disconnect(id)
+	s.conns.reset(id)
 	s.relay.CloseAgent(id)
 	_ = s.store.EndRemoteSessionsForAgent(ctx, id)
 }

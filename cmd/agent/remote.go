@@ -17,8 +17,12 @@ import (
 
 	"github.com/gorilla/websocket"
 
+	"github.com/p1ngu/rmm/internal/e2e"
+	"github.com/p1ngu/rmm/internal/models"
 	"github.com/p1ngu/rmm/internal/protocol"
 )
+
+const minSidecarVersionE2E = "0.19.0"
 
 // sidecarRefresh serializes sidecar refreshes so two near-simultaneous sessions
 // don't race on the temp file.
@@ -41,6 +45,26 @@ func (a *agent) startRemoteSession(rs protocol.RemoteStartMsg) {
 	if err != nil {
 		log.Printf("remote: sidecar unavailable: %v", err)
 		a.reportRemoteFailure(rs, fmt.Sprintf("this endpoint could not prepare the remote module: %v", err))
+		return
+	}
+	if rs.E2E {
+		if !sidecarSupportsE2E(bin) {
+			msg := fmt.Sprintf("this endpoint's remote module predates end-to-end encryption (%s+ required); publish the updated sidecar to /dl", minSidecarVersionE2E)
+			log.Printf("remote: %s", msg)
+			a.reportRemoteFailure(rs, msg)
+			return
+		}
+		sessionFile, err := a.writeE2ESessionFile(rs, relay, ticket, allowFiles)
+		if err != nil {
+			log.Printf("remote: could not stage E2E session parameters: %v", err)
+			a.reportRemoteFailure(rs, fmt.Sprintf("this endpoint could not prepare encrypted session parameters: %v", err))
+			return
+		}
+		if err := launchSidecar(bin, "", "", "-session", sessionFile); err != nil {
+			_ = os.Remove(sessionFile)
+			log.Printf("remote: failed to start sidecar: %v", err)
+			a.reportRemoteFailure(rs, fmt.Sprintf("this endpoint could not start the remote module: %v", err))
+		}
 		return
 	}
 	// Kind "files" runs the sidecar in file-transfer-only mode (no screen
@@ -98,17 +122,38 @@ func (a *agent) reportRemoteFailure(rs protocol.RemoteStartMsg, text string) {
 	}
 	dialer := *websocket.DefaultDialer
 	dialer.HandshakeTimeout = 10 * time.Second
-	conn, _, err := dialer.Dial(relay, headers)
+	rawConn, _, err := dialer.Dial(relay, headers)
 	if err != nil {
 		log.Printf("remote: could not report the failure to the viewer: %v", err)
 		return
 	}
-	defer conn.Close()
+	defer rawConn.Close()
+	var conn e2e.WSConn = rawConn
+	if rs.E2E {
+		priv, pub, idErr := a.ensureDeviceIdentity()
+		if idErr != nil {
+			log.Printf("remote: could not load E2E identity for failure notice: %v", idErr)
+			return
+		}
+		a.mu.Lock()
+		agentID := a.st.AgentID
+		a.mu.Unlock()
+		hs, hsErr := e2e.NewAgentHandshakeFromIdentity(rs.SessionID, agentID, rs.Kind, rs.GuestMode, rs.ViewerKey, priv, pub, 5*time.Minute)
+		if hsErr != nil {
+			return
+		}
+		e2eConn, err := e2e.HandshakeAgent(rawConn, hs)
+		if err != nil {
+			log.Printf("remote: E2E handshake for failure notice failed: %v", err)
+			return
+		}
+		conn = e2eConn
+	}
 	b, err := json.Marshal(map[string]string{"t": "notice", "text": text})
 	if err != nil {
 		return
 	}
-	_ = conn.SetWriteDeadline(time.Now().Add(5 * time.Second))
+	_ = rawConn.SetWriteDeadline(time.Now().Add(5 * time.Second))
 	_ = conn.WriteMessage(websocket.TextMessage, b)
 }
 
@@ -151,7 +196,88 @@ func sidecarSupportsNoChat(path string) bool {
 	return exec.Command(path, "-no-chat", "-print-version").Run() == nil
 }
 
+func sidecarSupportsE2E(path string) bool {
+	v, err := binaryVersion(path)
+	if err != nil {
+		return false
+	}
+	return models.AgentVersionAtLeast(v, minSidecarVersionE2E)
+}
+
+func (a *agent) writeE2ESessionFile(rs protocol.RemoteStartMsg, relay, ticket string, allowFiles bool) (string, error) {
+	priv, pub, err := a.ensureDeviceIdentity()
+	if err != nil {
+		return "", err
+	}
+	a.mu.Lock()
+	agentID := a.st.AgentID
+	a.mu.Unlock()
+	if agentID == "" {
+		return "", errors.New("missing agent_id")
+	}
+	hs, err := e2e.NewAgentHandshakeFromIdentity(rs.SessionID, agentID, rs.Kind, rs.GuestMode, rs.ViewerKey, priv, pub, 5*time.Minute)
+	if err != nil {
+		return "", err
+	}
+	params := e2e.SessionParams{
+		Relay:     relay,
+		Ticket:    ticket,
+		FilesOnly: rs.Kind == protocol.RemoteKindFiles,
+		NoFiles:   rs.Kind != protocol.RemoteKindFiles && !allowFiles,
+		NoChat:    rs.Kind != protocol.RemoteKindFiles && rs.NoChat,
+		E2E:       true,
+		SessionID: rs.SessionID,
+		AgentID:   agentID,
+		Kind:      hs.Kind,
+		GuestMode: rs.GuestMode,
+		EKPriv:    hs.EKPriv,
+		ViewerKey: hs.ViewerKey,
+		IKPub:     hs.IKPub,
+		Exp:       hs.Exp,
+		SigDel:    hs.SigDel,
+	}
+	body, err := json.Marshal(params)
+	if err != nil {
+		return "", err
+	}
+	baseDir := os.TempDir()
+	if a.statePath != "" {
+		baseDir = filepath.Dir(a.statePath)
+	}
+	// A fresh directory inherits the protected install directory's ACL on
+	// Windows. Never reuse a directory left by an earlier installation.
+	dir, err := os.MkdirTemp(baseDir, "remote-session-")
+	if err != nil {
+		return "", err
+	}
+	path := filepath.Join(dir, "parameters.json")
+	cleanup := func() {
+		_ = os.Remove(path)
+		_ = os.Remove(dir)
+	}
+	if err := protectE2ESessionDir(dir); err != nil {
+		cleanup()
+		return "", err
+	}
+	file, err := os.OpenFile(path, os.O_WRONLY|os.O_CREATE|os.O_EXCL, 0o600)
+	if err != nil {
+		cleanup()
+		return "", err
+	}
+	_, writeErr := file.Write(body)
+	if err := errors.Join(writeErr, file.Close()); err != nil {
+		cleanup()
+		return "", err
+	}
+	// Clean up even if a child crashes before consuming its parameters.
+	time.AfterFunc(2*time.Minute, cleanup)
+	return path, nil
+}
+
 func sidecarArgs(relay, ticket string, extra []string) []string {
+	if len(extra) >= 2 && extra[0] == "-session" {
+		return extra
+	}
 	args := []string{"-relay", relay}
 	if ticket != "" {
 		args = append(args, "-ticket", ticket)

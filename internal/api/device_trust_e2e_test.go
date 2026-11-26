@@ -30,11 +30,11 @@ func TestDeviceCannotRetargetItselfE2E(t *testing.T) {
 	if rr.Code != http.StatusCreated || json.Unmarshal(rr.Body.Bytes(), &tok) != nil {
 		t.Fatalf("enroll token: %d %s", rr.Code, rr.Body.String())
 	}
-	id, token, _, err := s.registerAgent(f.ctx, &protocol.RegisterReq{EnrollToken: tok.Token, Hostname: "LIN-TRUST", OS: "linux", Arch: "amd64", Version: "0.11.0"})
+	id, token, _, err := s.registerAgent(f.ctx, &protocol.RegisterReq{EnrollToken: tok.Token, Hostname: "LIN-TRUST", OS: "linux", Arch: "amd64", Version: "0.11.0"}, "")
 	if err != nil {
 		t.Fatal(err)
 	}
-	if _, _, _, err := s.registerAgent(f.ctx, &protocol.RegisterReq{AgentID: id, AgentToken: token, Hostname: "LIN-TRUST", OS: "windows", Arch: "amd64", Version: "0.11.1"}); err != nil {
+	if _, _, _, err := s.registerAgent(f.ctx, &protocol.RegisterReq{AgentID: id, AgentToken: token, Hostname: "LIN-TRUST", OS: "windows", Arch: "amd64", Version: "0.11.1"}, ""); err != nil {
 		t.Fatalf("a reconnect naming another OS must still connect: %v", err)
 	}
 	lease := s.hub.Add(id, nil)

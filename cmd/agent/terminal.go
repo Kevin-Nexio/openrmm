@@ -6,9 +6,11 @@ import (
 	"net/http"
 	"os/user"
 	"runtime"
+	"time"
 
 	"github.com/gorilla/websocket"
 
+	"github.com/p1ngu/rmm/internal/e2e"
 	"github.com/p1ngu/rmm/internal/protocol"
 )
 
@@ -47,12 +49,34 @@ func (a *agent) startTerminalSession(rs protocol.RemoteStartMsg) {
 	if ticket != "" {
 		headers = http.Header{"Authorization": []string{"Remote-Agent " + ticket}}
 	}
-	conn, _, err := websocket.DefaultDialer.Dial(relay, headers)
+	rawConn, _, err := websocket.DefaultDialer.Dial(relay, headers)
 	if err != nil {
 		log.Printf("terminal: dial relay: %v", err)
 		return
 	}
-	defer conn.Close()
+	defer rawConn.Close()
+	var conn e2e.WSConn = rawConn
+	if rs.E2E {
+		priv, pub, idErr := a.ensureDeviceIdentity()
+		if idErr != nil {
+			log.Printf("terminal: prepare E2E identity: %v", idErr)
+			return
+		}
+		a.mu.Lock()
+		agentID := a.st.AgentID
+		a.mu.Unlock()
+		hs, hsErr := e2e.NewAgentHandshakeFromIdentity(rs.SessionID, agentID, protocol.RemoteKindTerminal, "", rs.ViewerKey, priv, pub, 5*time.Minute)
+		if hsErr != nil {
+			log.Printf("terminal: prepare E2E delegation: %v", hsErr)
+			return
+		}
+		e2eConn, err := e2e.HandshakeAgent(rawConn, hs)
+		if err != nil {
+			log.Printf("terminal: E2E handshake failed: %v", err)
+			return
+		}
+		conn = e2eConn
+	}
 
 	term, err := startShell()
 	if err != nil {
@@ -116,7 +140,7 @@ func (a *agent) startTerminalSession(rs protocol.RemoteStartMsg) {
 // writeTermText sends a JSON control frame to the viewer. Only the agent's main
 // goroutine calls this before the output pump starts, plus the pump itself at
 // exit — never concurrently — so it is safe on a single websocket writer.
-func writeTermText(conn *websocket.Conn, v any) {
+func writeTermText(conn e2e.WSConn, v any) {
 	data, _ := json.Marshal(v)
 	_ = conn.WriteMessage(websocket.TextMessage, data)
 }

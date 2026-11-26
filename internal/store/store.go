@@ -106,7 +106,9 @@ func scanAgent(row pgx.Row) (*models.Agent, error) {
 	var a models.Agent
 	err := row.Scan(&a.ID, &a.Hostname, &a.Description, &a.Note, &a.OS, &a.Arch, &a.Version, &a.Status,
 		&a.SiteID, &a.GroupID, &a.Tags, &a.MeshID, &a.LastSeen, &a.RevokedAt, &a.CreatedAt, &a.EnrollTokenID, &a.MonitoringScopeSince,
-		&a.OSRole, &a.RoleOverride, &a.LoggedInUser, &a.LoggedInUserSince, &a.LastLoggedInUser, &a.LastLoggedInUserAt, &a.LastBootAt)
+		&a.OSRole, &a.RoleOverride, &a.LoggedInUser, &a.LoggedInUserSince, &a.LastLoggedInUser, &a.LastLoggedInUserAt, &a.LastBootAt,
+		&a.DevicePublicKey, &a.DeviceKeyIssue, &a.PendingDevicePublicKey, &a.DeviceKeyIssueSince, &a.DeviceKeyIssueSeenAt,
+		&a.DeviceKeyIssueIP, &a.DeviceKeyIssueVersion, &a.DeviceKeyIssueCount, &a.DeviceKeyChangedAt, &a.DeviceKeyChangedBy)
 	if errors.Is(err, pgx.ErrNoRows) {
 		return nil, ErrNotFound
 	}
@@ -117,7 +119,7 @@ func scanAgent(row pgx.Row) (*models.Agent, error) {
 	return &a, nil
 }
 
-const agentCols = `id, hostname, description, note, os, arch, version, status, site_id, group_id, tags, mesh_id, last_seen, revoked_at, created_at, enroll_token_id, monitoring_scope_since, os_role, role_override, logged_in_user, logged_in_user_since, last_logged_in_user, last_logged_in_user_at, last_boot_at`
+const agentCols = `id, hostname, description, note, os, arch, version, status, site_id, group_id, tags, mesh_id, last_seen, revoked_at, created_at, enroll_token_id, monitoring_scope_since, os_role, role_override, logged_in_user, logged_in_user_since, last_logged_in_user, last_logged_in_user_at, last_boot_at, device_public_key, device_key_issue, pending_device_public_key, device_key_issue_since, device_key_issue_seen_at, device_key_issue_ip, device_key_issue_version, device_key_issue_count, device_key_changed_at, device_key_changed_by`
 
 // SetAgentMeta updates the operator-editable identification fields: description
 // (shown in the device list) and note (a private observation, detail-only).
@@ -796,10 +798,10 @@ func (s *Store) GetInventory(ctx context.Context, agentID string) (*models.Inven
 func (s *Store) CreateRemoteSession(ctx context.Context, rs *models.RemoteSession) error {
 	rs.ID = newID()
 	_, err := s.pool.Exec(ctx,
-		`INSERT INTO remote_sessions (id, agent_id, provider, status, token, connect_url, created_by, expires_at, viewer_ticket_hash, agent_ticket_hash)
-		 VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10)`,
+		`INSERT INTO remote_sessions (id, agent_id, provider, status, token, connect_url, created_by, expires_at, viewer_ticket_hash, agent_ticket_hash, e2e)
+		 VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11)`,
 		rs.ID, rs.AgentID, rs.Provider, rs.Status, rs.Token, rs.ConnectURL, rs.CreatedBy, rs.ExpiresAt,
-		hashIfSet(rs.ViewerTicket), hashIfSet(rs.AgentTicket))
+		hashIfSet(rs.ViewerTicket), hashIfSet(rs.AgentTicket), rs.E2E)
 	return err
 }
 
@@ -814,7 +816,7 @@ func hashIfSet(token string) *string {
 func scanRemoteSession(row pgx.Row) (*models.RemoteSession, error) {
 	var rs models.RemoteSession
 	err := row.Scan(&rs.ID, &rs.AgentID, &rs.Provider, &rs.Status, &rs.Token, &rs.ConnectURL,
-		&rs.CreatedBy, &rs.CreatedAt, &rs.ExpiresAt)
+		&rs.CreatedBy, &rs.CreatedAt, &rs.ExpiresAt, &rs.E2E)
 	if errors.Is(err, pgx.ErrNoRows) {
 		return nil, ErrNotFound
 	}
@@ -824,7 +826,7 @@ func scanRemoteSession(row pgx.Row) (*models.RemoteSession, error) {
 	return &rs, nil
 }
 
-const remoteSessionCols = `id, agent_id, provider, status, token, connect_url, created_by, created_at, expires_at`
+const remoteSessionCols = `id, agent_id, provider, status, token, connect_url, created_by, created_at, expires_at, e2e`
 
 // GetRemoteSessionForAuthorization returns non-secret session metadata used to
 // revalidate a viewer's current permission and device scope before ticket use.

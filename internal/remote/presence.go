@@ -36,6 +36,7 @@ type Viewer struct {
 	User      string    `json:"user"`
 	Kind      string    `json:"kind"`
 	Since     time.Time `json:"since"`
+	E2E       bool      `json:"-"`
 }
 
 func NewPresence() *Presence {

@@ -15,6 +15,7 @@ import (
 
 	"github.com/p1ngu/rmm/internal/auth"
 	"github.com/p1ngu/rmm/internal/devicelimit"
+	"github.com/p1ngu/rmm/internal/e2e"
 	"github.com/p1ngu/rmm/internal/models"
 	"github.com/p1ngu/rmm/internal/protocol"
 	"github.com/p1ngu/rmm/internal/remote"
@@ -51,8 +52,8 @@ var relayUpgrader = websocket.Upgrader{
 // stderr at 1 MiB each); relay frames carry screen tiles / 64 KiB file chunks,
 // so it gets generous headroom.
 const (
-	agentWSReadLimit = 8 << 20  // 8 MiB
-	relayWSReadLimit = 32 << 20 // 32 MiB
+	agentWSReadLimit = 8 << 20          // 8 MiB
+	relayWSReadLimit = e2e.MaxFrameSize // 32 MiB
 )
 
 // handleAgentWS upgrades, authenticates the agent via the register handshake,
@@ -64,6 +65,7 @@ func (s *Server) handleAgentWS(w http.ResponseWriter, r *http.Request) {
 	}
 	conn.SetReadLimit(agentWSReadLimit)
 	ctx := context.Background()
+	ip := clientIP(r, s.cfg.TrustProxyHeaders)
 
 	conn.SetReadDeadline(time.Now().Add(90 * time.Second))
 	_, raw, err := conn.ReadMessage()
@@ -83,22 +85,22 @@ func (s *Server) handleAgentWS(w http.ResponseWriter, r *http.Request) {
 	var agentID, token, cancelCredentialRotationID string
 	var ch chan []byte
 	if reg.EnrollToken != "" {
-		agentID, token, cancelCredentialRotationID, err = s.registerAgent(ctx, &reg)
+		agentID, token, cancelCredentialRotationID, err = s.registerAgent(ctx, &reg, ip)
 		if err == nil {
 			unlock := s.lockAgentLifecycle(agentID)
 			agent, getErr := s.store.GetAgent(ctx, agentID)
 			if getErr != nil || agent.Status == models.AgentRevoked {
 				err = errors.New("agent was revoked during enrollment")
 			} else {
-				ch, err = s.attachAgentConnection(ctx, agentID, conn)
+				ch, err = s.attachAgentConnection(ctx, agentID, ip, reg.Version, conn)
 			}
 			unlock()
 		}
 	} else {
 		unlock := s.lockAgentLifecycle(reg.AgentID)
-		agentID, token, cancelCredentialRotationID, err = s.registerAgent(ctx, &reg)
+		agentID, token, cancelCredentialRotationID, err = s.registerAgent(ctx, &reg, ip)
 		if err == nil {
-			ch, err = s.attachAgentConnection(ctx, agentID, conn)
+			ch, err = s.attachAgentConnection(ctx, agentID, ip, reg.Version, conn)
 		}
 		unlock()
 	}
@@ -136,25 +138,31 @@ func (s *Server) handleAgentWS(w http.ResponseWriter, r *http.Request) {
 	}
 }
 
-func (s *Server) attachAgentConnection(ctx context.Context, agentID string, conn *websocket.Conn) (chan []byte, error) {
-	ch := s.hub.Add(agentID, func() { _ = conn.Close() })
+func (s *Server) attachAgentConnection(ctx context.Context, agentID, ip, version string, conn *websocket.Conn) (chan []byte, error) {
+	ch, replaced := s.hub.AddReplacing(agentID, func() { _ = conn.Close() })
 	if err := s.store.SetAgentStatus(ctx, agentID, models.AgentOnline); err != nil {
 		s.hub.Remove(agentID, ch)
 		return nil, err
 	}
+	s.watchAgentConnection(ctx, agentID, ip, version, replaced)
 	return ch, nil
 }
 
 // registerAgent validates the handshake. On enrollment it returns a freshly
 // minted agent token; on re-auth the returned token is empty (the agent keeps
 // the one it already stored).
-func (s *Server) registerAgent(ctx context.Context, reg *protocol.RegisterReq) (id, token, cancelCredentialRotationID string, err error) {
+func (s *Server) registerAgent(ctx context.Context, reg *protocol.RegisterReq, ip string) (id, token, cancelCredentialRotationID string, err error) {
+	if reg.DevicePublicKey != "" {
+		if err := e2e.ValidatePublicKey(reg.DevicePublicKey); err != nil {
+			return "", "", "", errors.New("invalid device E2E public key")
+		}
+	}
 	if reg.EnrollToken != "" {
 		// The plan's device limit, when one is enforced, is checked in the same
 		// transaction that consumes the token and creates the agent.
 		limit := s.enforcedDeviceLimit(time.Now())
 		token = auth.NewToken()
-		a, err := s.store.EnrollAgent(ctx, reg.EnrollToken, limit, reg.Hostname, reg.OS, reg.Arch, reg.Version, auth.Hash(token))
+		a, err := s.store.EnrollAgent(ctx, reg.EnrollToken, limit, reg.Hostname, reg.OS, reg.Arch, reg.Version, auth.Hash(token), reg.DevicePublicKey)
 		if errors.Is(err, devicelimit.ErrLimitReached) {
 			go s.observeDeviceLimitNow()
 			return "", "", "", errors.New(devicelimit.RefusalMessage(limit))
@@ -173,6 +181,10 @@ func (s *Server) registerAgent(ctx context.Context, reg *protocol.RegisterReq) (
 		detail, _ := json.Marshal(map[string]any{"enroll_token_id": a.EnrollTokenID, "hostname": a.Hostname,
 			"os": a.OS, "arch": a.Arch, "site_id": a.SiteID, "group_id": a.GroupID})
 		_ = s.store.AddAudit(ctx, "agent", "device.enrolled", a.ID, detail)
+		if a.DevicePublicKey != "" {
+			pinDetail, _ := json.Marshal(map[string]string{"fingerprint": e2e.DisplayFingerprint(a.DevicePublicKey)})
+			_ = s.store.AddAudit(ctx, "agent", "device.e2e_key_pinned", a.ID, pinDetail)
+		}
 		return a.ID, token, "", nil
 	}
 	if reg.AgentID == "" || reg.AgentToken == "" {
@@ -182,6 +194,17 @@ func (s *Server) registerAgent(ctx context.Context, reg *protocol.RegisterReq) (
 	if err != nil || !valid {
 		return "", "", "", errors.New("invalid agent token")
 	}
+	// A key other than the pinned one, or none, does not refuse the
+	// connection: the token authenticates this channel. The device is marked
+	// for review and its native remote sessions pause (api_device_key.go).
+	outcome, err := s.store.CheckAgentDeviceKey(ctx, reg.AgentID, store.DeviceKeyPresentation{
+		Key:         reg.DevicePublicKey,
+		Unavailable: reg.DeviceKeyStatus == protocol.DeviceKeyUnavailable,
+	}, ip, reg.Version)
+	if err != nil {
+		return "", "", "", err
+	}
+	s.reportDeviceKeyOutcome(ctx, reg.AgentID, reg.Hostname, ip, reg.Version, outcome)
 	// The OS on record is the enrolled one; a device naming another is not
 	// believed (policies filter on the OS) and is worth an operator's look.
 	if err := s.store.RefreshAgentInfo(ctx, reg.AgentID, reg.Hostname, reg.OS, reg.Arch, reg.Version); errors.Is(err, store.ErrAgentOSChanged) {
@@ -460,6 +483,7 @@ func (s *Server) handleRelayWS(w http.ResponseWriter, r *http.Request) {
 			AgentID:   sess.AgentID,
 			User:      viewerSubject,
 			Kind:      sess.Provider,
+			E2E:       sess.E2E,
 			Since:     time.Now().UTC(),
 		}
 		leave := func() {}
@@ -483,9 +507,14 @@ func (s *Server) handleRelayWS(w http.ResponseWriter, r *http.Request) {
 		} else {
 			leave = s.presence.Join(viewer)
 		}
-		defer leave()
+		defer func() {
+			leave()
+			if viewer.E2E && viewer.Kind == "native" && guestShare == nil {
+				s.guests.forgetChat(sess.ID)
+			}
+		}()
 		if guestShare != nil {
-			policy := remote.GuestPolicy{Control: guestShare.Mode == models.RemoteShareControl}
+			policy := remote.GuestPolicy{Control: guestShare.Mode == models.RemoteShareControl, E2E: sess.E2E}
 			if err := s.relay.JoinGuest(sess.ID, sess.AgentID, conn, policy); err != nil {
 				log.Printf("remote relay session=%s guest=%s rejected: %v", sess.ID, guestShare.ID, err)
 			}

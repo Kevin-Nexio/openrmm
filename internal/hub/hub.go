@@ -32,6 +32,13 @@ func New() *Hub {
 // agent already had a connection, the old connection is closed after its channel
 // has been removed from the registry (last writer wins).
 func (h *Hub) Add(agentID string, closeFn func()) chan []byte {
+	ch, _ := h.AddReplacing(agentID, closeFn)
+	return ch
+}
+
+// AddReplacing is Add, also reporting whether it displaced a live connection
+// of the same agent: machines that share one identity keep doing that.
+func (h *Hub) AddReplacing(agentID string, closeFn func()) (chan []byte, bool) {
 	ch := make(chan []byte, 32)
 	var old client
 	var replaced bool
@@ -46,7 +53,7 @@ func (h *Hub) Add(agentID string, closeFn func()) chan []byte {
 	if replaced && old.closeFn != nil {
 		old.closeFn()
 	}
-	return ch
+	return ch, replaced
 }
 
 // Remove deregisters an agent connection, but only if ch is still the current

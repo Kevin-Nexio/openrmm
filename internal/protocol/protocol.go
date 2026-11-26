@@ -112,16 +112,25 @@ type Envelope struct {
 	Data json.RawMessage `json:"data,omitempty"`
 }
 
+// DeviceKeyUnavailable is RegisterReq.DeviceKeyStatus when an agent that
+// supports encryption could not read its identity key.
+const DeviceKeyUnavailable = "unavailable"
+
 // RegisterReq is the first message an agent sends. On first enrollment it carries
 // an EnrollToken; afterwards it carries its AgentID + AgentToken.
 type RegisterReq struct {
-	EnrollToken string `json:"enroll_token,omitempty"`
-	AgentID     string `json:"agent_id,omitempty"`
-	AgentToken  string `json:"agent_token,omitempty"`
-	Hostname    string `json:"hostname"`
-	OS          string `json:"os"`
-	Arch        string `json:"arch"`
-	Version     string `json:"version"`
+	EnrollToken     string `json:"enroll_token,omitempty"`
+	AgentID         string `json:"agent_id,omitempty"`
+	AgentToken      string `json:"agent_token,omitempty"`
+	Hostname        string `json:"hostname"`
+	OS              string `json:"os"`
+	Arch            string `json:"arch"`
+	Version         string `json:"version"`
+	DevicePublicKey string `json:"device_public_key,omitempty"`
+	// DeviceKeyStatus is "unavailable" when an agent that supports encryption
+	// could not read its identity key (DevicePublicKey is then empty). An older
+	// agent never sends it, which tells the two cases apart.
+	DeviceKeyStatus string `json:"device_key_status,omitempty"`
 }
 
 // RegisterResp returns the durable identity the agent should persist locally.
@@ -220,6 +229,12 @@ type RemoteStartMsg struct {
 	AllowFiles *bool  `json:"allow_files,omitempty"`
 	// NoChat: the sidecar opens no chat window for this session (a guest's).
 	NoChat bool `json:"no_chat,omitempty"`
+	// E2E requires end-to-end encryption (rmm-e2e-p256-aes256gcm-v1) on /ws/remote.
+	E2E       bool   `json:"e2e,omitempty"`
+	ViewerKey string `json:"viewer_key,omitempty"`
+	// GuestMode ("view" or "control") instructs the endpoint sidecar to enforce
+	// the guest allowlist and disable clipboard/file channels at the source.
+	GuestMode string `json:"guest_mode,omitempty"`
 }
 
 // Remote session kinds (RemoteStartMsg.Kind).

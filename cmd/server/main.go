@@ -132,6 +132,7 @@ func main() {
 	remoteMgr := remote.NewManager(st, h, cfg.MeshCentralURL, cfg.MeshCentralTokenKey, cfg.MeshCentralUser, cfg.MeshCentralEnabled, cfg.RustDeskEnabled)
 	remoteMgr.SetMeshMatchHostname(cfg.MeshCentralMatchHostname)
 	remoteMgr.SetMeshSharedAccount(cfg.MeshCentralSharedAccount)
+	remoteMgr.SetE2EPolicy(cfg.RemoteE2EPolicy)
 	relay := remote.NewRelay()
 	aiClient := ai.NewClient(cfg.AIBaseURL, cfg.AIAPIKey, cfg.AIModel)
 	patchSvc := patches.New(st, h)
@@ -160,6 +161,7 @@ func main() {
 	log.Println("scheduler started")
 
 	srv := api.New(cfg, st, h, jobSvc, remoteMgr, relay, chat, sched, patchSvc)
+	srv.SetDeviceKeyNotifier(notifier)
 	// Discovery talks to the identity provider over the network, so it happens
 	// here rather than in New: a provider that is down delays this call, and it
 	// must not delay building the server or block the agent hub. It logs and

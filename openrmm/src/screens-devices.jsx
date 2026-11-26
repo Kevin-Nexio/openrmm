@@ -651,6 +651,7 @@ function DeviceDetail({ id, onClose, navigate, sites, clients }) {
               </div>
               <button onClick={onClose} className="text-faint hover:text-ink p-1.5 -mr-1.5"><Icon name="close" size={18} /></button>
             </div>
+            <DeviceKeyReview device={d} canReview={can('devices.delete')} onChanged={() => devQ.refetch()} />
 
             <div className="flex items-center gap-2 mt-4 flex-wrap">
               {(can('devices.remote') || can('devices.terminal') || can('devices.files')) && <Dropdown align="left" width="w-60" trigger={
@@ -798,6 +799,7 @@ function DeviceNotes({ device }) {
 //   binary [0x02][id][bytes]  file chunk     (both directions)
 //   text   {"t":...}          input / chat / file control ({t:'kf'} = request keyframe)
 const CH_VIDEO = 0x01, CH_FILE = 0x02;
+const { RemoteCrypto, RemoteChat } = window;
 function relayProtocols(ticket) {
   try {
     const auth = JSON.parse(sessionStorage.getItem('rmm-ai-auth') || 'null');
@@ -814,11 +816,14 @@ const SHARE_LIFETIMES = [15, 60, 240, 480, 1440];
 // for this technician's decision on this device, and those already in. Only
 // the technician who sent an invitation sees its guest here, and accepting
 // needs this session open — which is why it lives in the viewer.
-function GuestRequests({ deviceId }) {
+function GuestRequests({ deviceId, accept, sync }) {
   const toast = useToast();
   const q = useQuery(['remote-shares-pending', deviceId], () => api.pendingRemoteShares(deviceId), { poll: 3000 });
   const pending = q.data?.pending || [];
   const guests = q.data?.guests || [];
+  useEffect(() => {
+    if (q.data) sync(q.data.guests);
+  }, [q.data]);
   const act = async (fn) => {
     try { await fn(); q.refetch(); }
     catch (e) { toast.error(t('guest.actionFailed'), e.message); }
@@ -831,7 +836,7 @@ function GuestRequests({ deviceId }) {
         <span className="flex-1 min-w-[180px]">{g.redeem_count > 1
           ? t('guest.wantsToRejoin', { name: g.guest_name, ip: g.guest_ip, mode: tEnum('guest.mode', g.mode) })
           : t('guest.wantsToJoin', { name: g.guest_name, ip: g.guest_ip, mode: tEnum('guest.mode', g.mode) })}</span>
-        <Button size="sm" variant="primary" icon="approve" onClick={() => act(() => api.acceptRemoteShare(g.id))}>{t('guest.accept')}</Button>
+        <Button size="sm" variant="primary" icon="approve" onClick={() => act(() => accept(g))}>{t('guest.accept')}</Button>
         <Button size="sm" variant="ghost" icon="reject" onClick={() => act(() => api.rejectRemoteShare(g.id))}>{t('guest.reject')}</Button>
       </div>
     ))}
@@ -847,8 +852,146 @@ function GuestRequests({ deviceId }) {
 
 // ShareAccessModal issues an invitation for a device and lists the caller's
 // open ones. The link and the code are shown once: only their hashes are kept.
+// How to read a device's key fingerprint on the device itself, per OS.
+const FINGERPRINT_COMMAND = {
+  windows: '& "$Env:ProgramData\\rmm-agent\\rmm-agent.exe" -state "$Env:ProgramData\\rmm-agent\\state.json" -fingerprint',
+  darwin: 'sudo /usr/local/libexec/openrmm/rmm-agent -state /etc/rmm-agent/state.json -fingerprint',
+  linux: 'sudo /usr/local/bin/rmm-agent -state /etc/rmm-agent/state.json -fingerprint',
+};
+
+// A device presented another encryption key than the pinned one, none, or is
+// used by more than one machine. The server keeps it online and pauses only its
+// native remote sessions. An administrator compares the fingerprint on the
+// device, then approves exactly the key it presented, or keeps the pinned one.
+function DeviceKeyReview({ device, canReview, onChanged }) {
+  const toast = useToast();
+  const issue = device.device_key_issue;
+  const pending = device.pending_device_public_key || '';
+  const [fps, setFps] = useState({ pinned: '', pending: '' });
+  const [action, setAction] = useState(''); // '' | 'approve' | 'dismiss'
+  const [checked, setChecked] = useState(false);
+  const [reason, setReason] = useState('');
+  const [busy, setBusy] = useState(false);
+  useEffect(() => {
+    let live = true;
+    const show = (k) => (k ? RemoteCrypto.displayFingerprint(k).catch(() => '') : Promise.resolve(''));
+    Promise.all([show(device.device_public_key), show(pending)]).then(([a, b]) => { if (live) setFps({ pinned: a, pending: b }); });
+    return () => { live = false; };
+  }, [device.device_public_key, pending]);
+  useEffect(() => { setAction(''); setChecked(false); setReason(''); }, [issue, pending]);
+  if (!issue) return null;
+  const command = FINGERPRINT_COMMAND[device.os] || FINGERPRINT_COMMAND.linux;
+  const approving = action === 'approve';
+  const submit = async () => {
+    setBusy(true);
+    try {
+      if (approving) {
+        await api.approveDeviceKey(device.id, pending, reason.trim());
+        toast.success(t('devkey.approvedToast'));
+      } else {
+        await api.dismissDeviceKeyIssue(device.id, reason.trim());
+        toast.success(t('devkey.dismissedToast'));
+      }
+      setAction('');
+      onChanged?.();
+    } catch (e) { toast.error(t('common.failed'), e.message); } finally { setBusy(false); }
+  };
+  return (
+    <div className="mt-3 rounded-xl border border-warn/40 bg-warn/10 p-3 text-[12.5px] text-ink" data-testid="device-key-review">
+      <div className="flex items-start gap-2">
+        <Icon name="alert" size={15} className="text-warn mt-0.5 shrink-0" />
+        <div className="flex-1 min-w-0 space-y-1.5">
+          <div className="font-semibold">{t('devkey.title.' + issue)}</div>
+          <div className="text-muted leading-relaxed">{t('devkey.body.' + issue)} {t('devkey.paused')}</div>
+          <div className="grid grid-cols-[auto,1fr] gap-x-3 gap-y-0.5">
+            {fps.pinned && <><span className="text-faint">{t('devkey.pinned')}</span><span className="font-mono" data-testid="device-key-pinned">{fps.pinned}</span></>}
+            {fps.pending && <><span className="text-faint">{t('devkey.presented')}</span><span className="font-mono" data-testid="device-key-pending">{fps.pending}</span></>}
+          </div>
+          {device.device_key_issue_seen_at && <div className="text-faint">{t('devkey.seen', {
+            when: timeAgo(device.device_key_issue_seen_at), ip: device.device_key_issue_ip || '—',
+            version: device.device_key_issue_version || '—', count: device.device_key_issue_count || 1,
+          })}</div>}
+          <div className="text-faint">{t('devkey.howToCheck')}</div>
+          <code className="block rounded-lg bg-elevated/60 px-2 py-1 font-mono text-[11.5px] break-all">{command}</code>
+          {canReview && (
+            <div className="flex gap-2 pt-1 flex-wrap">
+              {issue === 'changed' && pending && <Button size="sm" variant="primary" onClick={() => setAction('approve')}>{t('devkey.approve')}</Button>}
+              <Button size="sm" variant="ghost" onClick={() => setAction('dismiss')}>{t('devkey.dismiss')}</Button>
+            </div>
+          )}
+        </div>
+      </div>
+      <Modal open={!!action} onClose={() => { if (!busy) setAction(''); }} width="max-w-md">
+        <div className="p-5 space-y-3">
+          <div className="text-[15px] font-semibold text-ink">{t(approving ? 'devkey.approveTitle' : 'devkey.dismissTitle')}</div>
+          <div className="text-[13px] text-muted leading-relaxed">{approving ? t('devkey.approveBody') : t('devkey.dismissBody.' + issue)}</div>
+          {approving && <div className="font-mono text-[13px] text-ink">{fps.pending}</div>}
+          {approving && (
+            <label className="flex items-start gap-2 text-[12.5px] text-ink">
+              <input type="checkbox" checked={checked} onChange={(e) => setChecked(e.target.checked)} className="mt-0.5" data-testid="device-key-checked" />
+              <span>{t('devkey.checked')}</span>
+            </label>
+          )}
+          <Field label={t('devkey.reason')}><Input value={reason} onChange={(e) => setReason(e.target.value)} maxLength={200} data-testid="device-key-reason" /></Field>
+          <div className="flex justify-end gap-2 pt-1">
+            <Button variant="ghost" onClick={() => setAction('')} disabled={busy}>{t('action.cancel')}</Button>
+            <Button variant="primary" loading={busy} disabled={!reason.trim() || (approving && !checked)} onClick={submit} data-testid="device-key-submit">
+              {t(approving ? 'devkey.approve' : 'devkey.dismiss')}
+            </Button>
+          </div>
+        </div>
+      </Modal>
+    </div>
+  );
+}
+
+// This browser remembered a device's key and refuses another one. When an
+// administrator approved the new key on the server, show both fingerprints and
+// who approved it, and continue only if the technician accepts. A key the
+// server did not record as approved is refused, as before.
+function useDeviceKeyChange() {
+  const [prompt, setPrompt] = useState(null);
+  const check = async (deviceId, deviceKey) => {
+    if (RemoteCrypto.deviceIdentity(deviceId, deviceKey)) return true;
+    const known = RemoteCrypto.knownDeviceKey(deviceId);
+    if (!known || !deviceKey) return false;
+    let d = null;
+    try { d = await api.getDevice(deviceId); } catch (e) { return false; }
+    if (!d || d.device_public_key !== deviceKey || !d.device_key_changed_by || d.device_key_issue) return false;
+    let before, after;
+    try {
+      [before, after] = await Promise.all([RemoteCrypto.displayFingerprint(known), RemoteCrypto.displayFingerprint(deviceKey)]);
+    } catch {
+      return false;
+    }
+    const accepted = await new Promise((resolve) => setPrompt({ before, after, by: d.device_key_changed_by, at: d.device_key_changed_at, resolve }));
+    setPrompt(null);
+    return accepted && RemoteCrypto.rememberDeviceKey(deviceId, deviceKey, known);
+  };
+  const element = (
+    <Modal open={!!prompt} onClose={() => prompt?.resolve(false)} width="max-w-md">
+      {prompt && (
+        <div className="p-5 space-y-3" data-testid="device-key-change">
+          <div className="text-[15px] font-semibold text-ink">{t('viewer.keyChangeTitle')}</div>
+          <div className="text-[13px] text-muted leading-relaxed">{t('viewer.keyChangeBody', { who: prompt.by, when: prompt.at ? timeAgo(prompt.at) : '—' })}</div>
+          <div className="grid grid-cols-[auto,1fr] gap-x-3 gap-y-1 text-[12.5px]">
+            <span className="text-faint">{t('viewer.keyChangeOld')}</span><span className="font-mono text-ink">{prompt.before}</span>
+            <span className="text-faint">{t('viewer.keyChangeNew')}</span><span className="font-mono text-ink">{prompt.after}</span>
+          </div>
+          <div className="flex justify-end gap-2 pt-1">
+            <Button variant="ghost" onClick={() => prompt.resolve(false)}>{t('action.cancel')}</Button>
+            <Button variant="primary" onClick={() => prompt.resolve(true)} data-testid="device-key-change-accept">{t('viewer.keyChangeAccept')}</Button>
+          </div>
+        </div>
+      )}
+    </Modal>
+  );
+  return [check, element];
+}
+
 function ShareAccessModal({ open, onClose, device }) {
   const toast = useToast();
+  const [checkKey, keyChangePrompt] = useDeviceKeyChange();
   const [mode, setMode] = useState('view');
   const [minutes, setMinutes] = useState('60');
   // A guest who closes the page may come back with the same link and code
@@ -862,13 +1005,19 @@ function ShareAccessModal({ open, onClose, device }) {
   const create = async () => {
     setBusy(true);
     try {
+      if (!(await checkKey(device.id, device.device_public_key))) throw new Error(t('viewer.deviceKeyChanged'));
+      if (device.device_public_key && !globalThis.crypto?.subtle) throw new Error(t('viewer.encryptionFailed'));
       const r = await api.createRemoteShare(device.id, { mode, minutes: Number(minutes), reusable: !singleUse });
-      const link = new URL((window.__BASE_PATH__ || '/') + 'join', location.origin).toString() + '#' + r.token;
+      const abort = (msg) => { api.closeRemoteShare(r.share.id).catch(() => {}); throw new Error(msg); };
+      if (!(await checkKey(device.id, r.device_public_key))) abort(t('viewer.deviceKeyChanged'));
+      if (r.device_public_key && !globalThis.crypto?.subtle) abort(t('viewer.encryptionFailed'));
+      const pin = r.device_public_key ? '.' + await RemoteCrypto.fingerprint(r.device_public_key) : '';
+      const link = new URL((window.__BASE_PATH__ || '/') + 'join', location.origin).toString() + '#' + r.token + pin;
       setIssued({ link, code: r.code, expires_at: r.share.expires_at, mode: r.share.mode, reusable: r.share.reusable });
       listQ.refetch();
       toast.success(t('share.created'));
     } catch (e) {
-      toast.error(t('share.failed'), e.code === 'guest_access_disabled' ? t('share.disabled') : e.message);
+      toast.error(t('share.failed'), e.code === 'guest_access_disabled' ? t('share.disabled') : e.code === 'remote_device_key_issue' ? t('viewer.deviceKeyIssue') : e.message);
     } finally { setBusy(false); }
   };
   const close = async (id) => {
@@ -877,6 +1026,7 @@ function ShareAccessModal({ open, onClose, device }) {
   };
   const shares = listQ.data?.shares || [];
   return (
+    <>
     <Modal open={open} onClose={onClose} width="max-w-xl">
       <div className="p-5 space-y-4">
         <div className="flex items-start gap-3">
@@ -933,10 +1083,12 @@ function ShareAccessModal({ open, onClose, device }) {
         </div>
       </div>
     </Modal>
+    {keyChangePrompt}
+    </>
   );
 }
 
-// GuestJoinScreen is the page an invitation link opens (/join#<token>), for
+// GuestJoinScreen opens /join#<token> or /join#<token>.<device fingerprint>, for
 // someone with no account: name and code, then a wait for the technician, then
 // the reduced viewer. The token leaves the address bar at once; after the code
 // is accepted the page holds only the guest's own credential, for this tab.
@@ -967,9 +1119,9 @@ function ThemeButton({ theme, onToggle, className }) {
 
 function GuestJoinScreen() {
   const [theme, onToggleTheme] = useStoredTheme();
-  const [token] = useState(() => (location.hash || '').replace(/^#/, ''));
-  const [saved, setSaved] = useState(() => { try { return JSON.parse(sessionStorage.getItem(GUEST_STORE) || 'null'); } catch (e) { return null; } });
-  const [phase, setPhase] = useState(saved ? 'waiting' : (token ? 'loading' : 'invalid'));
+  const [[token, fingerprint = '', extra]] = useState(() => (location.hash || '').replace(/^#/, '').split('.'));
+  const [saved, setSaved] = useState(() => { try { return token ? null : JSON.parse(sessionStorage.getItem(GUEST_STORE) || 'null'); } catch (e) { return null; } });
+  const [phase, setPhase] = useState(saved ? 'waiting' : (token && extra === undefined && (!fingerprint || /^[A-Za-z0-9_-]{22}$/.test(fingerprint)) ? 'loading' : 'invalid'));
   const [technician, setTechnician] = useState(saved?.technician || '');
   const [mode, setMode] = useState(saved?.mode || 'view');
   const [name, setName] = useState('');
@@ -977,19 +1129,32 @@ function GuestJoinScreen() {
   const [busy, setBusy] = useState(false);
   const [error, setError] = useState('');
   const [ended, setEnded] = useState('');
-  useEffect(() => { if (location.hash) history.replaceState(null, '', location.pathname + location.search); }, []);
+  useEffect(() => {
+    if (location.hash) {
+      history.replaceState(null, '', location.pathname + location.search);
+      try {
+        RemoteChat.forget(JSON.parse(sessionStorage.getItem(GUEST_STORE) || 'null')?.requestId);
+        sessionStorage.removeItem(GUEST_STORE);
+      } catch (e) {}
+    }
+  }, []);
   useEffect(() => {
     if (phase !== 'loading') return;
     api.guest.lookup(token).then((r) => { setTechnician(r.technician); setMode(r.mode); setPhase('form'); }).catch(() => setPhase('invalid'));
   }, [phase]);
   const remember = (s) => { setSaved(s); try { s ? sessionStorage.setItem(GUEST_STORE, JSON.stringify(s)) : sessionStorage.removeItem(GUEST_STORE); } catch (e) {} };
-  const finish = (reason) => { remember(null); setEnded(reason); setPhase('ended'); };
+  const finish = (reason) => {
+    try { RemoteChat.forget(saved?.requestId); } catch (e) {}
+    remember(null); setEnded(reason); setPhase('ended');
+  };
   const submit = async (e) => {
     e.preventDefault();
     setBusy(true); setError('');
     try {
-      const r = await api.guest.join(token, code.trim(), name.trim());
-      remember({ credential: r.guest_credential, technician: r.technician, mode: r.mode });
+      if (fingerprint && !globalThis.crypto?.subtle) { setError(t('viewer.encryptionFailed')); return; }
+      const keys = fingerprint ? await RemoteChat.guestKeys() : null;
+      const r = await api.guest.join(token, code.trim(), name.trim(), keys?.publicKeys);
+      remember({ credential: r.guest_credential, technician: r.technician, mode: r.mode, requestId: r.request_id, fingerprint, keys });
       setTechnician(r.technician); setMode(r.mode); setPhase('waiting');
     } catch (err) {
       if (err.code === 'link_invalid') setPhase('invalid');
@@ -1020,7 +1185,7 @@ function GuestJoinScreen() {
     else if (reason === 'replaced') finish('replaced');
     else finish('ended');
   };
-  const guest = useMemo(() => saved ? { credential: saved.credential, control: saved.mode === 'control', technician: saved.technician, broker: () => api.guest.session(saved.credential), onEnd } : null, [saved && saved.credential]);
+  const guest = useMemo(() => saved ? { ...saved, control: saved.mode === 'control', broker: (viewerKey) => api.guest.session(saved.credential, viewerKey), onEnd } : null, [saved]);
 
   if (phase === 'viewer' && guest) {
     return <RemoteViewer deviceId="" hostname={t('guest.sharedBy', { tech: technician })} os="" guest={guest} theme={theme} onToggleTheme={onToggleTheme} onClose={() => finish('left')} />;
@@ -1058,12 +1223,12 @@ function GuestJoinScreen() {
 }
 window.GuestJoinScreen = GuestJoinScreen;
 // guest, when set, makes this the reduced viewer of someone a technician let in
-// (GuestJoinScreen): { credential, control, broker, onEnd }. The relay already
-// drops everything a guest may not send or receive; this only leaves out the
-// controls that would do nothing — files, chat, clipboard, the shortcuts, the
-// input lock — and, in view-only mode, the mouse and keyboard.
+// (GuestJoinScreen). The guest policy applies at the endpoint for encrypted
+// sessions. The viewer hides file, clipboard, shortcut, and input-lock controls,
+// and only sends mouse and keyboard events when the guest has control.
 function RemoteViewer({ deviceId, hostname, os, filesOnly, onClose, guest, theme, onToggleTheme }) {
   const toast = useToast();
+  const [checkKey, keyChangePrompt] = useDeviceKeyChange();
   const auth = useAuth() || { can: () => false };
   const can = auth.can;
   const guestRef = useRef(guest); guestRef.current = guest;
@@ -1082,6 +1247,10 @@ function RemoteViewer({ deviceId, hostname, os, filesOnly, onClose, guest, theme
   const openedFilesRef = useRef(false);
   const fileInputRef = useRef(null);
   const [status, setStatus] = useState('connecting');
+  const [encrypted, setEncrypted] = useState(false);
+  const [chatKid, setChatKid] = useState('');
+  const [chatRekeying, setChatRekeying] = useState(false);
+  const roomRef = useRef(null);
   const [chat, setChat] = useState([]); // { from: 'tech'|'user', text }
   // The panel follows new lines, unless the reader scrolled up to read back:
   // then it stays where they are until they return to the bottom.
@@ -1121,6 +1290,68 @@ function RemoteViewer({ deviceId, hostname, os, filesOnly, onClose, guest, theme
 
   const nextId = () => (tidRef.current = (tidRef.current + 1) & 0xff);
   const sendJSON = (o) => { const ws = wsRef.current; if (ws && ws.readyState === 1) ws.send(JSON.stringify(o)); };
+  const appendChat = (line) => {
+    setChat((lines) => [...lines, line]);
+    if (!openRef.current) setUnread((n) => n + 1);
+  };
+  const setRoom = (room) => { roomRef.current = room; setChatKid(room?.kid || ''); };
+  const rotateChatRoom = async (ws, guests, pending) => {
+    if (ws.rotatingChat || ws.readyState !== 1) throw new Error(t('viewer.encryptedChatPending'));
+    ws.rotatingChat = true;
+    setChatRekeying(true);
+    setRoom(null);
+    const ensureAttached = () => {
+      if (ws !== wsRef.current || ws.readyState !== 1) throw new Error(t('viewer.encryptedChatPending'));
+    };
+    try {
+      const accepted = guests.filter((entry) => entry.status === 'accepted');
+      const { agentID, deviceKey } = ws.identity;
+      const room = await RemoteChat.create(agentID, deviceKey);
+      room.members = new Map(accepted.map((entry) => [entry.id, entry.redeem_count]));
+      room.generation = (ws.chatGeneration || 0) + 1;
+      ws.chatGeneration = room.generation;
+      room.cursor = 0;
+      for (const entry of accepted) {
+        if (!entry.guest_public_key || !entry.guest_sign_key) throw new Error(t('viewer.encryptionFailed'));
+        const payload = await RemoteChat.wrap(room, entry);
+        ensureAttached();
+        await api.setRemoteShareChatKey(entry.id, { ...payload, redeem_count: entry.redeem_count });
+      }
+      if (pending) {
+        if (!pending.guest_public_key || !pending.guest_sign_key) throw new Error(t('viewer.encryptionFailed'));
+        const payload = await RemoteChat.wrap(room, pending);
+        ensureAttached();
+        await api.acceptRemoteShare(pending.id, { ...payload, redeem_count: pending.redeem_count });
+        room.members.set(pending.id, pending.redeem_count);
+      }
+      ensureAttached();
+      ws.send(JSON.stringify({ t: 'chat_init', kid: room.kid, k: RemoteCrypto.encode(room.material), tech_pub: room.techPub }));
+      setRoom(room);
+      if (room.members.size) ws.exchangeChat?.(room).catch(() => {});
+    } finally {
+      ws.rotatingChat = false;
+      if (ws === wsRef.current) setChatRekeying(false);
+    }
+  };
+
+  const acceptGuest = async (guestShare) => {
+    const ws = wsRef.current;
+    if (!ws?.encrypted) return api.acceptRemoteShare(guestShare.id);
+    const shares = await api.pendingRemoteShares(deviceId);
+    if (ws !== wsRef.current) throw new Error(t('viewer.encryptedChatPending'));
+    await rotateChatRoom(ws, shares.guests, guestShare);
+  };
+
+  const syncGuestRooms = (guests) => {
+    const ws = wsRef.current;
+    if (!ws?.encrypted || ws.readyState !== 1 || ws.rotatingChat) return;
+    const room = roomRef.current;
+    const accepted = guests.filter((entry) => entry.status === 'accepted');
+    if (room && accepted.length === room.members.size && accepted.every((entry) =>
+      room.members.get(entry.id) === entry.redeem_count && entry.chat_key_id === room.kid)) return;
+    if (!room && !accepted.length) return;
+    rotateChatRoom(ws, accepted).catch(() => {}); // Retry using the next authoritative roster.
+  };
 
   useEffect(() => {
     const changed = () => setFullscreen(document.fullscreenElement === viewerRef.current);
@@ -1144,7 +1375,25 @@ function RemoteViewer({ deviceId, hostname, os, filesOnly, onClose, guest, theme
     const onMsg = (ev) => {
       if (typeof ev.data === 'string') {
         const m = JSON.parse(ev.data);
-        if (m.t === 'hello') {
+        if (m.t === 'chat_init_ack') {
+          const ws = wsRef.current;
+          const room = roomRef.current;
+          if (ws?.encrypted && !isGuest && room?.kid === m.kid) {
+            RemoteChat.userCert(room, m.user_pub).then((cert) => {
+              if (room === roomRef.current && ws === wsRef.current && ws.readyState === 1) {
+                ws.send(JSON.stringify({ t: 'chat_user_cert', kid: room.kid, cert }));
+              }
+            }).catch(() => {});
+          }
+        }
+        else if (m.t === 'chat_group' && !isGuest && wsRef.current?.encrypted) {
+          const ws = wsRef.current;
+          const room = roomRef.current;
+          if (room?.members.size && m.envelope?.kid === room.kid) {
+            ws.exchangeChat?.(room, m.envelope, 'user').catch(() => {});
+          }
+        }
+        else if (m.t === 'hello') {
           setVer(m.v);
           setHostUser(m.user || '');
           setCad({ available: !!m.cad, reason: m.cad_error || (m.cad ? '' : t('viewer.updateModule')) });
@@ -1167,7 +1416,7 @@ function RemoteViewer({ deviceId, hostname, os, filesOnly, onClose, guest, theme
         // Lines from the person at the machine, and — carried over by the server
         // from the other sessions on this device — from the technician and
         // their guests (internal/api/api_guest_chat.go).
-        else if (m.t === 'chat') { setChat((c) => [...c, { from: m.from, name: m.name, text: m.text }]); if (!openRef.current) setUnread((u) => u + 1); }
+        else if (m.t === 'chat' && (!wsRef.current?.encrypted || (!isGuest && m.from === 'user'))) appendChat({ from: m.from, name: m.name, text: m.text });
         else if (m.t === 'cad') { if (m.ok) { if (isMac) setCad({ available: true, reason: '' }); toast.info(t('viewer.shortcutSent'), `${hostname}: ${shortcutLabel}`); } else toast.error(t('viewer.shortcutFailed'), m.err || t('viewer.shortcutRejected')); }
         else if (m.t === 'paste') { if (m.ok && isMac) setCad({ available: true, reason: '' }); else if (!m.ok) toast.error(t('viewer.pasteFailed'), m.err || t('viewer.pasteRejected')); }
         else if (m.t === 'monitors') setMonitors({ list: m.list || [], selected: m.selected || 0, all: m.all !== false })
@@ -1232,21 +1481,30 @@ function RemoteViewer({ deviceId, hostname, os, filesOnly, onClose, guest, theme
     // down) re-broker and reconnect — the agent re-spawns the SYSTEM sidecar into
     // the now-active session (login screen included).
     let sessionId = null; // this tab's last session, taken back without asking after a drop
+    let stopChatPoll = () => {};
     const connect = async (replace) => {
       setConflict(null);
       setCad({ available: false, reason: t('viewer.waitingModule') });
       setMonitors({ list: [], selected: 0, all: true });
       setVer(null);
       if (stopped) return;
+      setEncrypted(false);
+      setChatRekeying(false);
+      setRoom(null);
       setStatus(retries ? 'reconnecting' : 'connecting');
-      let wsUrl, viewerTicket;
       const g = guestRef.current;
+      let session, ephemeral;
       try {
-        const s = g ? await g.broker() : await api.startRemote(deviceId, filesOnly ? 'files' : 'native', filesOnly ? undefined : { replace: !!replace, resume: sessionId || undefined });
-        wsUrl = api.websocketURL('/ws/remote?session=' + encodeURIComponent(s.id) + '&role=viewer');
-        viewerTicket = s.viewer_ticket;
-        sessionId = s.id;
+        if (globalThis.crypto?.subtle) ephemeral = await RemoteCrypto.keyPair('ECDH');
+        if (stopped) return;
+        const options = { viewer_key: ephemeral?.pub, replace: !!replace, resume: sessionId || undefined };
+        session = g ? await g.broker(ephemeral?.pub) : await api.startRemote(deviceId, filesOnly ? 'files' : 'native', options);
       } catch (e) {
+        if (!stopped && ['remote_e2e_required', 'remote_agent_update_required', 'remote_device_key_issue'].includes(e.code)) {
+          const message = t(e.code === 'remote_agent_update_required' ? 'viewer.encryptionAgentUpdate'
+            : e.code === 'remote_device_key_issue' ? 'viewer.deviceKeyIssue' : 'viewer.encryptionFailed');
+          setStatus('closed'); setNotice(message); toast.error(message); return;
+        }
         // A guest's broker refuses for a reason the guest page explains
         // (the technician left, the invitation ended); retrying here would not.
         // "too_soon" is only the server spacing out reconnects: retry below.
@@ -1257,11 +1515,97 @@ function RemoteViewer({ deviceId, hostname, os, filesOnly, onClose, guest, theme
         return;
       }
       if (stopped) return;
-      const ws = new WebSocket(wsUrl, g ? ['rmm-v1', 'rmm-ticket.' + viewerTicket, 'rmm-guest.' + g.credential] : relayProtocols(viewerTicket));
+      const deviceKey = session.device_public_key;
+      if (!g && !(await checkKey(deviceId, deviceKey))) {
+        if (!stopped) { setStatus('closed'); setNotice(t('viewer.deviceKeyChanged')); toast.error(t('viewer.deviceKeyChanged')); }
+        return;
+      }
+      if (stopped) return;
+      if ((session.e2e && (!ephemeral || !(g ? g.fingerprint : deviceKey))) ||
+          (!session.e2e && (g?.fingerprint || deviceKey))) {
+        setStatus('closed'); setNotice(t('viewer.encryptionFailed')); toast.error(t('viewer.encryptionFailed')); return;
+      }
+      sessionId = session.id;
+      const wsUrl = api.websocketURL('/ws/remote?session=' + encodeURIComponent(session.id) + '&role=viewer');
+      const protocols = g ? ['rmm-v1', 'rmm-ticket.' + session.viewer_ticket, 'rmm-guest.' + g.credential] : relayProtocols(session.viewer_ticket);
+      const raw = new WebSocket(wsUrl, protocols);
+      const ws = session.e2e ? RemoteCrypto.connect(raw, {
+        id: session.id, agentID: g ? session.agent_id : deviceId, kind: filesOnly ? 'files' : 'desktop',
+        guestMode: g ? (g.control ? 'control' : 'view') : '', deviceKey, inviteFP: g?.fingerprint, ephemeral,
+      }) : raw;
       wsRef.current = ws;
-      ws.binaryType = 'arraybuffer';
+      raw.binaryType = 'arraybuffer';
+      let identityRejected = false;
       ws.onopen = () => {
+        if (!g && ws.encrypted && !RemoteCrypto.deviceIdentity(deviceId, ws.identity.deviceKey, true)) {
+          identityRejected = true;
+          setNotice(t('viewer.deviceKeyChanged')); toast.error(t('viewer.deviceKeyChanged')); ws.close(); return;
+        }
         retries = 0; setStatus(filesOnly ? 'connected' : 'streaming'); setNotice(null);
+        setEncrypted(!!ws.encrypted);
+        if (ws.encrypted && !filesOnly && (g || can('devices.remote.share'))) {
+          let exchange = Promise.resolve(), queued = 0, ticks = 0, polling = false;
+          const attached = () => !stopped && ws === wsRef.current && ws.readyState === 1;
+          ws.exchangeChat = (room, envelope, source) => {
+            if (queued >= 32) return Promise.reject(new Error(t('viewer.encryptedChatPending')));
+            queued++;
+            const result = exchange.then(async () => {
+              if (!attached() || roomRef.current !== room) throw new Error(t('viewer.encryptedChatPending'));
+              const packet = typeof envelope === 'function' ? await envelope() : envelope;
+              if (!attached() || roomRef.current !== room) throw new Error(t('viewer.encryptedChatPending'));
+              const input = { session_id: session.id, kid: room.kid, cursor: room.cursor, generation: room.generation, envelope: packet, source };
+              let lines;
+              try {
+                ({ lines } = g ? await api.guest.chat(g.credential, input) : await api.remoteChat(deviceId, input));
+              } catch (err) {
+                if (g && err.code === 'chat_room_changed' && roomRef.current === room) setRoom(null);
+                throw err;
+              }
+              if (!attached() || roomRef.current !== room) return;
+              for (const line of lines) {
+                if (!attached() || roomRef.current !== room) break;
+                room.cursor = Math.max(room.cursor, line.cursor);
+                if (g ? line.share_id === g.requestId : line.from !== 'guest') continue;
+                try {
+                  const message = await RemoteChat.decrypt(room, line.envelope, line);
+                  if (!message || roomRef.current !== room || !attached()) continue;
+                  appendChat(message);
+                  if (!g) ws.send(JSON.stringify({ t: 'chat_guest', share_id: line.share_id, envelope: line.envelope }));
+                } catch (e) {} // Invalid signatures or retired epochs never reach the viewer.
+              }
+            }).finally(() => { queued--; });
+            exchange = result.catch(() => {});
+            return result;
+          };
+          const pollChat = async () => {
+            if (!attached() || polling || queued) return;
+            polling = true;
+            try {
+              if (g && (ticks++ % 2 === 0 || !roomRef.current)) {
+                const state = await api.guest.status(g.credential);
+                if (!attached()) return;
+                if (state.status !== 'accepted' || !state.wrapped_chat_key) {
+                  setRoom(null);
+                  return;
+                }
+                if (roomRef.current?.kid !== state.chat_key_id) {
+                  setRoom(null);
+                  const room = await RemoteChat.unwrap(state, g, ws.identity);
+                  if (!attached()) return;
+                  room.cursor = 0;
+                  setRoom(room);
+                }
+              }
+              const room = roomRef.current;
+              if (room && (g || room.members.size)) await ws.exchangeChat(room);
+            } catch (e) {
+              // A rekey or a network error leaves the next poll to retry.
+            } finally { polling = false; }
+          };
+          const timer = setInterval(pollChat, 1500);
+          stopChatPoll = () => clearInterval(timer);
+          pollChat();
+        }
         setLocked(false); // a fresh sidecar starts unlocked (reconnect after logoff/desktop switch)
         // File-transfer-only sessions never stream the screen, so don't ask for a
         // keyframe; jump straight into the browser. Desktop sessions request a frame.
@@ -1273,7 +1617,14 @@ function RemoteViewer({ deviceId, hostname, os, filesOnly, onClose, guest, theme
       };
       ws.onerror = () => {};
       ws.onclose = (ev) => {
-        if (stopped) return;
+        if (stopped || ws !== wsRef.current) return;
+        if (identityRejected) { setStatus('closed'); return; }
+        stopChatPoll();
+        setEncrypted(false);
+        setRoom(null);
+        if (ev.cryptoFailed) {
+          setStatus('closed'); setNotice(t('viewer.encryptionFailed')); toast.error(t('viewer.encryptionFailed')); return;
+        }
         // A guest's session closed on purpose (internal/remote/guest.go): the
         // guest page says why, and reconnects itself when that makes sense.
         const gc = guestRef.current;
@@ -1373,6 +1724,7 @@ function RemoteViewer({ deviceId, hostname, os, filesOnly, onClose, guest, theme
     connect();
     return () => {
       stopped = true;
+      stopChatPoll();
       releaseHeldKeys();
       if (wsRef.current) wsRef.current.close();
       if (cv) {
@@ -1390,9 +1742,28 @@ function RemoteViewer({ deviceId, hostname, os, filesOnly, onClose, guest, theme
     };
   }, [deviceId, filesOnly, allowFiles, isMac, isGuest, control]);
 
-  // A guest's line goes to the server, which hands it to the technician's
-  // session; the guest's own sidecar never sees it.
-  const sendChat = () => { const text = draft.trim(); if (!text) return; sendJSON(isGuest ? { t: 'chat', text } : { t: 'chat', from: 'tech', text }); chatStickRef.current = true; setChat((c) => [...c, { from: 'self', text }]); setDraft(''); };
+  const sendChat = async () => {
+    const ws = wsRef.current;
+    if (!ws || ws.readyState !== 1 || ws.rotatingChat) return;
+    const text = ws.encrypted ? RemoteChat.cleanText(draft) : draft.trim();
+    if (!text) return;
+    const room = roomRef.current;
+    if (ws.encrypted && isGuest && !room) return;
+    setDraft('');
+    try {
+      // Keep the technician-to-endpoint conversation available during rekey.
+      if (!ws.encrypted || !isGuest) sendJSON(isGuest ? { t: 'chat', text } : { t: 'chat', from: 'tech', text });
+      if (ws.encrypted && room && (isGuest || room.members.size)) {
+        await ws.exchangeChat(room, () => RemoteChat.encrypt(room, text));
+      }
+      chatStickRef.current = true;
+      setChat((c) => [...c, { from: 'self', text }]);
+    } catch (e) {
+      if (isGuest) setDraft((current) => current || text);
+      else setChat((c) => [...c, { from: 'self', text }]);
+      toast.error(t('viewer.encryptedChatPending'));
+    }
+  };
   const chatLabel = (m) => m.from === 'self' ? (isGuest ? t('guest.chatYou') : t('viewer.techYou'))
     : m.from === 'guest' ? t('viewer.chatGuest', { name: m.name || '?' })
     : m.from === 'tech' ? t('guest.chatTech', { tech: guest?.technician || '' })
@@ -1449,15 +1820,19 @@ function RemoteViewer({ deviceId, hostname, os, filesOnly, onClose, guest, theme
     const dest = joinPath(fb.path, file.name);
     const id = nextId();
     sendJSON({ t: 'fput', id, path: dest, size: file.size });
-    const u8 = new Uint8Array(await file.arrayBuffer());
-    const CHUNK = 64 * 1024;
-    for (let off = 0; off < u8.length; off += CHUNK) {
-      const slice = u8.subarray(off, Math.min(off + CHUNK, u8.length));
-      const frame = new Uint8Array(slice.length + 2); frame[0] = CH_FILE; frame[1] = id; frame.set(slice, 2);
-      ws.send(frame);
-    }
-    sendJSON({ t: 'fend', id });
-    toast.success(t('viewer.uploadSent'), dest);
+    try {
+      const CHUNK = 64 * 1024;
+      for (let off = 0; off < file.size; off += CHUNK) {
+        const slice = new Uint8Array(await file.slice(off, off + CHUNK).arrayBuffer());
+        if (ws !== wsRef.current || ws.readyState !== 1) return;
+        const frame = new Uint8Array(slice.length + 2); frame[0] = CH_FILE; frame[1] = id; frame.set(slice, 2);
+        ws.send(frame);
+        if (ws.encrypted) await ws.flush();
+      }
+      if (ws !== wsRef.current || ws.readyState !== 1) return;
+      sendJSON({ t: 'fend', id });
+      toast.success(t('viewer.uploadSent'), dest);
+    } catch (e) { toast.error(t('viewer.uploadFailed'), dest); }
   };
 
   const statusCls = status === 'streaming' ? 'bg-oksoft text-ok' : status === 'error' || status === 'closed' ? 'bg-badsoft text-bad' : 'bg-warnsoft text-warn';
@@ -1473,6 +1848,7 @@ function RemoteViewer({ deviceId, hostname, os, filesOnly, onClose, guest, theme
         <Icon name={filesOnly ? 'devices' : 'remote'} size={15} className="text-muted" />
         <span className="text-[13px] font-semibold text-ink whitespace-nowrap">{filesOnly ? t('viewer.fileTransferOn', { host: hostname }) : hostname}</span>
         <span className={cx('text-[11px] px-2 py-0.5 rounded-md', statusCls)}>{tEnum('viewer.status', status)}</span>
+        {encrypted && <RemoteEncryptionStatus />}
         {ver && !isGuest && <span className="text-[10px] text-faint">{t('viewer.sidecar', { version: ver })}</span>}
         <div className="ml-auto flex items-center gap-1 sm:gap-2 whitespace-nowrap">
           <input ref={fileInputRef} type="file" className="hidden" onChange={(e) => { uploadFile(e.target.files[0]); e.target.value = ''; }} />
@@ -1576,7 +1952,7 @@ function RemoteViewer({ deviceId, hostname, os, filesOnly, onClose, guest, theme
               emits nothing for an opacity modifier on one (bg-panel/95), which
               left these see-through over the black viewer. */}
           <div className="absolute top-3 left-1/2 -translate-x-1/2 z-[2] w-[min(92%,640px)] flex flex-col items-center gap-2 pointer-events-none">
-            {!isGuest && can('devices.remote.share') && <GuestRequests deviceId={deviceId} />}
+            {!isGuest && status === 'streaming' && can('devices.remote.share') && <GuestRequests deviceId={deviceId} accept={acceptGuest} sync={syncGuestRooms} />}
             {notice && (
               <div className="pointer-events-auto max-w-full rounded-lg border border-warn bg-card px-3.5 py-2 text-[12px] text-ink flex items-start gap-2 shadow-lg">
                 <Icon name="info" size={14} className="text-warn shrink-0 mt-0.5" />
@@ -1597,8 +1973,8 @@ function RemoteViewer({ deviceId, hostname, os, filesOnly, onClose, guest, theme
             ))}
           </div>
           <div className="p-2 border-t border-line flex gap-1.5">
-            <Input value={draft} onChange={(e) => setDraft(e.target.value)} onKeyDown={(e) => { if (e.key === 'Enter') sendChat(); }} placeholder={t('viewer.message')} maxLength={isGuest ? 1000 : undefined} className="text-[12px]" />
-            <Button variant="primary" size="sm" icon="send" onClick={sendChat} disabled={!draft.trim()} />
+            <Input value={draft} disabled={chatRekeying || (isGuest && encrypted && !chatKid)} onChange={(e) => setDraft(e.target.value)} onKeyDown={(e) => { if (e.key === 'Enter') sendChat(); }} placeholder={t('viewer.message')} maxLength={isGuest ? 1000 : undefined} className="text-[12px]" />
+            <Button variant="primary" size="sm" icon="send" onClick={sendChat} disabled={!draft.trim() || chatRekeying || (isGuest && encrypted && !chatKid)} />
           </div>
         </div>}
         </>)}
@@ -1609,6 +1985,7 @@ function RemoteViewer({ deviceId, hostname, os, filesOnly, onClose, guest, theme
         validate={(v) => ((v.name || '').trim() ? '' : t('ui.valueRequired'))} submitLabel={t('action.save')} onSubmit={submitFbAsk} />
       <ConfirmDialog open={fbConfirmDel} onClose={() => setFbConfirmDel(false)} onConfirm={confirmFbDelete} danger
         title={t('viewer.deletePrompt', { items: tn('viewer.items', fbSel.length), host: hostname })} body="" confirmLabel={t('action.delete')} />
+      {keyChangePrompt}
     </div>
   );
 }
@@ -1681,12 +2058,19 @@ function adoptDynamicStyles() {
 // raw bytes with the agent — keystrokes out (binary), shell output in (binary),
 // plus JSON control ({t:'resize'} out; {t:'hello'|'exit'|'error'} in). Pairs with
 // cmd/agent/terminal.go.
+function RemoteEncryptionStatus() {
+  const label = t('viewer.encrypted');
+  return <span className="text-muted" title={label} role="img" aria-label={label}><Icon name="lock" size={13} /></span>;
+}
+
 function TerminalViewer({ deviceId, hostname, onClose }) {
   const toast = useToast();
+  const [checkKey, keyChangePrompt] = useDeviceKeyChange();
   const elRef = useRef(null);
   const wsRef = useRef(null);
   const fitRef = useRef(null);
   const [status, setStatus] = useState('connecting');
+  const [encrypted, setEncrypted] = useState(false);
   const [info, setInfo] = useState(null); // { shell, user, elevated, os }
 
   useEffect(() => {
@@ -1713,17 +2097,43 @@ function TerminalViewer({ deviceId, hostname, onClose }) {
     let stopped = false;
     const connect = async () => {
       setStatus('connecting');
-      let wsUrl, viewerTicket;
+      let session, ephemeral;
       try {
-        const s = await api.startRemote(deviceId, 'terminal');
-        wsUrl = api.websocketURL('/ws/remote?session=' + encodeURIComponent(s.id) + '&role=viewer');
-        viewerTicket = s.viewer_ticket;
-      } catch (e) { setStatus('closed'); toast.error(t('term.failed'), e.message); return; }
+        if (globalThis.crypto?.subtle) ephemeral = await RemoteCrypto.keyPair('ECDH');
+        if (stopped) return;
+        session = await api.startRemote(deviceId, 'terminal', { viewer_key: ephemeral?.pub });
+      } catch (e) {
+        if (!stopped) {
+          setStatus('closed');
+          const message = e.code === 'remote_agent_update_required' ? t('viewer.encryptionAgentUpdate')
+            : e.code === 'remote_device_key_issue' ? t('viewer.deviceKeyIssue')
+              : e.code === 'remote_e2e_required' ? t('viewer.encryptionFailed') : e.message;
+          toast.error(t('term.failed'), message);
+        }
+        return;
+      }
       if (stopped) return;
-      const ws = new WebSocket(wsUrl, relayProtocols(viewerTicket));
+      if (!(await checkKey(deviceId, session.device_public_key))) {
+        if (!stopped) { setStatus('closed'); toast.error(t('viewer.deviceKeyChanged')); }
+        return;
+      }
+      if (stopped) return;
+      if ((session.e2e && (!ephemeral || !session.device_public_key)) || (!session.e2e && session.device_public_key)) {
+        setStatus('closed'); toast.error(t('viewer.encryptionFailed')); return;
+      }
+      const wsUrl = api.websocketURL('/ws/remote?session=' + encodeURIComponent(session.id) + '&role=viewer');
+      const raw = new WebSocket(wsUrl, relayProtocols(session.viewer_ticket));
+      const ws = session.e2e ? RemoteCrypto.connect(raw, {
+        id: session.id, agentID: deviceId, kind: 'terminal', guestMode: '', deviceKey: session.device_public_key, ephemeral,
+      }) : raw;
       wsRef.current = ws;
-      ws.binaryType = 'arraybuffer';
-      ws.onopen = () => { setStatus('connected'); doFit(); sendResize(); term.focus(); };
+      raw.binaryType = 'arraybuffer';
+      ws.onopen = () => {
+        if (ws.encrypted && !RemoteCrypto.deviceIdentity(deviceId, ws.identity.deviceKey, true)) {
+          toast.error(t('viewer.deviceKeyChanged')); ws.close(); return;
+        }
+        setEncrypted(!!ws.encrypted); setStatus('connected'); doFit(); sendResize(); term.focus();
+      };
       ws.onmessage = (ev) => {
         if (typeof ev.data === 'string') {
           try {
@@ -1736,7 +2146,11 @@ function TerminalViewer({ deviceId, hostname, onClose }) {
         }
         term.write(new Uint8Array(ev.data));
       };
-      ws.onclose = () => { if (!stopped) setStatus('closed'); };
+      ws.onclose = (event) => {
+        if (stopped) return;
+        setEncrypted(false); setStatus('closed');
+        if (event.cryptoFailed) toast.error(t('viewer.encryptionFailed'));
+      };
       ws.onerror = () => {};
     };
 
@@ -1758,6 +2172,7 @@ function TerminalViewer({ deviceId, hostname, onClose }) {
         <Icon name="terminal" size={15} className="text-muted" />
         <span className="text-[13px] font-semibold text-ink">{hostname}</span>
         <span className={cx('text-[11px] px-2 py-0.5 rounded-md', statusCls)}>{tEnum('viewer.status', status)}</span>
+        {encrypted && <RemoteEncryptionStatus />}
         {info && (
           <span className="text-[10.5px] text-faint flex items-center gap-2">
             <span className="mono">{info.shell}</span>
@@ -1771,6 +2186,7 @@ function TerminalViewer({ deviceId, hostname, onClose }) {
         </div>
       </div>
       <div ref={elRef} className="flex-1 overflow-hidden p-2" />
+      {keyChangePrompt}
     </div>
   );
 }

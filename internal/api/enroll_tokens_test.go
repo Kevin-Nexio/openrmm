@@ -86,7 +86,7 @@ func TestEnrollTokensForMassDeployment(t *testing.T) {
 	}
 	var lastAgent string
 	enrol := func(token, host string) error {
-		id, _, _, err := s.registerAgent(ctx, &protocol.RegisterReq{EnrollToken: token, Hostname: host, OS: "linux", Arch: "amd64", Version: "0.10.0"})
+		id, _, _, err := s.registerAgent(ctx, &protocol.RegisterReq{EnrollToken: token, Hostname: host, OS: "linux", Arch: "amd64", Version: "0.10.0"}, "")
 		lastAgent = id
 		return err
 	}

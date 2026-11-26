@@ -128,10 +128,12 @@ the caller's authority.
 | PUT | `/api/devices/{id}/role` | `devices.manage`, unrestricted | `{role}`: `workstation`, `server`, or `""` to follow detection. Devices report `os_role` (detected), `role_override` and `role` (in effect). Audited as `device.role` |
 | GET | `/api/remote/presence?agent_id=` | `devices.view` | Live remote attachments (who is connected to which device, with `user_name`), for the fleet or one device; scope-filtered. Informational: sessions are never refused because someone else is connected |
 | POST | `/api/devices/{id}/revoke` | `devices.delete` | Revoke device identity, close live control/relay connections, and require fresh enrollment |
+| POST | `/api/devices/{id}/device-key/approve` | `devices.delete`, unrestricted | Pin the device's pending E2E identity key after comparing its fingerprint on the device: `{pending_device_public_key, reason}`. **409** (`device_key_not_pending`) if the presented key changed; audited as `device.e2e_key_approved` |
+| POST | `/api/devices/{id}/device-key/dismiss` | `devices.delete`, unrestricted | Clear an active device key warning and keep the pinned key: `{reason}`. **409** (`device_key_no_issue`) when no issue is active; audited as `device.e2e_key_issue_dismissed` |
 | POST | `/api/devices/{id}/rotate-credential` | `devices.delete` | Rotate an online trusted device's credential over its authenticated control channel |
 | POST | `/api/devices/{id}/cancel-credential-rotation` | `devices.delete` | Request cancellation of a staged replacement; completes only after the live agent confirms restoration |
 
-`POST /devices/{id}/remote` body: `{ "provider": "native" }` — remote desktop
+`POST /devices/{id}/remote` body: `{ "provider": "native", "viewer_key": "…" }` — remote desktop
 requires `devices.remote`; in-band file transfer inside the native viewer is
 disabled unless the caller also has `devices.files`. Also supports `files`
 (file transfer only, no screen capture; requires `devices.files`), `terminal`
@@ -139,7 +141,14 @@ disabled unless the caller also has `devices.files`. Also supports `files`
 (optional, off by default; reads the device's RustDesk id on demand and returns a
 `rustdesk://<id>` deep link — see [08-remote-access](08-remote-access.md)); omitted
  → `RMM_REMOTE_PROVIDER`. Native/files/terminal returns a one-time
-`viewer_ticket` plus session id; external providers return their `connect_url`.
+`viewer_ticket`, session id, `e2e` flag and (when encrypted) the device's pinned
+`device_public_key`; external providers return their `connect_url`. Once a device
+pins its identity key, `viewer_key` (ephemeral P-256 public key) is required
+(**400** `remote_e2e_required` without it). Under `e2e_policy: "required"`, an
+older unpinned agent is refused with **409** `remote_agent_update_required`. A
+device whose key is under review is refused with **409** `remote_device_key_issue`
+(also on `POST /api/devices/{id}/remote-shares`) — see
+[08-remote-access](08-remote-access.md#end-to-end-encryption-for-native-sessions).
 Only one credential rotation may be pending for a device. After the agent
 durably stores a replacement credential it acknowledges and reconnects with it;
 the reconnect commits the replacement. Rotation and cancellation require agent
@@ -357,6 +366,7 @@ Present only when SSO is configured (`RMM_OIDC_*`); see
   },
   "remote": {
     "default": "native",
+    "e2e_policy": "preferred",
     "meshcentral_url": "https://mesh.example.com",
     "meshcentral_user": "admin",
     "meshcentral_token_key": "hex-login-token-key",
@@ -376,6 +386,12 @@ Present only when SSO is configured (`RMM_OIDC_*`); see
 RustDesk is enabled: a save that would leave it the default with
 `rustdesk_enabled` off (choosing it while turning RustDesk off, or turning
 RustDesk off while it is the default) is refused with **400** and writes nothing.
+
+`remote.e2e_policy` accepts `preferred` (default) or `required`; `RMM_REMOTE_E2E_POLICY`
+only sets the starting value and a saved setting wins. `preferred` allows legacy
+unencrypted relay sessions only on older agents that have not pinned a device
+key; `required` refuses native sessions on those agents until they update. Once
+a device pins its key, E2E is required regardless of policy.
 
 `remote.meshcentral_match_hostname` opens a device with no linked MeshCentral
 node by its hostname (MeshCentral's `gotodevicername`). It is off by default;

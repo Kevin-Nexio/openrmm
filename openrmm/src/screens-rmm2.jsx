@@ -2697,6 +2697,7 @@ function RemoteProviderSettings({ form, onChange, remote, canManage }) {
       {tabs.map((item) => <div key={item.key} role="tabpanel" id={'remote-config-panel-' + item.key} aria-labelledby={'remote-config-tab-' + item.key} hidden={tab !== item.key} tabIndex={0} className="space-y-3">
         {item.key === 'native' && <>
           <p className="text-[12px] text-muted">{t('cfg.nativeHint')}</p>
+          <Field label={t('cfg.remoteEncryption')}><Select value={form.e2e_policy} disabled={!canManage} onChange={(e) => onChange('e2e_policy', e.target.value)}><option value="preferred">{t('cfg.remoteEncryptionPreferred')}</option><option value="required">{t('cfg.remoteEncryptionRequired')}</option></Select></Field>
           <Field label={t('cfg.guestAccess')} hint={t('cfg.guestAccessHint')}><Select value={form.guest_access ? 'on' : 'off'} disabled={!canManage} onChange={(e) => onChange('guest_access', e.target.value === 'on')}><option value="off">{t('cfg.disabled')}</option><option value="on">{t('cfg.enabled')}</option></Select></Field>
         </>}
         {item.key === 'meshcentral' && <div className="grid sm:grid-cols-2 gap-4">
@@ -2744,6 +2745,7 @@ function ConfigPanel() {
       meshcentral_shared_account: c.remote.meshcentral_shared_account !== false,
       rustdesk_enabled: !!c.remote.rustdesk_enabled,
       guest_access: !!c.remote.guest_access,
+      e2e_policy: c.remote.e2e_policy || 'preferred',
       autonomy_paused: !!c.ai.autonomy_paused,
       // An older server sends only server.allow_unapproved_jobs.
       allow_unapproved: !!(c.jobs ? c.jobs.allow_unapproved : c.server?.allow_unapproved_jobs),
@@ -2756,7 +2758,7 @@ function ConfigPanel() {
     try {
       await api.updateConfig({
         ai: { provider: form.ai_provider, base_url: form.ai_base_url, model: form.ai_model, api_key: form.ai_api_key, autonomy_paused: form.autonomy_paused },
-        remote: { default: form.remote_default, meshcentral_url: form.meshcentral_url, meshcentral_user: form.meshcentral_user, meshcentral_token_key: form.meshcentral_token_key, meshcentral_enabled: form.meshcentral_enabled, meshcentral_match_hostname: form.meshcentral_match_hostname, meshcentral_shared_account: form.meshcentral_shared_account, rustdesk_enabled: form.rustdesk_enabled, guest_access: form.guest_access },
+        remote: { default: form.remote_default, meshcentral_url: form.meshcentral_url, meshcentral_user: form.meshcentral_user, meshcentral_token_key: form.meshcentral_token_key, meshcentral_enabled: form.meshcentral_enabled, meshcentral_match_hostname: form.meshcentral_match_hostname, meshcentral_shared_account: form.meshcentral_shared_account, rustdesk_enabled: form.rustdesk_enabled, guest_access: form.guest_access, e2e_policy: form.e2e_policy },
         jobs: { allow_unapproved: form.allow_unapproved },
       });
       set('ai_api_key', ''); set('meshcentral_token_key', '');

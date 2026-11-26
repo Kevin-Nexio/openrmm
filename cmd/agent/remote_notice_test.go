@@ -1,6 +1,7 @@
 package main
 
 import (
+	"bytes"
 	"encoding/json"
 	"net/http"
 	"net/http/httptest"
@@ -10,6 +11,7 @@ import (
 
 	"github.com/gorilla/websocket"
 
+	"github.com/p1ngu/rmm/internal/e2e"
 	"github.com/p1ngu/rmm/internal/protocol"
 )
 
@@ -78,5 +80,77 @@ func TestReportRemoteFailureToleratesAnUnreachableRelay(t *testing.T) {
 	case <-done:
 	case <-time.After(15 * time.Second):
 		t.Fatal("reporting blocked the agent")
+	}
+}
+
+func TestReportRemoteFailureE2EReachesTheViewer(t *testing.T) {
+	ikPriv, ikPub, err := e2e.GenerateKeyPair()
+	if err != nil {
+		t.Fatal(err)
+	}
+	viewPriv, viewPub, err := e2e.GenerateKeyPair()
+	if err != nil {
+		t.Fatal(err)
+	}
+	type result struct {
+		body []byte
+		err  error
+	}
+	got := make(chan result, 1)
+	upgrader := websocket.Upgrader{CheckOrigin: func(*http.Request) bool { return true }}
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		raw, err := upgrader.Upgrade(w, r, nil)
+		if err != nil {
+			got <- result{err: err}
+			return
+		}
+		defer raw.Close()
+		conn, err := e2e.HandshakeViewer(raw, e2e.ViewerHandshakeOpts{
+			SessionID:       "sess-e2e-notice",
+			EKPriv:          viewPriv,
+			ExpectedAgentID: "agent-e2e-1",
+			ExpectedKind:    protocol.RemoteKindDesktop,
+			ExpectedIKPub:   ikPub,
+		})
+		if err != nil {
+			got <- result{err: err}
+			return
+		}
+		_, body, err := conn.ReadMessage()
+		got <- result{body: body, err: err}
+	}))
+	defer server.Close()
+
+	a := &agent{
+		wsURL: "ws" + strings.TrimPrefix(server.URL, "http") + "/ws/agent",
+		st: state{
+			AgentID:          "agent-e2e-1",
+			DevicePrivateKey: ikPriv,
+			DevicePublicKey:  ikPub,
+		},
+	}
+	const wantText = "this endpoint's remote module predates end-to-end encryption"
+	a.reportRemoteFailure(protocol.RemoteStartMsg{
+		SessionID:   "sess-e2e-notice",
+		AgentTicket: "ticket-e2e",
+		Kind:        protocol.RemoteKindDesktop,
+		E2E:         true,
+		ViewerKey:   viewPub,
+	}, wantText)
+
+	select {
+	case res := <-got:
+		if res.err != nil {
+			t.Fatalf("viewer did not receive E2E notice: %v", res.err)
+		}
+		var notice struct{ T, Text string }
+		if err := json.Unmarshal(res.body, &notice); err != nil {
+			t.Fatalf("E2E notice is not JSON: %v", err)
+		}
+		if notice.T != "notice" || !bytes.Contains([]byte(notice.Text), []byte(wantText)) {
+			t.Fatalf("unexpected E2E notice = %+v", notice)
+		}
+	case <-time.After(5 * time.Second):
+		t.Fatal("timed out waiting for E2E failure notice")
 	}
 }

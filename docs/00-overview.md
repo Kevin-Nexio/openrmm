@@ -43,8 +43,10 @@ As of v0.12.3, verified end-to-end against PostgreSQL:
   seat-following for the login screen) and **macOS** (CGO
   capture and input in a signed `.app` bundle; asks for Screen Recording and
   Accessibility one at a time). **File transfer**, in-session **chat** and the
-  **clipboard in both directions** work on all three, and the operator can pick
-  which display to stream. A session can **lock the host's physical
+  **clipboard in both directions** work on all three, and native desktop,
+  terminal, file transfer and guest chat sessions use **end-to-end
+  encryption** once the agent registers its device identity key. The operator
+  can pick which display to stream. A session can **lock the host's physical
   keyboard/mouse** (Windows LL hooks / Linux evdev grab) so the local user can't
   interfere while the technician works. Each operator gets one desktop session
   per device, and everyone opening a device sees who else is connected.
@@ -103,9 +105,9 @@ As of v0.12.3, verified end-to-end against PostgreSQL:
 
 ## What is intentionally NOT built yet
 
-- **Hardware-accelerated codecs / E2E-encrypted media** — the native engine uses a
+- **Hardware-accelerated codecs** — the native engine uses a
   tile-delta JPEG codec today (homegrown, **no third-party fork**); hardware
-  codecs (VP8/9/AV1) and media end-to-end encryption are future work. The
+  codecs (VP8/9/AV1) are future work. The
   **macOS** engine does not reach the login window, and **Linux
   requires an Xorg session** (Wayland blocks screen capture — see
   [08-remote-access](08-remote-access.md)).

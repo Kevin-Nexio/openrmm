@@ -7,7 +7,8 @@ import (
 	"github.com/p1ngu/rmm/internal/models"
 )
 
-// One conversation across a technician's session and their guests'.
+// Legacy chat across a technician's session and their guests'. Encrypted
+// group chat is handled by the authenticated API in api_remote_chat.go.
 //
 // A guest's desktop session is a session of its own, and every session's
 // sidecar opens its own chat window on the endpoint (sidecars before 0.18 do,
@@ -69,7 +70,7 @@ func (s *Server) queueChat(agentID, sessionID, role, text string) {
 // carryChat delivers one line to the sessions that share its conversation.
 func (s *Server) carryChat(line chatLine) {
 	viewer, ok := s.presence.Session(line.agentID, line.sessionID)
-	if !ok || viewer.Kind != "native" {
+	if !ok || viewer.Kind != "native" || viewer.E2E {
 		return
 	}
 	if shareID, isGuest := models.GuestShareID(viewer.User); isGuest {
@@ -112,6 +113,9 @@ func (s *Server) carryGuestChat(line chatLine, shareID string) {
 		// side as the technician's, so for it the name goes in the line itself.
 		legacy := chatFrame("tech", "", gs.name+" (guest): "+text)
 		for _, tech := range s.presence.ForUser(gs.agentID, gs.sponsor, "native") {
+			if tech.E2E {
+				continue
+			}
 			toEndpoint := legacy
 			if s.relay.GuestChat(tech.SessionID) {
 				toEndpoint = toViewers
@@ -122,7 +126,9 @@ func (s *Server) carryGuestChat(line chatLine, shareID string) {
 		toViewers = chatFrame("user", "", text)
 	}
 	for _, tech := range s.presence.ForUser(gs.agentID, gs.sponsor, "native") {
-		_ = s.relay.Send(tech.SessionID, "viewer", toViewers)
+		if !tech.E2E {
+			_ = s.relay.Send(tech.SessionID, "viewer", toViewers)
+		}
 	}
 	for _, id := range s.guests.sponsoredBy(gs.agentID, gs.sponsor) {
 		if id != shareID {
@@ -132,7 +138,7 @@ func (s *Server) carryGuestChat(line chatLine, shareID string) {
 }
 
 func (s *Server) sendToGuest(shareID string, frame []byte) {
-	if gs := s.guests.session(shareID); gs != nil {
+	if gs := s.guests.session(shareID); gs != nil && !gs.e2e {
 		_ = s.relay.Send(gs.sessionID, "viewer", frame)
 	}
 }

@@ -8,6 +8,8 @@ import (
 	"testing"
 	"unsafe"
 
+	"github.com/p1ngu/rmm/internal/e2e"
+	"github.com/p1ngu/rmm/internal/protocol"
 	"golang.org/x/sys/windows"
 )
 
@@ -39,6 +41,38 @@ func TestRestrictAgentDirRemovesInheritedUserAccess(t *testing.T) {
 		if !grants(t, path, windows.WinLocalSystemSid) {
 			t.Fatalf("%s lost SYSTEM access", path)
 		}
+	}
+}
+
+func TestEncryptedSessionParametersIgnoreOldStagingACL(t *testing.T) {
+	root := t.TempDir()
+	old := filepath.Join(root, "remote-sessions")
+	if err := os.Mkdir(old, 0o700); err != nil {
+		t.Fatal(err)
+	}
+	if err := setSDDL(old, "D:P(A;OICI;FA;;;SY)(A;OICI;FA;;;BA)(A;OICI;FA;;;OW)(A;OICI;0x1200a9;;;BU)"); err != nil {
+		t.Fatal(err)
+	}
+	t.Cleanup(func() { _ = setSDDL(root, "D:P(A;OICI;FA;;;SY)(A;OICI;FA;;;BA)(A;OICI;FA;;;OW)") })
+	if err := restrictAgentDir(root); err != nil {
+		t.Fatal(err)
+	}
+	_, viewerKey, err := e2e.GenerateKeyPair()
+	if err != nil {
+		t.Fatal(err)
+	}
+	a := &agent{statePath: filepath.Join(root, "state.json"), st: state{AgentID: "test-agent"}}
+	path, err := a.writeE2ESessionFile(protocol.RemoteStartMsg{
+		SessionID: "test-session", Kind: protocol.RemoteKindDesktop, ViewerKey: viewerKey,
+	}, "wss://relay.example.invalid/ws/remote", "", false)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if filepath.Dir(path) == old || grants(t, path, windows.WinBuiltinUsersSid) {
+		t.Fatal("session parameters reused a staging directory with insecure access")
+	}
+	if !grants(t, path, windows.WinLocalSystemSid) {
+		t.Fatal("session parameters are inaccessible to the system service")
 	}
 }
 

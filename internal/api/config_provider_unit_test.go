@@ -33,4 +33,13 @@ func TestDefaultRemoteProviderRejectedBeforePersistence(t *testing.T) {
 			t.Fatalf("default %q = %d %s", provider, rec.Code, rec.Body.String())
 		}
 	}
+	for _, policy := range []string{"off", "strict", "REQUIRED", "preferred "} {
+		req := httptest.NewRequest(http.MethodPut, "/api/config", strings.NewReader(`{"remote":{"default":"native","e2e_policy":"`+policy+`"}}`))
+		req.Header.Set("Content-Type", "application/json")
+		rec := httptest.NewRecorder()
+		s.updateConfig(rec, req)
+		if rec.Code != http.StatusBadRequest || !strings.Contains(rec.Body.String(), "invalid remote E2E policy") {
+			t.Fatalf("e2e_policy %q = %d %s", policy, rec.Code, rec.Body.String())
+		}
+	}
 }

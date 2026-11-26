@@ -4,6 +4,7 @@ import (
 	"encoding/json"
 	"errors"
 	"log"
+	"strings"
 	"sync"
 	"sync/atomic"
 	"time"
@@ -221,6 +222,13 @@ func (r *Relay) join(sessionID, agentID, role string, conn *websocket.Conn, gues
 			allow = p.guest.FromAgent
 		}
 	}
+	if p.guest != nil && p.guest.E2E {
+		// Encrypted guest sessions exchange group chat over the authenticated
+		// HTTP channel; never parse cleartext chat/hello or enqueue into the
+		// legacy ChatHook worker.
+		onChat = nil
+		onHello = nil
+	}
 	p.mu.Unlock()
 	err = copyFrames(conn, dst, dstW, allow, onChat, onHello)
 	if err != nil {
@@ -431,8 +439,12 @@ func chatText(data []byte) (string, bool) {
 		T    string `json:"t"`
 		Text string `json:"text"`
 	}
-	if json.Unmarshal(data, &e) != nil || e.T != "chat" || e.Text == "" {
+	if json.Unmarshal(data, &e) != nil || e.T != "chat" {
 		return "", false
 	}
-	return e.Text, true
+	text := strings.TrimLeft(e.Text, "\x00")
+	if text == "" {
+		return "", false
+	}
+	return text, true
 }

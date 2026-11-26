@@ -175,7 +175,41 @@ type Agent struct {
 	// LastBootAt is when the device last booted: when the server stored its
 	// latest inventory minus the uptime reported in it. Nil until then.
 	LastBootAt *time.Time `json:"last_boot_at,omitempty"`
+	// DevicePublicKey is the device's pinned ECDSA P-256 identity key for E2E
+	// remote sessions (empty only on pre-0.13 agents before upgrade).
+	DevicePublicKey string `json:"device_public_key,omitempty"`
+	// DeviceKeyIssue is set while the device presents a different identity key
+	// than the pinned one, or none: native remote sessions pause until an
+	// administrator reviews it. One of the DeviceKey* constants, or empty.
+	DeviceKeyIssue string `json:"device_key_issue,omitempty"`
+	// PendingDevicePublicKey is the last key presented that differs from the
+	// pinned one; an administrator may approve exactly this key.
+	PendingDevicePublicKey string     `json:"pending_device_public_key,omitempty"`
+	DeviceKeyIssueSince    *time.Time `json:"device_key_issue_since,omitempty"`
+	DeviceKeyIssueSeenAt   *time.Time `json:"device_key_issue_seen_at,omitempty"`
+	DeviceKeyIssueIP       string     `json:"device_key_issue_ip,omitempty"`
+	DeviceKeyIssueVersion  string     `json:"device_key_issue_version,omitempty"`
+	DeviceKeyIssueCount    int        `json:"device_key_issue_count,omitempty"`
+	// DeviceKeyChangedAt/By record the last approved key change, so a browser
+	// that remembered the previous key can show who approved the new one.
+	DeviceKeyChangedAt *time.Time `json:"device_key_changed_at,omitempty"`
+	DeviceKeyChangedBy string     `json:"device_key_changed_by,omitempty"`
 }
+
+// Device identity key issues (Agent.DeviceKeyIssue).
+const (
+	// DeviceKeyChanged: the device presented a different key than the pinned one.
+	DeviceKeyChanged = "changed"
+	// DeviceKeyMissing: an agent that supports encryption could not read its key.
+	DeviceKeyMissing = "missing"
+	// DeviceKeyOutdated: an agent without encryption support runs on a device
+	// whose key is pinned (an older agent installed over a newer one, or a
+	// restored snapshot).
+	DeviceKeyOutdated = "outdated"
+	// DeviceKeyDuplicate: more than one machine uses this device identity (a
+	// cloned disk image, for instance).
+	DeviceKeyDuplicate = "duplicate"
+)
 
 // Job is a unit of work targeted at an agent (currently: run a script).
 type Job struct {
@@ -268,6 +302,10 @@ type RemoteSession struct {
 	AgentTicket  string `json:"-"`
 	Token        string `json:"-"` // retained for external-provider internals
 	ConnectURL   string `json:"connect_url"`
+	// E2E reports whether the relayed session uses end-to-end encryption;
+	// DevicePublicKey carries the agent's pinned P-256 key when brokered.
+	E2E             bool   `json:"e2e"`
+	DevicePublicKey string `json:"device_public_key,omitempty"`
 	// MatchedBy says how an external provider finds the device: "node" (a
 	// linked id) or "hostname" (a name another computer could share). It is
 	// recorded in the remote.start audit entry and not stored with the session.

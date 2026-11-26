@@ -33,6 +33,10 @@ const (
 	// NotifyAIReleaseRevoked: a script released for the AI failed enough times
 	// in a row that its release was withdrawn (docs/23-ai-autonomy.md).
 	NotifyAIReleaseRevoked = "ai_release_revoked"
+	// NotifyDeviceKeyIssue: a device presented another encryption identity key
+	// than the pinned one, none, or is used by more than one machine; its native
+	// remote sessions pause until an administrator reviews it.
+	NotifyDeviceKeyIssue = "device_key_issue"
 )
 
 // NotificationEventTypes is the full set, in the order the preferences screen
@@ -40,7 +44,7 @@ const (
 // not become a subscription row nobody will ever match.
 var NotificationEventTypes = []string{
 	NotifyCheckFailed, NotifyCheckRecovered, NotifyAgentOffline, NotifyAgentRecovered, NotifyJobFailed,
-	NotifyAIReleaseRevoked,
+	NotifyAIReleaseRevoked, NotifyDeviceKeyIssue,
 }
 
 // ValidNotificationEvent reports whether an event type is one we deliver.
@@ -60,6 +64,8 @@ var defaultSubscribed = map[string]bool{
 	NotifyJobFailed:      false,
 	// Rare, and it changes what the AI may do: on unless someone opts out.
 	NotifyAIReleaseRevoked: true,
+	// Rare, and it pauses remote access to a device: on unless someone opts out.
+	NotifyDeviceKeyIssue: true,
 }
 
 // DefaultSubscribed reports the out-of-the-box preference for an event type.

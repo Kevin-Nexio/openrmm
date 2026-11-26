@@ -354,9 +354,82 @@ endpoint ↔ your **hbbs/hbbr** (self-hosted or a plan) ↔ the technician's vie
   full-motion video. The Linux engine assumes a TrueColor little-endian X server
   and captures the active screen; **login-screen capture requires an Xorg greeter**
   (set GDM `WaylandEnable=false`, or use LightDM) — a Wayland greeter only exposes
-  Xwayland, which can't capture native Wayland surfaces. End-to-end media
-  encryption is still open (today the relay is the trust boundary; terminate
-  WSS — see `07`).
+  Xwayland, which can't capture native Wayland surfaces.
+
+### End-to-end encryption for native sessions
+
+The native desktop, interactive terminal and file transfer support encryption
+between the browser and the endpoint. A lock appears next to the connection
+status after the browser verifies the device key and both peers confirm the
+session keys. The browser remembers verified device keys for later sessions.
+The browser requires a secure context with Web Crypto.
+
+In **Settings ▸ Remote access ▸ Native**, **Prefer encryption** permits legacy
+sessions on agents that have yet to register an encryption key. **Require
+encryption** blocks new native sessions on those agents. After an agent registers
+its key, subsequent native sessions require encryption even in preferred mode.
+
+OpenRMM's application origin and authenticated control channel authorize the
+session and distribute public keys. The relay forwards encrypted data and can
+still observe session timing, frequency and frame sizes. Encrypted invitations
+also carry the device fingerprint in the link fragment, which the guest's
+browser checks against the endpoint. Reissue links created before the device
+registered an encryption key. Guest chat uses a separate key and preserves the
+existing view and control restrictions. Group messages pass through the
+authenticated application API as ciphertext. The room key rotates when the
+approved membership changes, and sending pauses while the new key is installed.
+
+#### When a device's key changes
+
+The server pins each device's key the first time it sees it. A device that later
+presents another key, or none, stays online: its jobs, monitoring and updates go
+on. Only its native desktop, terminal, file transfer and new guest invitations
+pause, and the device page says why. Sessions never fall back to the unencrypted
+relay meanwhile. The server records the change in the audit log
+(`device.e2e_key_issue`, and `device.e2e_key_restored` when a missing or
+outdated key recovers on its own) and alerts the people who can see the device
+(**Device encryption key needs review**, on unless they turn it off).
+
+| Device page says | Usual cause | What to do |
+|---|---|---|
+| **Presented a different key** | The agent's state file was restored or replaced. Someone holding the device's credentials looks the same. | Compare the fingerprint on the device, then approve the presented key, or keep the pinned one. |
+| **Could not read its key** | The key in the state file is damaged. The agent never makes up a new one. | Restore the state file from a backup, or enroll the device again. |
+| **Agent without encryption support** | An older agent was installed over a newer one, or the machine was restored from a snapshot. | Update the agent. The warning clears when the pinned key comes back. |
+| **More than one machine** | A disk image was cloned after the agent enrolled. The copies keep taking the connection from each other, or present different keys. | Enroll each copy again, so each machine has its own identity. |
+
+To compare a fingerprint, run the agent on the device as root or Administrator:
+
+```sh
+# Linux
+sudo /usr/local/bin/rmm-agent -state /etc/rmm-agent/state.json -fingerprint
+# macOS
+sudo /usr/local/libexec/openrmm/rmm-agent -state /etc/rmm-agent/state.json -fingerprint
+```
+
+```powershell
+# Windows
+& "$Env:ProgramData\rmm-agent\rmm-agent.exe" -state "$Env:ProgramData\rmm-agent\state.json" -fingerprint
+```
+
+The agent also logs its fingerprint each time it connects. Approving or keeping
+a key takes **Delete devices** and an account without an access scope, and both
+ask for a reason that goes to the audit log (`device.e2e_key_approved`,
+`device.e2e_key_issue_dismissed`). Approval pins exactly the key the device
+presented: if it presents yet another one before you approve, approve again
+after checking it. A browser that remembered the previous key shows both
+fingerprints and who approved the change, and connects only after the
+technician accepts.
+
+A hostname is not evidence here: the agent reports it, clones share it, and
+machines get renamed. The page shows it, with the address and agent version
+of the last connection, to help you tell what happened.
+
+**Mass deployment.** Installing with a multi-use enrollment token (a GPO, Intune
+or a script) gives each machine its own device, credentials and key, so they
+never conflict. Do not enroll the agent in a disk image you will clone: install
+it on each machine, or have the image run the installer with the enrollment
+token on first boot. Clones behind one NAT address that share one key look like
+one machine.
 
 ### One desktop session per operator per device
 
@@ -438,7 +511,7 @@ the guest appears as a chip with **Remove**, and in the device's presence as
 "Guest <name> (via <technician>)".
 
 **What a guest can do.** The guest gets a session of their own (their own relay
-pair and sidecar, never the technician's stream), and the relay filters every
+pair and sidecar, never the technician's stream), and OpenRMM filters every
 frame of it in both directions (`internal/remote/guest.go`):
 
 - to the device: keyframe requests and the monitor choice; in *view and
@@ -488,15 +561,18 @@ invitation was sent is not outlived by it.
 
 | Route | Who | Purpose |
 |---|---|---|
-| `POST /api/devices/{id}/remote-shares` | `devices.remote` + `devices.remote.share`, in scope | Create: `{mode, minutes}` → the share, `token` and `code` (once) |
+| `POST /api/devices/{id}/remote-shares` | `devices.remote` + `devices.remote.share`, in scope | Create: `{mode, minutes, reusable?}` → the share, `token`, `code` (once) and pinned `device_public_key`. Refused with **409** (`remote_device_key_issue`) while the device key is under review |
 | `GET /api/devices/{id}/remote-shares` | same | The caller's live invitations on the device |
 | `GET /api/remote-shares/pending?agent_id=` | same | What the open session polls: guests waiting, and guests in |
-| `POST /api/remote-shares/{id}/accept` · `/reject` | the creator; accept needs their live desktop session | Decide |
+| `POST /api/remote-shares/{id}/accept` · `/reject` | the creator; accept needs their live desktop session | Decide (encrypted sessions supply `{wrapped_chat_key, chat_key_id, redeem_count}` on accept) |
+| `PUT /api/remote-shares/{id}/chat-key` | the creator; needs their live E2E desktop session | Update a guest's sealed chat room key after rotation (`{wrapped_chat_key, chat_key_id, redeem_count}`) |
 | `DELETE /api/remote-shares/{id}` | the creator, or `users.manage` | Revoke, or remove a guest who is in |
+| `POST /api/devices/{id}/remote-chat` | `devices.remote` + `devices.remote.share`, in scope | Technician ciphertext send/poll channel for encrypted group chat |
 | `POST /api/guest/lookup` | public, login rate limit | `{token}` → the technician's name |
-| `POST /api/guest/join` | public, login rate limit | `{token, code, name}` → `{request_id, guest_credential}` |
-| `GET /api/guest/request` | `Authorization: Guest <credential>` | The decision, and whether the technician is present |
-| `POST /api/guest/session` | guest credential | Brokers the guest's session; the viewer then presents `rmm-guest.<credential>` with its ticket on `/ws/remote` |
+| `POST /api/guest/join` | public, login rate limit | `{token, code, name, guest_public_key?, guest_sign_key?}` → `{request_id, guest_credential}` |
+| `GET /api/guest/request` | `Authorization: Guest <credential>` | The decision, whether the technician is present, and the sealed `wrapped_chat_key` / `chat_key_id` when accepted |
+| `POST /api/guest/session` | guest credential | Brokers the guest's session (`{viewer_key?}`); the viewer then presents `rmm-guest.<credential>` with its ticket on `/ws/remote` |
+| `POST /api/guest/chat` | guest credential | Guest ciphertext send/poll channel for encrypted group chat |
 
 Every step is in the audit log: `remote.share.create`, `.code_failed`,
 `.redeem`, `.accept`, `.reject`, `.revoke`, `.remove`, `.guest_start`,

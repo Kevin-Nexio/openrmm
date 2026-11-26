@@ -321,9 +321,11 @@ silently omitted:
    AI-authored scripts.
 4. **Per-user quotas** are not implemented. Per-IP limits exist for auth, MCP and
    the authenticated API, but they are not usage/account quotas.
-5. ~~**Relay authorization**~~ — **DONE**: role-specific one-time tickets are
-   principal-bound and supplied only in the WebSocket handshake. End-to-end media
-   encryption remains future work (the relay is still the trust boundary).
+5. ~~**Relay authorization & native E2E encryption**~~ — **DONE**: role-specific
+   one-time tickets are principal-bound and supplied only in the WebSocket
+   handshake, and native desktop, terminal, file transfer and guest chat
+   sessions use end-to-end authenticated encryption once an agent pins its
+   device key (see [Remote access](08-remote-access.md#end-to-end-encryption-for-native-sessions)).
 6. ~~**Agent token rotation and revocation**~~ — **DONE**: revocation fences live
    control/relay attachment; rotation is single-flight and commits on reconnect.
 7. **Output size limits** — the reference agent caps stdout and stderr at 1 MiB
@@ -384,11 +386,18 @@ exposes no secrets).
   `RMM_ALLOW_LEGACY_AGENT_RELAY` for upgrades and is disabled by default. Both
   ticket roles are invalidated by expiry or device revocation.
 
+  Native sessions to agents with pinned keys use end-to-end authenticated
+  encryption for desktop, terminal and file transfer. Guest chat uses a separate
+  room key sealed to each approved guest and rotates it on membership changes.
+  Group messages are encrypted before passing through the authenticated
+  application API. The application origin and control channel remain trusted
+  for session authorization and public-key distribution. The relay can still observe traffic metadata.
+  Preferred mode allows legacy sessions with older agents. See
+  [Remote access](08-remote-access.md#end-to-end-encryption-for-native-sessions).
+
 **Remaining (tracked):**
 - **TLS** and source ACLs must be enforced by the trusted edge in production (see
   the deploy runbook).
 - **Script sandboxing** remains a roadmap item; privileged jobs and the terminal
   intentionally run with the system-service account today.
-- Native relay media is not end-to-end encrypted; the relay and TLS edge remain
-  trust boundaries.
 - Release Ed25519 signatures are not Authenticode or Apple notarization.
