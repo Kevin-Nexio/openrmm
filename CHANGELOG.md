@@ -6,13 +6,37 @@ tag.
 
 ## [Unreleased]
 
+## [0.13.0] - 2026-11-26
+
 ### Added
 
-- Explicit per-server-rule replacements for Client/Site policies, default off.
-  Site replacements win over Client replacements while ordinary precedence,
-  targeting filters, exclusions, AI review and cumulative patch policies remain
-  unchanged. Only unrestricted managers can change exception policies; scoped
-  viewers can inspect the effective rule. All nine console locales are included.
+- **End-to-end encryption for native remote sessions.** Native desktop,
+  elevated terminal, file transfer and multi-party guest chat now encrypt
+  between the browser and the endpoint once an agent pins its P-256 identity
+  key, binding every relay handshake to the broker-authorized viewer key and
+  showing a lock indicator after verification. Configure **Prefer encryption**
+  (default, with a per-device anti-downgrade ratchet once pinned) or **Require
+  encryption** in **Settings ▸ Remote access ▸ Native** (or
+  `RMM_REMOTE_E2E_POLICY`). Encrypted guest invitations pin the device
+  fingerprint in the link fragment and seal a rotating room key for group chat
+  ([#313](https://github.com/openrmm-project/openrmm/pull/313)).
+- **Non-disruptive review when a device's encryption key changes.** A device
+  that presents a different key, cannot read its key, reconnects with an older
+  agent, or shares its identity across cloned machines stays online for jobs,
+  monitoring and updates while native desktop, terminal, file transfer and new
+  guest invitations pause. The server audits the change, sends a default-on
+  `device_key_issue` alert, lets operators compare the fingerprint locally with
+  `rmm-agent -fingerprint`, and requires an unrestricted administrator with a
+  recorded reason to approve the exact presented key or dismiss the warning;
+  browsers that remembered the previous key ask for confirmation before using
+  the new one ([#313](https://github.com/openrmm-project/openrmm/pull/313)).
+- **Explicit per-server-rule replacements for Client/Site policies.** Off by
+  default. Site replacements win over Client replacements while ordinary
+  precedence, targeting filters, exclusions, AI review and cumulative patch
+  policies remain unchanged. Only unrestricted managers can change exception
+  policies; scoped viewers can inspect the effective rule. All nine console
+  locales are included. Thanks to Kevin-Nexio for the contribution in
+  [#299](https://github.com/openrmm-project/openrmm/pull/299).
 
 ### Security
 
@@ -25,7 +49,27 @@ tag.
   packages without running their install scripts. A new CI check
   (`.github/scripts/check-workflow-policy.py`) keeps these rules and the
   commit-SHA pinning of every action from being undone. No secret is known to
-  have been exposed.
+  have been exposed
+  ([#314](https://github.com/openrmm-project/openrmm/pull/314)).
+
+### Changed
+
+- **Trademark and logo policy clarified.** The policy applies only to the
+  OpenRMM logo, drops the commercial licence offer, and permits keeping the
+  logo on in-house, hosted and lightly patched builds
+  ([#309](https://github.com/openrmm-project/openrmm/pull/309),
+  [#315](https://github.com/openrmm-project/openrmm/pull/315)).
+
+### Upgrade notes
+
+- Database migrations `042` (`remote_e2e`) and `043` (`remote_e2e_key_review`)
+  apply automatically when the server starts.
+- Update the agents (`0.13.0`) and native remote component (`0.19.0`) as well
+  (agents self-update from `/dl/`). Under the default **Prefer encryption**
+  policy, older agents without a pinned key continue working until updated;
+  once an agent pins its key, subsequent native sessions require encryption.
+- Reissue any guest invitation links created before a device pinned its
+  encryption key.
 
 ## [0.12.3] - 2026-11-24
 
