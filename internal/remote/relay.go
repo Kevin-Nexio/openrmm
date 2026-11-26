@@ -222,6 +222,13 @@ func (r *Relay) join(sessionID, agentID, role string, conn *websocket.Conn, gues
 			allow = p.guest.FromAgent
 		}
 	}
+	if p.guest != nil && p.guest.E2E {
+		// Encrypted guest sessions exchange group chat over the authenticated
+		// HTTP channel; never parse cleartext chat/hello or enqueue into the
+		// legacy ChatHook worker.
+		onChat = nil
+		onHello = nil
+	}
 	p.mu.Unlock()
 	err = copyFrames(conn, dst, dstW, allow, onChat, onHello)
 	if err != nil {

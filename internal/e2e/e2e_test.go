@@ -4,8 +4,10 @@ import (
 	"bytes"
 	"crypto/rand"
 	"encoding/base64"
+	"encoding/binary"
 	"encoding/json"
 	"errors"
+	"fmt"
 	"io"
 	"net/http"
 	"net/http/httptest"
@@ -584,5 +586,612 @@ func TestHandshakeValidationGuards(t *testing.T) {
 		EKPriv:    ekPriv,
 	}); err == nil || !strings.Contains(err.Error(), "expected device identity") {
 		t.Fatalf("HandshakeViewer accepted empty identity pin and invite fingerprint: %v", err)
+	}
+}
+
+func TestKeyValidationAndFingerprintsEdgeCases(t *testing.T) {
+	priv, pub, err := GenerateKeyPair()
+	if err != nil {
+		t.Fatal(err)
+	}
+	rawPub, _, err := DecodePublicKey(pub)
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	// Non-canonical base64 trailing bits: flip an unused low bit in the last char.
+	nonCanonPub := pub[:len(pub)-1] + string(pub[len(pub)-1]^1)
+	if nonCanonPub == pub {
+		nonCanonPub = pub[:len(pub)-1] + "B"
+	}
+	wrongPrefix := append([]byte(nil), rawPub...)
+	wrongPrefix[0] = 0x02
+	offCurve := make([]byte, pubKeyRawLen)
+	offCurve[0] = 0x04
+	offCurve[32] = 0x01
+	offCurve[64] = 0x02
+
+	badPubs := []string{
+		"",
+		"not-base64!!!",
+		base64.RawURLEncoding.EncodeToString(rawPub[:64]),
+		base64.RawURLEncoding.EncodeToString(wrongPrefix),
+		base64.RawURLEncoding.EncodeToString(offCurve),
+		nonCanonPub,
+	}
+	for _, bad := range badPubs {
+		if err := ValidatePublicKey(bad); !errors.Is(err, ErrInvalidPublicKey) {
+			t.Errorf("ValidatePublicKey(%q) = %v, want ErrInvalidPublicKey", bad, err)
+		}
+		if fp := DisplayFingerprint(bad); fp != "" {
+			t.Errorf("DisplayFingerprint(%q) = %q, want empty", bad, fp)
+		}
+		if ifp := InviteFingerprint(bad); ifp != "" {
+			t.Errorf("InviteFingerprint(%q) = %q, want empty", bad, ifp)
+		}
+	}
+
+	// Private key validation: wrong length, zero scalar, non-canonical trailing bits.
+	zeroPriv := base64.RawURLEncoding.EncodeToString(make([]byte, privKeyRawLen))
+	nonCanonPriv := priv[:len(priv)-1] + string(priv[len(priv)-1]^1)
+	for _, bad := range []string{"", "!!!", base64.RawURLEncoding.EncodeToString(make([]byte, 31)), zeroPriv, nonCanonPriv} {
+		if _, _, err := DecodePrivateKey(bad); !errors.Is(err, ErrInvalidPrivateKey) {
+			t.Errorf("DecodePrivateKey(%q) = %v, want ErrInvalidPrivateKey", bad, err)
+		}
+		if _, err := PublicKeyFromPrivate(bad); err == nil {
+			t.Errorf("PublicKeyFromPrivate(%q) succeeded", bad)
+		}
+		if _, err := SignP256(bad, []byte("msg")); err == nil {
+			t.Errorf("SignP256(%q) succeeded", bad)
+		}
+	}
+
+	// Signature verification guards.
+	sig, err := SignP256(priv, []byte("hello"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	if VerifyP256("bad-key", []byte("hello"), sig) {
+		t.Error("VerifyP256 accepted invalid public key")
+	}
+	if VerifyP256(pub, []byte("hello"), base64.RawURLEncoding.EncodeToString(make([]byte, 63))) {
+		t.Error("VerifyP256 accepted short signature")
+	}
+	nonCanonSig := sig[:len(sig)-1] + string(sig[len(sig)-1]^1)
+	if nonCanonSig != sig && VerifyP256(pub, []byte("hello"), nonCanonSig) {
+		t.Error("VerifyP256 accepted non-canonical signature encoding")
+	}
+
+	// DelegationBytes & DeriveSessionKeys edge cases.
+	if _, err := DelegationBytes(Delegation{EKPub: "bad", Exp: 100}); err == nil {
+		t.Error("DelegationBytes accepted invalid EKPub")
+	}
+	if _, err := DelegationBytes(Delegation{EKPub: pub, Exp: -1}); err == nil {
+		t.Error("DelegationBytes accepted negative Exp")
+	}
+	if _, err := DeriveSessionKeys([]byte("short"), [32]byte{}); err == nil {
+		t.Error("DeriveSessionKeys accepted short shared secret")
+	}
+	if NormalizeKind("") != "desktop" || NormalizeKind("terminal") != "terminal" {
+		t.Error("NormalizeKind returned unexpected value")
+	}
+
+	// IsChatEnvelope validation.
+	validEnv, _ := json.Marshal(ChatEnvelope{T: "e2e_chat", V: 1, Kid: "k1", IV: "iv", CT: "ct"})
+	if !IsChatEnvelope(validEnv) {
+		t.Fatal("IsChatEnvelope rejected valid envelope")
+	}
+	for name, raw := range map[string][]byte{
+		"oversized":   bytes.Repeat([]byte("a"), 8193),
+		"invalidJSON": []byte("{bad"),
+		"wrongType":   []byte(`{"t":"chat","v":1,"kid":"k","iv":"i","ct":"c"}`),
+		"wrongVer":    []byte(`{"t":"e2e_chat","v":2,"kid":"k","iv":"i","ct":"c"}`),
+		"missingKid":  []byte(`{"t":"e2e_chat","v":1,"kid":"","iv":"i","ct":"c"}`),
+		"missingIV":   []byte(`{"t":"e2e_chat","v":1,"kid":"k","iv":"","ct":"c"}`),
+		"missingCT":   []byte(`{"t":"e2e_chat","v":1,"kid":"k","iv":"i","ct":""}`),
+	} {
+		if IsChatEnvelope(raw) {
+			t.Errorf("IsChatEnvelope(%s) = true, want false", name)
+		}
+	}
+}
+
+func TestHandshakeNegativeAndTamperingCases(t *testing.T) {
+	ikPriv, ikPub, _ := GenerateKeyPair()
+	ekPriv, ekPub, _ := GenerateKeyPair()
+	viewPriv, viewPub, _ := GenerateKeyPair()
+	exp := time.Now().Add(5 * time.Minute).Unix()
+	validSig, err := SignDelegation(ikPriv, Delegation{
+		SessionID: "sess-neg",
+		AgentID:   "agent-neg",
+		Kind:      "desktop",
+		EKPub:     ekPub,
+		Exp:       exp,
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	// Agent pre-I/O option validation.
+	for name, opts := range map[string]AgentHandshakeOpts{
+		"empty session": {AgentID: "a", ViewerKey: viewPub, EKPriv: ekPriv, IKPub: ikPub, Exp: exp, SigDel: validSig},
+		"expired":       {SessionID: "s", AgentID: "a", ViewerKey: viewPub, EKPriv: ekPriv, IKPub: ikPub, Exp: time.Now().Add(-time.Minute).Unix(), SigDel: validSig},
+		"bad guestmode": {SessionID: "s", AgentID: "a", GuestMode: "admin", ViewerKey: viewPub, EKPriv: ekPriv, IKPub: ikPub, Exp: exp, SigDel: validSig},
+		"bad ekpriv":    {SessionID: "s", AgentID: "a", ViewerKey: viewPub, EKPriv: "bad", IKPub: ikPub, Exp: exp, SigDel: validSig},
+		"bad ikpub":     {SessionID: "s", AgentID: "a", ViewerKey: viewPub, EKPriv: ekPriv, IKPub: "bad", Exp: exp, SigDel: validSig},
+		"bad sig len":   {SessionID: "s", AgentID: "a", ViewerKey: viewPub, EKPriv: ekPriv, IKPub: ikPub, Exp: exp, SigDel: "short"},
+		"self check":    {SessionID: "wrong-sess", AgentID: "agent-neg", ViewerKey: viewPub, EKPriv: ekPriv, IKPub: ikPub, Exp: exp, SigDel: validSig},
+	} {
+		if _, err := HandshakeAgent(nil, opts); err == nil {
+			t.Errorf("HandshakeAgent(%s) succeeded, want error", name)
+		}
+	}
+	if _, err := NewAgentHandshakeFromIdentity("s", "a", "desktop", "", "bad-viewer", ikPriv, ikPub, 0); err == nil {
+		t.Error("NewAgentHandshakeFromIdentity accepted invalid viewer key")
+	}
+
+	// Viewer pre-I/O validation.
+	if _, err := HandshakeViewer(nil, ViewerHandshakeOpts{EKPriv: viewPriv, ExpectedIKPub: ikPub}); err == nil {
+		t.Error("HandshakeViewer accepted empty session_id")
+	}
+	if _, err := HandshakeViewer(nil, ViewerHandshakeOpts{SessionID: "s", EKPriv: "bad", ExpectedIKPub: ikPub}); err == nil {
+		t.Error("HandshakeViewer accepted invalid EKPriv")
+	}
+
+	// Wire-level viewer rejection cases against crafted agent hello frames.
+	nonce32, _ := RandomBytesB64(32)
+	makeAgentHello := func() helloFrame {
+		return helloFrame{
+			T: "e2e_hello", V: 1, Role: "agent", AgentID: "agent-neg", Kind: "desktop",
+			EK: ekPub, Nonce: nonce32, IK: ikPub, Exp: exp, Sig: validSig,
+		}
+	}
+	viewerCases := []struct {
+		name   string
+		mutate func(*helloFrame)
+		opts   ViewerHandshakeOpts
+	}{
+		{name: "wrong role", mutate: func(h *helloFrame) { h.Role = "viewer" }},
+		{name: "wrong kind", mutate: func(h *helloFrame) { h.Kind = "terminal" }},
+		{name: "wrong guest_mode", mutate: func(h *helloFrame) { h.GuestMode = "view" }},
+		{name: "wrong agent_id", mutate: func(h *helloFrame) { h.AgentID = "other-agent" }},
+		{name: "missing agent_id", mutate: func(h *helloFrame) { h.AgentID = "" }},
+		{name: "invalid ik", mutate: func(h *helloFrame) { h.IK = "bad" }},
+		{name: "wrong invite fp", opts: ViewerHandshakeOpts{ExpectedInviteFP: "AAAAAAAAAAAAAAAAAAAAAA"}},
+		{name: "invalid ek", mutate: func(h *helloFrame) { h.EK = "bad" }},
+		{name: "invalid nonce", mutate: func(h *helloFrame) { h.Nonce = "short" }},
+		{name: "invalid sig len", mutate: func(h *helloFrame) { h.Sig = "short" }},
+		{name: "expired delegation", mutate: func(h *helloFrame) { h.Exp = time.Now().Add(-time.Minute).Unix() }},
+		{name: "tampered sig", mutate: func(h *helloFrame) {
+			raw, _ := base64.RawURLEncoding.DecodeString(h.Sig)
+			raw[0] ^= 0xff
+			h.Sig = base64.RawURLEncoding.EncodeToString(raw)
+		}},
+	}
+	for _, tc := range viewerCases {
+		t.Run("viewer_"+tc.name, func(t *testing.T) {
+			wsURL, _ := startPipeServer(t)
+			rawPeer, _, err := websocket.DefaultDialer.Dial(wsURL, nil)
+			if err != nil {
+				t.Fatal(err)
+			}
+			defer rawPeer.Close()
+			rawViewer, _, err := websocket.DefaultDialer.Dial(wsURL, nil)
+			if err != nil {
+				t.Fatal(err)
+			}
+			defer rawViewer.Close()
+
+			h := makeAgentHello()
+			if tc.mutate != nil {
+				tc.mutate(&h)
+			}
+			b, _ := json.Marshal(h)
+			go func() {
+				_, _, _ = rawPeer.ReadMessage()
+				_ = rawPeer.WriteMessage(websocket.TextMessage, b)
+			}()
+			opts := tc.opts
+			opts.SessionID = "sess-neg"
+			opts.EKPriv = viewPriv
+			opts.ExpectedKind = "desktop"
+			if opts.ExpectedInviteFP == "" {
+				opts.ExpectedAgentID = "agent-neg"
+				opts.ExpectedIKPub = ikPub
+			}
+			if _, err := HandshakeViewer(rawViewer, opts); err == nil {
+				t.Fatalf("HandshakeViewer accepted %s", tc.name)
+			}
+		})
+	}
+
+	// Agent rejects bad viewer hello (binary frame, bad nonce, plaintext ready).
+	t.Run("agent_rejects_bad_viewer_nonce", func(t *testing.T) {
+		wsURL, _ := startPipeServer(t)
+		rawAgent, _, _ := websocket.DefaultDialer.Dial(wsURL, nil)
+		defer rawAgent.Close()
+		rawViewer, _, _ := websocket.DefaultDialer.Dial(wsURL, nil)
+		defer rawViewer.Close()
+		agentOpts, _ := NewAgentHandshakeFromIdentity("sess-badnonce", "agent-1", "desktop", "", viewPub, ikPriv, ikPub, 5*time.Minute)
+		go func() {
+			_, _, _ = rawViewer.ReadMessage()
+			b, _ := json.Marshal(helloFrame{T: "e2e_hello", V: 1, Role: "viewer", EK: viewPub, Nonce: "short"})
+			_ = rawViewer.WriteMessage(websocket.TextMessage, b)
+		}()
+		if _, err := HandshakeAgent(rawAgent, agentOpts); err == nil || !strings.Contains(err.Error(), "nonce") {
+			t.Fatalf("HandshakeAgent err = %v, want nonce error", err)
+		}
+	})
+
+	t.Run("agent_rejects_plaintext_ready", func(t *testing.T) {
+		wsURL, _ := startPipeServer(t)
+		rawAgent, _, _ := websocket.DefaultDialer.Dial(wsURL, nil)
+		defer rawAgent.Close()
+		rawViewer, _, _ := websocket.DefaultDialer.Dial(wsURL, nil)
+		defer rawViewer.Close()
+		agentOpts, _ := NewAgentHandshakeFromIdentity("sess-plainready", "agent-1", "desktop", "", viewPub, ikPriv, ikPub, 5*time.Minute)
+		go func() {
+			_, _, _ = rawViewer.ReadMessage()
+			b, _ := json.Marshal(helloFrame{T: "e2e_hello", V: 1, Role: "viewer", EK: viewPub, Nonce: nonce32})
+			_ = rawViewer.WriteMessage(websocket.TextMessage, b)
+			_ = rawViewer.WriteMessage(websocket.TextMessage, []byte(`{"t":"e2e_ready"}`))
+		}()
+		if _, err := HandshakeAgent(rawAgent, agentOpts); err == nil || !strings.Contains(err.Error(), "e2e_ready") {
+			t.Fatalf("HandshakeAgent err = %v, want e2e_ready error", err)
+		}
+	})
+}
+
+func TestConnFrameIntegrityAndLimits(t *testing.T) {
+	openPair := func(t *testing.T) (agentConn, viewerConn *Conn, rawAgent, rawViewer *websocket.Conn) {
+		t.Helper()
+		wsURL, _ := startPipeServer(t)
+		ikPriv, ikPub, _ := GenerateKeyPair()
+		viewPriv, viewPub, _ := GenerateKeyPair()
+		agentOpts, err := NewAgentHandshakeFromIdentity("sess-frame", "agent-1", "desktop", "", viewPub, ikPriv, ikPub, 5*time.Minute)
+		if err != nil {
+			t.Fatal(err)
+		}
+		rawAgent, _, err = websocket.DefaultDialer.Dial(wsURL, nil)
+		if err != nil {
+			t.Fatal(err)
+		}
+		t.Cleanup(func() { rawAgent.Close() })
+		rawViewer, _, err = websocket.DefaultDialer.Dial(wsURL, nil)
+		if err != nil {
+			t.Fatal(err)
+		}
+		t.Cleanup(func() { rawViewer.Close() })
+		ch := make(chan *Conn, 1)
+		go func() {
+			c, _ := HandshakeAgent(rawAgent, agentOpts)
+			ch <- c
+		}()
+		viewerConn, err = HandshakeViewer(rawViewer, ViewerHandshakeOpts{
+			EKPriv: viewPriv, SessionID: "sess-frame", ExpectedAgentID: "agent-1", ExpectedKind: "desktop", ExpectedIKPub: ikPub,
+		})
+		if err != nil {
+			t.Fatal(err)
+		}
+		agentConn = <-ch
+		if viewerConn.PeerIdentityKey() != ikPub || agentConn.PeerIdentityKey() != ikPub {
+			t.Fatalf("PeerIdentityKey mismatch: viewer=%q agent=%q", viewerConn.PeerIdentityKey(), agentConn.PeerIdentityKey())
+		}
+		return agentConn, viewerConn, rawAgent, rawViewer
+	}
+
+	t.Run("oversized_and_unsupported_mt_do_not_desync", func(t *testing.T) {
+		agentConn, viewerConn, _, _ := openPair(t)
+		if err := viewerConn.WriteMessage(websocket.PingMessage, []byte("x")); err == nil {
+			t.Fatal("WriteMessage accepted unsupported PingMessage")
+		}
+		oversized := make([]byte, maxPayloadSize+1)
+		if err := viewerConn.WriteMessage(websocket.BinaryMessage, oversized); err == nil {
+			t.Fatal("WriteMessage accepted payload above maxPayloadSize")
+		}
+		// Sequence number must still be in sync after both rejected writes!
+		if err := viewerConn.WriteMessage(websocket.TextMessage, []byte(`{"t":"kf"}`)); err != nil {
+			t.Fatal(err)
+		}
+		mt, got, err := agentConn.ReadMessage()
+		if err != nil || mt != websocket.TextMessage || string(got) != `{"t":"kf"}` {
+			t.Fatalf("ReadMessage after rejected writes = (%d, %q, %v)", mt, got, err)
+		}
+		if err := viewerConn.Close(); err != nil {
+			t.Fatalf("Close: %v", err)
+		}
+	})
+
+	t.Run("plaintext_text_frame_rejected", func(t *testing.T) {
+		agentConn, _, _, rawViewer := openPair(t)
+		_ = rawViewer.WriteMessage(websocket.TextMessage, []byte(`{"t":"kf"}`))
+		if _, _, err := agentConn.ReadMessage(); err == nil || !strings.Contains(err.Error(), "unexpected websocket message type") {
+			t.Fatalf("ReadMessage err = %v, want unexpected websocket message type", err)
+		}
+	})
+
+	t.Run("tampered_ciphertext_rejected", func(t *testing.T) {
+		agentConn, viewerConn, _, rawViewer := openPair(t)
+		// Craft a frame with valid header/seq=1 but corrupted GCM tag.
+		bad := make([]byte, HeaderSize+1+TagSize)
+		bad[0] = FramePrefix
+		binary.BigEndian.PutUint64(bad[1:9], 1)
+		_ = rawViewer.WriteMessage(websocket.BinaryMessage, bad)
+		if _, _, err := agentConn.ReadMessage(); err == nil || !strings.Contains(err.Error(), "authentication failed") {
+			t.Fatalf("ReadMessage err = %v, want authentication failed", err)
+		}
+		_ = viewerConn.Close()
+	})
+
+	t.Run("out_of_order_sequence_rejected", func(t *testing.T) {
+		agentConn, viewerConn, _, _ := openPair(t)
+		// Send seq=2 when agent expects seq=1.
+		if err := viewerConn.sealAndSend(2, InnerText, []byte(`{"t":"kf"}`)); err != nil {
+			t.Fatal(err)
+		}
+		if _, _, err := agentConn.ReadMessage(); err == nil || !strings.Contains(err.Error(), "sequence mismatch") {
+			t.Fatalf("ReadMessage err = %v, want sequence mismatch", err)
+		}
+	})
+
+	t.Run("unknown_inner_frame_type_rejected", func(t *testing.T) {
+		agentConn, viewerConn, _, _ := openPair(t)
+		if err := viewerConn.sealAndSend(1, 0x03, []byte("bogus")); err != nil {
+			t.Fatal(err)
+		}
+		if _, _, err := agentConn.ReadMessage(); err == nil || !strings.Contains(err.Error(), "unknown inner frame type") {
+			t.Fatalf("ReadMessage err = %v, want unknown inner frame type", err)
+		}
+	})
+}
+
+func TestChatProtocolEdgeCases(t *testing.T) {
+	var chatKey [32]byte
+	_, _ = io.ReadFull(rand.Reader, chatKey[:])
+	var wrongKey [32]byte
+	_, _ = io.ReadFull(rand.Reader, wrongKey[:])
+
+	techPriv, techPub, _ := GenerateKeyPair()
+	userPriv, userPub, _ := GenerateKeyPair()
+	guestECDHPriv, guestECDHPub, _ := GenerateKeyPair()
+	otherECDHPriv, _, _ := GenerateKeyPair()
+	guestSignPriv, guestSignPub, _ := GenerateKeyPair()
+	_, otherPub, _ := GenerateKeyPair()
+	kid := "kid-edge"
+	agentID := "agent-edge"
+	futureExp := time.Now().Add(time.Hour).Unix()
+
+	// UserKeyCert negative checks.
+	if _, err := SignUserKeyCert(techPriv, kid, agentID, "bad"); err == nil {
+		t.Error("SignUserKeyCert accepted invalid user key")
+	}
+	userCert, err := SignUserKeyCert(techPriv, kid, agentID, userPub)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !VerifyUserKeyCert(techPub, userCert) {
+		t.Fatal("VerifyUserKeyCert rejected valid cert")
+	}
+	if VerifyUserKeyCert(otherPub, userCert) || VerifyUserKeyCert(techPub, UserKeyCert{UserPub: "bad"}) {
+		t.Error("VerifyUserKeyCert accepted invalid cert")
+	}
+
+	// ChatGrant negative checks.
+	if _, err := SignChatGrant(techPriv, ChatGrant{Kid: "", AgentID: agentID, ShareID: "s1", Name: "Alice", GuestSignPub: guestSignPub, Exp: futureExp}); err == nil {
+		t.Error("SignChatGrant accepted empty kid")
+	}
+	if _, err := SignChatGrant(techPriv, ChatGrant{Kid: kid, AgentID: agentID, ShareID: "s1", Name: "Alice", GuestSignPub: "bad", Exp: futureExp}); err == nil {
+		t.Error("SignChatGrant accepted bad guest key")
+	}
+	grant, err := SignChatGrant(techPriv, ChatGrant{Kid: kid, AgentID: agentID, ShareID: "s1", Name: "  Alice\n ", GuestSignPub: guestSignPub, Exp: futureExp})
+	if err != nil || grant.Name != "Alice" {
+		t.Fatalf("SignChatGrant = (%+v, %v)", grant, err)
+	}
+	if VerifyChatGrant(techPub, ChatGrant{Kid: kid, AgentID: agentID, ShareID: "s1", Name: "Alice\n", GuestSignPub: guestSignPub, Exp: futureExp, Sig: grant.Sig}) {
+		t.Error("VerifyChatGrant accepted uncleaned name")
+	}
+	if VerifyChatGrant(otherPub, grant) {
+		t.Error("VerifyChatGrant accepted wrong tech key")
+	}
+
+	// EncodeChatEnvelope error paths.
+	if _, err := EncodeChatEnvelope(chatKey, kid, agentID, "tech", "", "   \n\t", techPriv, 1, nil, nil); err == nil {
+		t.Error("EncodeChatEnvelope accepted whitespace-only text")
+	}
+	if _, err := EncodeChatEnvelope(chatKey, kid, agentID, "guest", "", "hi", guestSignPriv, 1, nil, nil); err == nil {
+		t.Error("EncodeChatEnvelope accepted guest without grant")
+	}
+	if _, err := EncodeChatEnvelope(chatKey, kid, agentID, "user", "", "hi", userPriv, 1, nil, nil); err == nil {
+		t.Error("EncodeChatEnvelope accepted user without cert")
+	}
+	if _, err := EncodeChatEnvelope(chatKey, kid, agentID, "admin", "", "hi", techPriv, 1, nil, nil); err == nil {
+		t.Error("EncodeChatEnvelope accepted unknown role")
+	}
+	if _, err := EncodeChatEnvelope(chatKey, kid, agentID, "tech", "", "hi", techPriv, 0, nil, nil); err == nil {
+		t.Error("EncodeChatEnvelope accepted seq=0")
+	}
+	if _, err := EncodeChatEnvelope(chatKey, kid, agentID, "tech", "", "hi", techPriv, maxChatSequence+1, nil, nil); err == nil {
+		t.Error("EncodeChatEnvelope accepted seq > maxChatSequence")
+	}
+
+	// DecodeChatEnvelope valid + negative paths.
+	techEnv, err := EncodeChatEnvelope(chatKey, kid, agentID, "tech", "", "hello tech", techPriv, 1, nil, nil)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if msg, err := DecodeChatEnvelope(techEnv, chatKey, kid, agentID, techPub, nil); err != nil || msg.From != "tech" || msg.Text != "hello tech" {
+		t.Fatalf("DecodeChatEnvelope(tech) = (%+v, %v)", msg, err)
+	}
+	if _, err := DecodeChatEnvelope(bytes.Repeat([]byte("a"), 8193), chatKey, kid, agentID, techPub, nil); err == nil {
+		t.Error("DecodeChatEnvelope accepted oversized envelope")
+	}
+	if _, err := DecodeChatEnvelope(techEnv, wrongKey, kid, agentID, techPub, nil); err == nil {
+		t.Error("DecodeChatEnvelope accepted wrong chat key")
+	}
+	if _, err := DecodeChatEnvelope(techEnv, chatKey, "other-kid", agentID, techPub, nil); err == nil {
+		t.Error("DecodeChatEnvelope accepted wrong kid")
+	}
+	if _, err := DecodeChatEnvelope(techEnv, chatKey, kid, "other-agent", techPub, nil); err == nil {
+		t.Error("DecodeChatEnvelope accepted wrong agentID AAD")
+	}
+	if _, err := DecodeChatEnvelope([]byte(`{"t":"e2e_chat","v":1,"kid":"kid-edge","iv":"short","ct":"short"}`), chatKey, kid, agentID, techPub, nil); err == nil {
+		t.Error("DecodeChatEnvelope accepted invalid IV")
+	}
+	if _, err := DecodeChatEnvelope([]byte(`{"t":"e2e_chat","v":1,"kid":"kid-edge","iv":"AAAAAAAAAAAAAAAA","ct":"short"}`), chatKey, kid, agentID, techPub, nil); err == nil {
+		t.Error("DecodeChatEnvelope accepted short CT")
+	}
+
+	// User chat errors: wrong cert signature / wrong user signature.
+	badUserEnv, err := EncodeChatEnvelope(chatKey, kid, agentID, "user", "", "hello user", guestSignPriv, 1, nil, &userCert)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if _, err := DecodeChatEnvelope(badUserEnv, chatKey, kid, agentID, techPub, nil); err == nil {
+		t.Error("DecodeChatEnvelope accepted user message signed by wrong key")
+	}
+	if _, err := DecodeChatEnvelope(badUserEnv, chatKey, kid, agentID, otherPub, nil); err == nil {
+		t.Error("DecodeChatEnvelope accepted user_cert signed by wrong tech key")
+	}
+
+	// Guest chat errors: revoked, expired grant, wrong key.
+	guestEnv, err := EncodeChatEnvelope(chatKey, kid, agentID, "guest", "", "hello guest", guestSignPriv, 1, &grant, nil)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if _, err := DecodeChatEnvelope(guestEnv, chatKey, kid, agentID, techPub, map[string]bool{"s1": true}); err == nil {
+		t.Error("DecodeChatEnvelope accepted revoked guest")
+	}
+	expiredGrant, err := SignChatGrant(techPriv, ChatGrant{Kid: kid, AgentID: agentID, ShareID: "s1", Name: "Alice", GuestSignPub: guestSignPub, Exp: time.Now().Add(-time.Minute).Unix()})
+	if err != nil {
+		t.Fatal(err)
+	}
+	expEnv, _ := EncodeChatEnvelope(chatKey, kid, agentID, "guest", "", "late", guestSignPriv, 1, &expiredGrant, nil)
+	if _, err := DecodeChatEnvelope(expEnv, chatKey, kid, agentID, techPub, nil); err == nil {
+		t.Error("DecodeChatEnvelope accepted expired guest grant")
+	}
+
+	// OpenChatKeyAsGuest error paths.
+	wrapped, err := SealChatKeyForGuest(guestECDHPub, WrappedGuestChatKey{
+		Kid: kid, K: base64.RawURLEncoding.EncodeToString(chatKey[:]), TechPub: techPub,
+		AgentID: agentID, ShareID: "s1", Name: "Alice", Exp: futureExp, Grant: grant, DevIK: otherPub,
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if _, err := OpenChatKeyAsGuest("bad-priv", wrapped); err == nil {
+		t.Error("OpenChatKeyAsGuest accepted bad private key")
+	}
+	if _, err := OpenChatKeyAsGuest(otherECDHPriv, wrapped); err == nil {
+		t.Error("OpenChatKeyAsGuest succeeded with wrong guest private key")
+	}
+	if _, err := OpenChatKeyAsGuest(guestECDHPriv, "!!!not-base64"); err == nil {
+		t.Error("OpenChatKeyAsGuest accepted bad base64")
+	}
+	tamperedGrant := grant
+	tamperedGrant.Name = "Mallory"
+	badGrantWrap, err := SealChatKeyForGuest(guestECDHPub, WrappedGuestChatKey{
+		Kid: kid, K: base64.RawURLEncoding.EncodeToString(chatKey[:]), TechPub: techPub,
+		AgentID: agentID, ShareID: "s1", Name: "Mallory", Exp: futureExp, Grant: tamperedGrant, DevIK: otherPub,
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if _, err := OpenChatKeyAsGuest(guestECDHPriv, badGrantWrap); err == nil {
+		t.Error("OpenChatKeyAsGuest accepted tampered grant inside wrapped key")
+	}
+
+	// agentChatBridge HandleControl (invalid init, revoke, maxChatSenders cap).
+	bridge := newAgentChatBridge(agentID)
+	if _, ok := bridge.MaybeEncodeUserChat([]byte(`{"t":"chat","from":"user","text":"too early"}`)); ok {
+		t.Error("MaybeEncodeUserChat encoded before chat_init")
+	}
+	// Invalid chat_init frames are consumed (handled=true) without emitting ack.
+	for _, raw := range []string{
+		`{"t":"chat_init","kid":"","k":"x","tech_pub":"y"}`,
+		`{"t":"chat_init","kid":"k","k":"short","tech_pub":"y"}`,
+	} {
+		handled, reply := bridge.HandleControl([]byte(raw))
+		if !handled || len(reply) != 0 {
+			t.Errorf("HandleControl(%s) = (%v, %q), want (true, empty)", raw, handled, reply)
+		}
+	}
+	// Valid init -> revoke -> DecodeGuestEnvelope rejects revoked share.
+	initRaw, _ := json.Marshal(map[string]string{
+		"t": "chat_init", "kid": kid, "k": base64.RawURLEncoding.EncodeToString(chatKey[:]), "tech_pub": techPub,
+	})
+	handled, ack := bridge.HandleControl(initRaw)
+	if !handled || len(ack) == 0 {
+		t.Fatalf("HandleControl(valid chat_init) = (%v, %q)", handled, ack)
+	}
+	// Mismatched chat_user_cert is ignored.
+	badCertRaw, _ := json.Marshal(map[string]any{"t": "chat_user_cert", "kid": "wrong", "cert": userCert})
+	bridge.HandleControl(badCertRaw)
+	if _, ok := bridge.MaybeEncodeUserChat([]byte(`{"t":"chat","from":"user","text":"still uncertified"}`)); ok {
+		t.Error("MaybeEncodeUserChat encoded with mismatched cert")
+	}
+	// Revoke s1 -> guest envelope from s1 is dropped.
+	bridge.HandleControl([]byte(`{"t":"chat_revoke","share_id":"s1"}`))
+	if _, ok := bridge.DecodeGuestEnvelope(guestEnv, "s1"); ok {
+		t.Error("DecodeGuestEnvelope accepted revoked share after chat_revoke")
+	}
+
+	// Sender cap: fill up to maxChatSenders distinct senders, then verify 257th is rejected.
+	bridge2 := newAgentChatBridge(agentID)
+	bridge2.HandleControl(initRaw)
+	for i := 0; i < maxChatSenders; i++ {
+		bridge2.seen[fmt.Sprintf("sender-%d", i)] = 1
+	}
+	if _, ok := bridge2.DecodeGuestEnvelope(guestEnv, "s1"); ok {
+		t.Error("DecodeGuestEnvelope exceeded maxChatSenders cap")
+	}
+}
+
+func TestGuestControlModeAllowlist(t *testing.T) {
+	wsURL, _ := startPipeServer(t)
+	ikPriv, ikPub, _ := GenerateKeyPair()
+	viewPriv, viewPub, _ := GenerateKeyPair()
+	agentOpts, _ := NewAgentHandshakeFromIdentity("sess-ctrl", "agent-1", "desktop", "control", viewPub, ikPriv, ikPub, 5*time.Minute)
+
+	rawAgent, _, _ := websocket.DefaultDialer.Dial(wsURL, nil)
+	defer rawAgent.Close()
+	rawViewer, _, _ := websocket.DefaultDialer.Dial(wsURL, nil)
+	defer rawViewer.Close()
+
+	agentCh := make(chan *Conn, 1)
+	go func() {
+		c, _ := HandshakeAgent(rawAgent, agentOpts)
+		agentCh <- c
+	}()
+	viewerConn, err := HandshakeViewer(rawViewer, ViewerHandshakeOpts{
+		EKPriv: viewPriv, SessionID: "sess-ctrl", ExpectedKind: "desktop", ExpectedGuestMode: "control", ExpectedInviteFP: InviteFingerprint(ikPub),
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	agentConn := <-agentCh
+
+	// Control guest can send mouse/keyboard/wheel/kf/mon, but NOT cad/clip/fls/chat/oversized.
+	_ = viewerConn.WriteMessage(websocket.TextMessage, []byte(`{"t":"cad"}`))
+	_ = viewerConn.WriteMessage(websocket.TextMessage, []byte(`{"t":"clip","text":"nope"}`))
+	_ = viewerConn.WriteMessage(websocket.TextMessage, []byte(`{"t":"fls","path":"/"}`))
+	_ = viewerConn.WriteMessage(websocket.TextMessage, []byte(`{"t":"k","code":65,"down":true,"pad":"`+strings.Repeat("a", guestInnerLimit)+`"}`))
+	_ = viewerConn.WriteMessage(websocket.TextMessage, []byte(`{"t":"k","code":65,"down":true}`))
+	_ = viewerConn.WriteMessage(websocket.TextMessage, []byte(`{"t":"m","x":0.5,"y":0.5}`))
+
+	_, got1, err := agentConn.ReadMessage()
+	if err != nil || string(got1) != `{"t":"k","code":65,"down":true}` {
+		t.Fatalf("got1 = (%q, %v), want key event", got1, err)
+	}
+	_, got2, err := agentConn.ReadMessage()
+	if err != nil || string(got2) != `{"t":"m","x":0.5,"y":0.5}` {
+		t.Fatalf("got2 = (%q, %v), want mouse move", got2, err)
+	}
+
+	// Outbound video frame (0x01) is allowed; file chunk (0x02) is dropped.
+	_ = agentConn.WriteMessage(websocket.BinaryMessage, []byte{0x02, 0x01, 0x99})
+	_ = agentConn.WriteMessage(websocket.BinaryMessage, []byte{chVideo, 0x01, 0x02, 0x03})
+	mt, gotBin, err := viewerConn.ReadMessage()
+	if err != nil || mt != websocket.BinaryMessage || !bytes.Equal(gotBin, []byte{chVideo, 0x01, 0x02, 0x03}) {
+		t.Fatalf("guest outbound binary = (%d, %x, %v)", mt, gotBin, err)
 	}
 }

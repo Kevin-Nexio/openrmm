@@ -398,3 +398,29 @@ func TestConsolePageAndAPIBases(t *testing.T) {
 		t.Errorf("single-origin API base = %q", got)
 	}
 }
+
+func TestRemoteE2EPolicy(t *testing.T) {
+	t.Setenv("RMM_ADMIN_TOKEN", strings.Repeat("a", 32))
+	for value, want := range map[string]string{
+		"":            "preferred",
+		"preferred":   "preferred",
+		"required":    "required",
+		" REQUIRED ":  "required",
+		" Preferred ": "preferred",
+	} {
+		t.Setenv("RMM_REMOTE_E2E_POLICY", value)
+		cfg, err := Load()
+		if err != nil {
+			t.Fatalf("RMM_REMOTE_E2E_POLICY=%q: unexpected error: %v", value, err)
+		}
+		if cfg.RemoteE2EPolicy != want {
+			t.Errorf("RMM_REMOTE_E2E_POLICY=%q: got %q, want %q", value, cfg.RemoteE2EPolicy, want)
+		}
+	}
+	for _, bad := range []string{"off", "disabled", "optional", "legacy"} {
+		t.Setenv("RMM_REMOTE_E2E_POLICY", bad)
+		if _, err := Load(); err == nil || !strings.Contains(err.Error(), "RMM_REMOTE_E2E_POLICY") {
+			t.Errorf("RMM_REMOTE_E2E_POLICY=%q: err = %v, want refusal naming RMM_REMOTE_E2E_POLICY", bad, err)
+		}
+	}
+}

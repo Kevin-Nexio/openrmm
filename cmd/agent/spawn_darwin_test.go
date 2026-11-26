@@ -3,6 +3,7 @@
 package main
 
 import (
+	"encoding/json"
 	"fmt"
 	"os"
 	"path/filepath"
@@ -10,6 +11,8 @@ import (
 	"strings"
 	"sync"
 	"testing"
+
+	"github.com/p1ngu/rmm/internal/e2e"
 )
 
 // fakeLaunchd stands in for /bin/launchctl: it records every call and knows
@@ -168,5 +171,56 @@ func TestSessionJobsReapFinished(t *testing.T) {
 	}
 	if _, err := os.Stat(filepath.Join(dir, running+".plist")); err != nil {
 		t.Fatal("a running session's plist was removed")
+	}
+}
+
+func TestSessionJobParamsPreservesE2EFields(t *testing.T) {
+	f := &fakeLaunchd{loaded: map[string]bool{}}
+	old := launchctl
+	launchctl = f.run
+	t.Cleanup(func() { launchctl = old })
+	uid := strconv.Itoa(os.Getuid())
+	dir := t.TempDir()
+
+	want := e2e.SessionParams{
+		Relay:     "wss://relay.example.test/ws/remote?role=agent&session=s-mac",
+		Ticket:    "ticket-mac",
+		NoFiles:   true,
+		NoChat:    true,
+		E2E:       true,
+		SessionID: "s-mac",
+		AgentID:   "agent-mac",
+		Kind:      "desktop",
+		GuestMode: "view",
+		EKPriv:    "ek-priv-placeholder",
+		ViewerKey: "viewer-key-placeholder",
+		IKPub:     "ik-pub-placeholder",
+		Exp:       1900000000,
+		SigDel:    "sig-del-placeholder",
+	}
+	if err := startSessionJobParams(uid, dir, want); err != nil {
+		t.Fatalf("startSessionJobParams: %v", err)
+	}
+	params, _ := filepath.Glob(filepath.Join(dir, sessionJobPrefix+"*.json"))
+	if len(params) != 1 {
+		t.Fatalf("expected 1 parameter file, got %v", params)
+	}
+	info, err := os.Stat(params[0])
+	if err != nil {
+		t.Fatal(err)
+	}
+	if info.Mode().Perm() != 0o600 {
+		t.Fatalf("session params perm = %o, want 0600", info.Mode().Perm())
+	}
+	raw, err := os.ReadFile(params[0])
+	if err != nil {
+		t.Fatal(err)
+	}
+	var got e2e.SessionParams
+	if err := json.Unmarshal(raw, &got); err != nil {
+		t.Fatal(err)
+	}
+	if got != want {
+		t.Fatalf("persisted E2E params = %+v, want %+v", got, want)
 	}
 }
