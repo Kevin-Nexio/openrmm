@@ -12,19 +12,24 @@ Defined in `internal/protocol`.
 ## Handshake
 
 1. Agent → `register`:
-    - Explicit one-shot enrollment (`-enroll-only`): `{ "enroll_token": "...", "hostname", "os", "arch", "version" }`
-   - Later: `{ "agent_id": "...", "agent_token": "...", "hostname", ... }`
+    - Explicit one-shot enrollment (`-enroll-only`): `{ "enroll_token": "...", "hostname", "os", "arch", "version", "device_public_key?": "..." }`
+    - Later: `{ "agent_id": "...", "agent_token": "...", "hostname", ..., "device_public_key?": "...", "device_key_status?": "unavailable" }`
 2. Server validates (consumes the enroll token, or verifies the token hash) and
    replies:
     - `registered` → `{ "agent_id": "...", "agent_token": "...", "cancel_credential_rotation_id?": "..." }`
       (the token is only returned on first enrollment; the agent persists it)
    - or `error` → `{ "error": "..." }` and closes.
 
-The agent stores `{agent_id, agent_token}` in its state file (`-state`, default
-`agent-state.json`, mode 0600) and re-authenticates with it on reconnect. A
-long-lived service never enrolls from `-enroll-token`; installers run
-`-enroll-only` before creating the service so a deleted state file cannot reuse a
-bootstrap token.
+The agent stores `{agent_id, agent_token, device_private_key, device_public_key}`
+in its state file (`-state`, default `agent-state.json`, mode 0600) and
+re-authenticates with it on reconnect. A damaged `device_private_key` is never
+overwritten: the agent still connects with `device_key_status: "unavailable"` so
+jobs, monitoring and updates keep running while native remote sessions pause for
+administrator review ([08-remote-access](08-remote-access.md#when-a-devices-key-changes)).
+Run `rmm-agent -state <path> -fingerprint` to print the stored key's fingerprint
+without creating or modifying the state file. A long-lived service never enrolls
+from `-enroll-token`; installers run `-enroll-only` before creating the service
+so a deleted state file cannot reuse a bootstrap token.
 
 Production installers first perform this one-shot enrollment, then install the
 long-lived service without the enrollment token in its arguments. They require
@@ -105,7 +110,7 @@ normally necessary.
 | `job` | `{ job_id, type, shell, script, params? }` | run it, reply with `job_result`. `type` `device_query` runs a built-in query instead of a shell; `params` are a released script's parameters (see below) |
 | `job_result_ack` | `{ job_id }` | confirm a `job_result` was durably recorded; the agent drops it from its retry outbox |
 | `check_result_ack` | `{ execution_id }` | same for a `check_result`, keyed by the execution rather than the check: a result may be re-sent until it is acknowledged |
-| `remote_start` | `{ session_id, agent_ticket, kind, allow_files }` | connect a remote module to the relay; the agent derives `/ws/remote` from its own control WebSocket origin |
+| `remote_start` | `{ session_id, agent_ticket, kind, allow_files, no_chat?, e2e?, viewer_key?, guest_mode? }` | connect a remote module to the relay; the agent derives `/ws/remote` from its own control WebSocket origin. When `e2e` is true, the agent/sidecar signs an ephemeral delegation with its device identity key and binds the handshake to `viewer_key` (and `guest_mode` enforces view/control restrictions locally on the endpoint) |
 | `credential_rotate` | `{ rotation_id, agent_token }` | durably store the replacement credential, then reconnect with it |
 | `credential_rotation_cancel` | `{ rotation_id }` | durably restore the prior credential and confirm it |
 | `credential_rotation_canceled_ack` | `{ rotation_id }` | server recorded restoration; drop the persisted confirmation retry |

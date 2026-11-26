@@ -19,6 +19,7 @@ access scope the delivery query can enforce.
 | `agent_offline` | a device stops reporting past the offline threshold | on |
 | `job_failed` | a job returns a non-zero exit | **off** |
 | `ai_release_revoked` | a script released for the AI is withdrawn after failing 3 autonomous runs in a row ([23](23-ai-autonomy.md)); who hears of it follows the device of the last failure | on |
+| `device_key_issue` | a device presents a different encryption key, cannot read its key, reconnects with an older agent without encryption support, or is used by more than one machine ([08](08-remote-access.md#when-a-devices-key-changes)); native remote sessions pause until reviewed | on |
 
 Mail goes out on a **state transition only**, never on a routine evaluation.
 This is enforced in the store rather than the scheduler: `RaiseAlert` inserts

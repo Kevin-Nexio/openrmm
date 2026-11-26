@@ -67,10 +67,14 @@ Remaining Phase 2 nice-to-haves:
 - **Session conveniences**: the clipboard in both directions, display selection,
   a Ctrl+Alt+Delete button on Windows, one desktop session per operator per
   device ("Continue here" moves it), and a notice of who else is connected.
-- **Remaining:** hardware-accelerated codecs (VP8/9/AV1) + media E2E (homegrown,
-  no fork); the macOS login window; an optional Wayland backend (XDG portal +
-  PipeWire, needs CGO + a consent prompt, and still can't capture the login
-  screen).
+- **End-to-end encryption**: native desktop, terminal, file transfer and guest
+  chat encrypt end-to-end once an agent pins its P-256 identity key, with
+  administrator key-change review (`rmm-agent -fingerprint`) that keeps devices
+  online while pausing remote access
+  ([08-remote-access](08-remote-access.md#end-to-end-encryption-for-native-sessions)).
+- **Remaining:** hardware-accelerated codecs (VP8/9/AV1, homegrown, no fork);
+  the macOS login window; an optional Wayland backend (XDG portal + PipeWire,
+  needs CGO + a consent prompt, and still can't capture the login screen).
   (XDamage-based change detection was tried and reverted — it doesn't fire under a
   compositor like GNOME/mutter; MIT-SHM is the compositor-safe capture speedup.)
 

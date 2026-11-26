@@ -127,20 +127,32 @@ func TestDeviceKeyReviewEndToEnd(t *testing.T) {
 	}
 	k1, k2, k3 := gen(), gen(), gen()
 
+	var allConns []*websocket.Conn
+	// Close every client socket before defer ts.Close() runs (LIFO), so
+	// handleAgentWS handlers exit before httptest.Server waits on them.
+	defer func() {
+		for _, c := range allConns {
+			_ = c.Close()
+		}
+	}()
+	keep := func(c *websocket.Conn) { allConns = append(allConns, c) }
+
 	c, env := register(protocol.RegisterReq{EnrollToken: enrollTok, Hostname: "key-host", OS: "linux", Arch: "amd64", Version: "0.13.0", DevicePublicKey: k1}, "192.0.2.10")
+	keep(c)
 	if env.Type != protocol.MsgRegistered {
 		t.Fatalf("enrollment: %s %s", env.Type, env.Data)
 	}
-	_ = c.Close()
 	var reg protocol.RegisterResp
 	must(json.Unmarshal(env.Data, &reg))
 	id, token := reg.AgentID, reg.AgentToken
 	must(st.ReplaceUserScopes(ctx, scopedAdmin.ID, []models.UserScope{{ScopeType: models.ScopeAgent, ScopeID: id}}))
+	// Keep each live agent socket open until the next registration displaces it
+	// (or the test cleans up) so detachAgentConnection never races status/online checks.
 	as := func(key, status, version, ip string) protocol.Envelope {
 		t.Helper()
 		c, env := register(protocol.RegisterReq{AgentID: id, AgentToken: token, Hostname: "key-host", OS: "linux", Arch: "amd64",
 			Version: version, DevicePublicKey: key, DeviceKeyStatus: status}, ip)
-		_ = c.Close()
+		keep(c)
 		if env.Type != protocol.MsgRegistered {
 			t.Fatalf("registration with key %.8q status %q was refused: %s %s", key, status, env.Type, env.Data)
 		}
@@ -275,20 +287,16 @@ func TestDeviceKeyReviewEndToEnd(t *testing.T) {
 	as(k2, "", "0.13.0", "198.51.100.20")
 
 	// ---- Two machines with the same identity and key, taking the connection from each other ----
-	var open []*websocket.Conn
 	for i := 0; i < 7; i++ {
 		ip := "203.0.113.1"
 		if i%2 == 1 {
 			ip = "203.0.113.2"
 		}
 		c, env := register(protocol.RegisterReq{AgentID: id, AgentToken: token, Hostname: "key-host", OS: "linux", Arch: "amd64", Version: "0.13.0", DevicePublicKey: k2}, ip)
+		keep(c)
 		if env.Type != protocol.MsgRegistered {
 			t.Fatalf("clone registration %d refused: %s", i, env.Data)
 		}
-		open = append(open, c)
-	}
-	for _, c := range open {
-		_ = c.Close()
 	}
 	if d := device(); d["device_key_issue"] != models.DeviceKeyDuplicate || d["device_public_key"] != k2 {
 		t.Fatalf("clones: %v", d)

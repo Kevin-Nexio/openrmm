@@ -36,6 +36,10 @@ Managed endpoints.
 | mesh_id | text | MeshCentral node id (nullable) |
 | last_seen | timestamptz | heartbeat |
 | created_at | timestamptz | |
+| device_public_key | text | pinned ECDSA P-256 identity key for E2E native remote sessions (migration 042; empty only on pre-0.13 agents before upgrade) |
+| device_key_issue, pending_device_public_key | text | active key review state (`''` / `changed` / `missing` / `outdated` / `duplicate`) and the last conflicting key presented (migration 043) |
+| device_key_issue_since, device_key_issue_seen_at, device_key_issue_ip, device_key_issue_version, device_key_issue_count | timestamptz / text / int | timing, source address, agent version and observation count for the active key review (migration 043) |
+| device_key_changed_at, device_key_changed_by | timestamptz / text | last administrator-approved key change, shown by browsers that remembered the previous key (migration 043) |
 
 ### `device_groups`
 **Departments**: a group bound to a site (`id`, `name`, `site_id` FK → sites
@@ -169,7 +173,8 @@ Latest snapshot per agent (`agent_id` PK, `data` jsonb, `collected_at`).
 Brokered remote-access sessions (id, agent_id, provider, status, token,
 connect_url, created_by, expires_at). Native/files/terminal sessions additionally
 store independent `viewer_ticket_hash` and `agent_ticket_hash` values plus
-single-use timestamps; raw tickets are returned only at session creation and are
+single-use timestamps, and `e2e` (migration 042, whether the session uses
+end-to-end encryption); raw tickets are returned only at session creation and are
 never persisted.
 
 ### `remote_shares`
@@ -184,7 +189,8 @@ times. A share past `expires_at` is expired whatever its status says; the
 guest's own sessions are ordinary `remote_sessions` rows whose `created_by` is
 `guest:<share id>`. Migration 021 adds `reusable` (the guest may come back with
 the same link and code while the share is live) and `redeem_count` (how many
-times the code was accepted).
+times the code was accepted). Migration 042 adds `guest_public_key`,
+`guest_sign_key`, `wrapped_chat_key` and `chat_key_id` for sealed E2E group chat.
 
 ### `audit_log`
 Record of sensitive actions (actor, action, target, detail jsonb, created_at).

@@ -383,11 +383,12 @@ approved membership changes, and sending pauses while the new key is installed.
 
 The server pins each device's key the first time it sees it. A device that later
 presents another key, or none, stays online: its jobs, monitoring and updates go
-on. Only its native desktop, terminal and file transfer pause, and the device
-page says why. Sessions never fall back to the unencrypted relay meanwhile.
-The server records the change in the audit log (`device.e2e_key_issue`) and
-alerts the people who can see the device (**Device encryption key needs
-review**, on unless they turn it off).
+on. Only its native desktop, terminal, file transfer and new guest invitations
+pause, and the device page says why. Sessions never fall back to the unencrypted
+relay meanwhile. The server records the change in the audit log
+(`device.e2e_key_issue`, and `device.e2e_key_restored` when a missing or
+outdated key recovers on its own) and alerts the people who can see the device
+(**Device encryption key needs review**, on unless they turn it off).
 
 | Device page says | Usual cause | What to do |
 |---|---|---|
@@ -560,15 +561,18 @@ invitation was sent is not outlived by it.
 
 | Route | Who | Purpose |
 |---|---|---|
-| `POST /api/devices/{id}/remote-shares` | `devices.remote` + `devices.remote.share`, in scope | Create: `{mode, minutes}` → the share, `token` and `code` (once) |
+| `POST /api/devices/{id}/remote-shares` | `devices.remote` + `devices.remote.share`, in scope | Create: `{mode, minutes, reusable?}` → the share, `token`, `code` (once) and pinned `device_public_key`. Refused with **409** (`remote_device_key_issue`) while the device key is under review |
 | `GET /api/devices/{id}/remote-shares` | same | The caller's live invitations on the device |
 | `GET /api/remote-shares/pending?agent_id=` | same | What the open session polls: guests waiting, and guests in |
-| `POST /api/remote-shares/{id}/accept` · `/reject` | the creator; accept needs their live desktop session | Decide |
+| `POST /api/remote-shares/{id}/accept` · `/reject` | the creator; accept needs their live desktop session | Decide (encrypted sessions supply `{wrapped_chat_key, chat_key_id, redeem_count}` on accept) |
+| `PUT /api/remote-shares/{id}/chat-key` | the creator; needs their live E2E desktop session | Update a guest's sealed chat room key after rotation (`{wrapped_chat_key, chat_key_id, redeem_count}`) |
 | `DELETE /api/remote-shares/{id}` | the creator, or `users.manage` | Revoke, or remove a guest who is in |
+| `POST /api/devices/{id}/remote-chat` | `devices.remote` + `devices.remote.share`, in scope | Technician ciphertext send/poll channel for encrypted group chat |
 | `POST /api/guest/lookup` | public, login rate limit | `{token}` → the technician's name |
-| `POST /api/guest/join` | public, login rate limit | `{token, code, name}` → `{request_id, guest_credential}` |
-| `GET /api/guest/request` | `Authorization: Guest <credential>` | The decision, and whether the technician is present |
-| `POST /api/guest/session` | guest credential | Brokers the guest's session; the viewer then presents `rmm-guest.<credential>` with its ticket on `/ws/remote` |
+| `POST /api/guest/join` | public, login rate limit | `{token, code, name, guest_public_key?, guest_sign_key?}` → `{request_id, guest_credential}` |
+| `GET /api/guest/request` | `Authorization: Guest <credential>` | The decision, whether the technician is present, and the sealed `wrapped_chat_key` / `chat_key_id` when accepted |
+| `POST /api/guest/session` | guest credential | Brokers the guest's session (`{viewer_key?}`); the viewer then presents `rmm-guest.<credential>` with its ticket on `/ws/remote` |
+| `POST /api/guest/chat` | guest credential | Guest ciphertext send/poll channel for encrypted group chat |
 
 Every step is in the audit log: `remote.share.create`, `.code_failed`,
 `.redeem`, `.accept`, `.reject`, `.revoke`, `.remove`, `.guest_start`,
