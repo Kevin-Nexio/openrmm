@@ -79,7 +79,13 @@ function sandbox(api = {}) {
   vm.runInContext(cryptoSrc + '\n' + reviewCode, sb);
   return { sb, runtime, toasts };
 }
-const settle = () => new Promise((r) => setTimeout(r, 20));
+async function waitFor(check, timeoutMs = 2000) {
+  const deadline = Date.now() + timeoutMs;
+  while (Date.now() < deadline) {
+    if (check()) return;
+    await new Promise((r) => setTimeout(r, 5));
+  }
+}
 
 test('the console fingerprint matches the Go one', async () => {
   const { sb } = sandbox();
@@ -122,8 +128,11 @@ test('the review panel approves exactly the presented key, only after the review
     return tree;
   };
   render();
-  await settle();
-  let tree = render();
+  let tree;
+  await waitFor(() => {
+    tree = render();
+    return byTestId(tree, 'device-key-pinned').length > 0 && byTestId(tree, 'device-key-pending').length > 0;
+  });
   assert.equal(text(byTestId(tree, 'device-key-pinned')[0]), await sb.RemoteCrypto.displayFingerprint(pinned.pub));
   assert.equal(text(byTestId(tree, 'device-key-pending')[0]), await sb.RemoteCrypto.displayFingerprint(presented.pub));
   assert.match(text(tree), /rmm-agent\.exe" -state .*-fingerprint/, 'the Windows command is shown');
@@ -188,8 +197,11 @@ test('a browser accepts a new device key only when an administrator approved it 
   // Approved: both fingerprints are shown, and cancelling keeps the old key.
   device = { id: 'dev', device_public_key: newKey.pub, device_key_changed_by: 'admin', device_key_changed_at: '2026-11-26T12:00:00Z' };
   let pending = harness().check('dev', newKey.pub);
-  await settle();
-  let shown = harness().element;
+  let shown;
+  await waitFor(() => {
+    shown = harness().element;
+    return byTestId(shown, 'device-key-change-accept').length > 0;
+  });
   assert.match(text(shown), new RegExp(await sb.RemoteCrypto.displayFingerprint(oldKey.pub)));
   assert.match(text(shown), new RegExp(await sb.RemoteCrypto.displayFingerprint(newKey.pub)));
   assert.match(text(shown), /"who":"admin"/);
@@ -199,8 +211,10 @@ test('a browser accepts a new device key only when an administrator approved it 
 
   // Accepting remembers the new key.
   pending = harness().check('dev', newKey.pub);
-  await settle();
-  shown = harness().element;
+  await waitFor(() => {
+    shown = harness().element;
+    return byTestId(shown, 'device-key-change-accept').length > 0;
+  });
   byTestId(shown, 'device-key-change-accept')[0].props.onClick();
   assert.equal(await pending, true);
   assert.equal(sb.RemoteCrypto.knownDeviceKey('dev'), newKey.pub);

@@ -348,6 +348,14 @@ test('GuestJoinScreen parses E2E and legacy fragments, generates guest keys, and
   }
 });
 
+async function waitFor(check, timeoutMs = 2000) {
+  const deadline = Date.now() + timeoutMs;
+  while (Date.now() < deadline) {
+    if (check()) return;
+    await new Promise((r) => setTimeout(r, 5));
+  }
+}
+
 test('TerminalViewer completes E2E handshake, pins device key, renders lock badge, and blocks legacy downgrade', async () => {
   const termCode = [
     between(devicesSrc, 'function relayProtocols(', '// Why a guest'),
@@ -434,7 +442,7 @@ test('TerminalViewer completes E2E handshake, pins device key, renders lock badg
     assert.equal(find((n) => n.props?.['aria-label'] === 'viewer.encrypted', tree).length, 0);
 
     // Wait for async startRemote + WebSocket construction.
-    for (let i = 0; i < 20 && !rawSocket; i++) await new Promise((r) => setTimeout(r, 10));
+    await waitFor(() => !!rawSocket);
     assert.ok(rawSocket, 'TerminalViewer must open WebSocket');
     assert.equal(startOpts.provider, 'terminal');
     assert.ok(startOpts.opts.viewer_key, 'TerminalViewer must send viewer_key');
@@ -469,7 +477,7 @@ test('TerminalViewer completes E2E handshake, pins device key, renders lock badg
     };
     rawSocket.readyState = 1;
     rawSocket.onopen();
-    await new Promise((r) => setTimeout(r, 40));
+    await waitFor(() => env.termWrites.length > 0 && env.localStorage.getItem('rmm-device-key:dev-term') === deviceKey.pub);
 
     tree = render();
     assert.equal(find((n) => n.props?.['aria-label'] === 'viewer.encrypted', tree).length, 1, 'lock icon must appear after E2E handshake');
@@ -490,7 +498,7 @@ test('TerminalViewer completes E2E handshake, pins device key, renders lock badg
     env.runtime.reset();
     env.sandbox.TerminalViewer({ deviceId: 'dev-pinned', hostname: 'PINNED', onClose() {} });
     env.runtime.flushEffects();
-    await new Promise((r) => setTimeout(r, 20));
+    await waitFor(() => env.toasts.error.length > 0);
     assert.equal(wsCreated, 0, 'legacy downgrade on pinned device must not open a WebSocket');
     assert.deepEqual(env.toasts.error[0], ['viewer.deviceKeyChanged']);
   }
@@ -504,7 +512,7 @@ test('TerminalViewer completes E2E handshake, pins device key, renders lock badg
     env.runtime.reset();
     env.sandbox.TerminalViewer({ deviceId: 'dev-err', hostname: 'ERR', onClose() {} });
     env.runtime.flushEffects();
-    await new Promise((r) => setTimeout(r, 20));
+    await waitFor(() => env.toasts.error.length > 0);
     assert.deepEqual(env.toasts.error[0], ['term.failed', wantMsg]);
   }
 });
