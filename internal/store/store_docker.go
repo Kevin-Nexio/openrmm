@@ -74,8 +74,8 @@ func (s *Store) DockerInventory(ctx context.Context, id string) (*DockerInventor
 }
 
 type DockerFilter struct {
-	Query, State, Health, AgentID string
-	Limit, Offset                 int
+	Query, State, Health, AgentID, Update string
+	Limit, Offset                         int
 }
 type DockerRow struct {
 	protocol.DockerContainer
@@ -148,6 +148,15 @@ func (s *Store) DockerFleet(ctx context.Context, scope ReportFilter, filter Dock
 			where += fmt.Sprintf(" AND c->>'%s'=$%d", f.field, len(args))
 		}
 	}
+	// Old agents have no update report. Offline hosts, failed inventory and old
+	// registry checks remain visible, but never count as currently up to date.
+	if filter.Update != "" {
+		predicate, err := dockerUpdateFilterSQL(filter.Update)
+		if err != nil {
+			return nil, err
+		}
+		where += " AND (" + predicate + ")"
+	}
 	if err = tx.QueryRow(ctx, `SELECT COUNT(*)`+from+where, args...).Scan(&result.Total); err != nil {
 		return nil, err
 	}
@@ -174,4 +183,25 @@ func (s *Store) DockerFleet(ctx context.Context, scope ReportFilter, filter Dock
 	}
 	rows.Close()
 	return result, tx.Commit(ctx)
+}
+
+func dockerUpdateFilterSQL(filter string) (string, error) {
+	// checked_at is validated at ingestion; null/missing legacy fields yield
+	// false through COALESCE. Keep this equivalent to the device-view filter.
+	fresh := `COALESCE(a.status='online' AND d.status='available'
+ AND d.last_success_at >= now()-interval '90 seconds'
+ AND (c->'update'->>'checked_at')::timestamptz >= now()-interval '26 hours'
+ AND (c->'update'->>'checked_at')::timestamptz <= now()+interval '5 minutes',false)`
+	available := fresh + ` AND COALESCE(c->'update'->>'status'='update_available' OR c->'update'->>'version_status'='available',false)`
+	current := fresh + ` AND COALESCE(c->'update'->>'status'='up_to_date' AND c->'update'->>'version_status' IN ('not_found','unsupported'),false)`
+	switch filter {
+	case "available":
+		return available, nil
+	case "current":
+		return current, nil
+	case "unknown":
+		return "NOT (" + available + ") AND NOT (" + current + ")", nil
+	default:
+		return "", fmt.Errorf("invalid Docker update filter")
+	}
 }

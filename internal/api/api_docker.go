@@ -29,7 +29,13 @@ func (s *Server) listDocker(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	q := r.URL.Query()
-	f := store.DockerFilter{Query: strings.TrimSpace(q.Get("q")), State: q.Get("state"), Health: q.Get("health"), AgentID: q.Get("agent_id"), Limit: 100}
+	f := store.DockerFilter{Query: strings.TrimSpace(q.Get("q")), State: q.Get("state"), Health: q.Get("health"), AgentID: q.Get("agent_id"), Update: q.Get("update"), Limit: 100}
+	switch f.Update {
+	case "", "available", "current", "unknown":
+	default:
+		writeErr(w, http.StatusBadRequest, "invalid update filter")
+		return
+	}
 	if len(f.Query) > 256 || strings.ContainsFunc(f.Query, unicode.IsControl) {
 		writeErr(w, http.StatusBadRequest, "query is too long")
 		return

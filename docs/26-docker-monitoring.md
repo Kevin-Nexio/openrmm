@@ -1,6 +1,6 @@
 # Docker inventory and container checks
 
-The **Docker** screen shows containers across permitted devices. Each device also has a **Docker** tab. These views show the latest observations, not historical charts. They do not start, stop, restart, update, or otherwise control containers.
+The **Docker** screen shows containers across permitted devices. Each device also has a **Docker** tab. These views show the latest observations, not historical charts. They do not start, stop, restart, update, or otherwise control containers. The **Updates** column and filter distinguish a replacement image for the same tag from a newer numbered version.
 
 ## Requirements and limits
 
@@ -15,6 +15,8 @@ Set `RMM_DOCKER_MONITORING=false` in the agent service environment to disable Do
 A separate collector runs immediately after connection and then every 60 seconds. It does not block the normal heartbeat. Each collection has a 15-second deadline; reconnects cannot create overlapping inventory collections. Limits are 500 containers and 2 MiB per CLI output, below the server's existing 8 MiB WebSocket frame limit. Oversized, malformed or inaccessible observations are rejected as a whole.
 
 For each container, the snapshot contains its full ID, name, image reference, state, health state, current CPU percentage, current memory usage and limit, restart count, start time, and the two Compose labels `com.docker.compose.project` and `com.docker.compose.service`. The CLI's inspect template projects only those metadata fields. Environment variables, commands, logs, mounts, health-check output and other labels are not collected or stored. Collection errors expose a fixed code, not raw CLI stderr.
+
+Update-capable agents also report the immutable image ID and a bounded update-check result. The local image's OS, architecture, variant and repository digests are inspected internally to identify the correct platform and provenance; arbitrary image configuration is never reported.
 
 CPU can exceed 100% on multiple cores. Linux memory usage follows [`docker stats`](https://docs.docker.com/reference/cli/docker/container/stats/), including its subtraction of inactive cache. Values retain the precision supplied by the CLI. Stopped containers and running containers without a returned sample show **Not sampled**, not a fabricated zero. A zero or absent memory limit is shown as unavailable. The restart count is the container's cumulative counter, not a restart rate or a permanent restart-loop alert.
 
@@ -34,6 +36,8 @@ GET /api/docker?q=web&state=running&health=healthy&limit=100&offset=0
 The global endpoint accepts `agent_id` plus existing report scope filters. `limit` defaults to 100 and is capped at 200. It returns scoped host collection statuses, filtered total and container rows. Failed HTTP access hides previously displayed rows. Inventory is stored per agent in `docker_inventory` by migration 044, and deleted when the agent is deleted.
 
 ## Optional alerts
+
+Image update detection is described in [Docker image updates](27-docker-image-updates.md). The container health checks below remain local and never contact a registry.
 
 A user with `checks.manage` can create a **Docker container** check from the existing check editor. No checks are created automatically. Configuration uses an exact, case-sensitive container name:
 
