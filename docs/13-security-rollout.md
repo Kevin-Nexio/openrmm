@@ -189,7 +189,12 @@ does not make a bearer safe if same-origin script execution is compromised.
 ## Remaining hardening
 
 - scripts and remote terminal run as root/SYSTEM without sandboxing;
-- native media is not end-to-end encrypted; relay and TLS edge are trusted;
+- native sessions are end-to-end encrypted only to agents that pinned a device
+  key (v0.13.0+); in **Prefer encryption** mode, older agents still connect
+  without it until they update. The application origin and control channel
+  are trusted to distribute device keys, and the relay still sees session
+  timing and sizes (see
+  [Remote access](08-remote-access.md#end-to-end-encryption-for-native-sessions));
 - one server replica is supported; hub, relay and scheduler are not distributed;
 - `/readyz` checks only the database and `/metrics` (token-gated) is a small
   snapshot; there is no tracing or built-in backup alerting;
