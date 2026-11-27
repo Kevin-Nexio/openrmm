@@ -6,8 +6,11 @@
 > seat-following). See **[08-remote-access](08-remote-access.md)** for the engine
 > that actually shipped. This doc is kept only as historical context and for the
 > AGPL licensing analysis (relevant only if a fork is ever reconsidered for
-> hardware codecs / E2E). Its `token`/`relay_url` examples are obsolete: the
-> shipped relay uses role-specific handshake tickets, never URL secrets.
+> hardware codecs). Since v0.13.0 the shipped engine encrypts native sessions
+> end to end without the fork; see
+> [End-to-end encryption for native sessions](08-remote-access.md#end-to-end-encryption-for-native-sessions).
+> Its `token`/`relay_url` examples are obsolete: the shipped relay uses
+> role-specific handshake tickets, never URL secrets.
 
 This is a **plan**, not shipped code. It describes how to build the native
 desktop-remote ("media engine") by forking RustDesk and connecting it to the
@@ -163,6 +166,9 @@ wheel `{dy}`, `k` key `{code:VK,down}`. Coordinates are normalized 0..1 across t
   LAN, not a WAN. The fork brings VP8/9/AV1.
 - No end-to-end encryption on the media (the relay sees frames). The fork keeps
   RustDesk's NaCl E2E crypto, so the relay only ever sees ciphertext.
+  *Closed without the fork in v0.13.0:* the shipped engine encrypts native
+  sessions end to end, and the relay sees only ciphertext, timing and sizes
+  ([08-remote-access](08-remote-access.md#end-to-end-encryption-for-native-sessions)).
 - Primary monitor only; `keyCode`→VK mapping is approximate.
 
 ## RustDesk fork runbook (Phase B — drop-in replacement for the sidecar)
