@@ -1,3 +1,10 @@
+# Development stack, built from this checkout. Its own project name keeps it
+# apart from a production install from deploy/ (project "openrmm"): without it,
+# a checkout cloned into a folder named "openrmm" would share that install's
+# containers and its rmm_pgdata volume, and the production server would then
+# meet a database created with this file's development password.
+name: openrmm-dev
+
 services:
   postgres:
     image: postgres:16-alpine

@@ -6,6 +6,28 @@ tag.
 
 ## [Unreleased]
 
+### Fixed
+
+- **A refused database password now says what usually causes it.** When
+  PostgreSQL refuses the server's password (SQLSTATE 28P01), the server log
+  adds that the bundled postgres container sets the password only when it
+  creates its data volume, so a volume left by an earlier install keeps that
+  install's password. `deploy/QUICKSTART.md` has a new Troubleshooting section
+  for it: how to confirm it, and how to start again on a new installation. It
+  also covers the first administrator's call failing on port 443 while Caddy
+  has not started ([#319](https://github.com/openrmm-project/openrmm/pull/319)).
+
+### Changed
+
+- **The development Compose stack has its own project name, `openrmm-dev`.**
+  It took the checkout folder's name, so a checkout cloned into a folder named
+  `openrmm` shared the production install's project: its containers and its
+  `rmm_pgdata` volume, created with the development password. A development
+  stack started before this keeps running under the folder's name: stop it with
+  `docker compose -p <folder> down` before starting the new one, which begins
+  with an empty database; the old one stays in `<folder>_rmm_pgdata`
+  ([#319](https://github.com/openrmm-project/openrmm/pull/319)).
+
 ## [0.13.0] - 2026-11-26
 
 ### Added
