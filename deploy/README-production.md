@@ -274,7 +274,7 @@ so the tag still pins the previous release.
 server image carries its version, shown in Settings ▸ Configuration and printed
 by `rmm-server -version`: the workflow passes the tag's version as the
 Dockerfile's `VERSION` build arg, and a build without it reports `dev` — pass
-`--build-arg VERSION=0.12.3` (or set it under `build.args` in the compose file)
+`--build-arg VERSION=0.13.0` (or set it under `build.args` in the compose file)
 when building one yourself.
 
 ## 6. Database migrations
