@@ -131,6 +131,53 @@ If you already run nginx, Traefik, a tunnel or a load balancer:
 [README-production.md](README-production.md), section 3, lists what the edge has
 to forward.
 
+## Troubleshooting
+
+### The server stops with "password authentication failed" (SQLSTATE 28P01)
+
+This section is for the setup above, where the server signs in as the
+database owner with `secrets/postgres_password`. A role you created yourself,
+such as `openrmm_app`, keeps the password you gave it.
+
+PostgreSQL takes `secrets/postgres_password` only when it creates its data
+volume. A volume left by an earlier attempt keeps that attempt's password, and
+`docker compose up` reuses it. The volumes belong to the Compose project
+`openrmm`, not to the folder, so deleting the checkout or `secrets/` leaves them
+in place. With `COMPOSE_PROJECT_NAME` set, the volume names below start with
+that name instead.
+
+If the data volume was created before the password file, this is the cause.
+Compare the two dates:
+
+```bash
+docker volume inspect -f '{{.CreatedAt}}' openrmm_rmm_pgdata
+date -u -r secrets/postgres_password '+%Y-%m-%dT%H:%M:%SZ'
+```
+
+On a new installation with nothing to keep, delete the database volumes and
+start again. This erases the database. Caddy's volumes stay, so the
+certificates are not requested again:
+
+```bash
+docker compose down
+docker volume rm openrmm_rmm_pgdata openrmm_rmm_pgwal
+docker compose up -d
+```
+
+If the database holds data, put back the `secrets/postgres_password` it was
+created with, from your backup, instead.
+
+### Step 4 fails with "Failed to connect to … port 443"
+
+Caddy starts only after the server and the console are healthy, so nothing
+listens on port 443 until then. Run `docker compose ps`, and read the log of
+the first service that is not running (`docker compose logs server`, then
+`docker compose logs caddy`). For the certificates, the three names must
+resolve to this server, ports 80 and 443 must be reachable from the internet,
+and no other program on the host may use them. A server reachable only inside
+your network cannot pass Let's Encrypt's check: use your own TLS edge instead
+(above).
+
 ## Keep it private
 
 - `.env` and `secrets/` hold this installation's secrets. Git ignores both:

@@ -71,6 +71,9 @@ func main() {
 	ctx := context.Background()
 	st, err := store.New(ctx, cfg.DatabaseURL)
 	if err != nil {
+		if isPasswordRefused(err) {
+			log.Fatalf("database: %v\n\n%s", err, passwordRefusedHint)
+		}
 		log.Fatalf("database: %v", err)
 	}
 	defer st.Close()
@@ -206,6 +209,28 @@ func superSuffix(super bool) string {
 
 // isPermissionError reports whether a migration failed because the role lacks
 // the rights, rather than because the migration itself is wrong.
+// passwordRefusedHint follows a refused database password. The usual cause on a
+// first install is a data volume from an earlier attempt: the postgres image
+// sets the password only when it initialises an empty volume, so a new
+// secrets/postgres_password never reaches a volume that already exists.
+//
+// It names the other two setups on purpose: a role created by hand (the
+// restricted openrmm_app) or an external PostgreSQL never had its password set
+// by the container, and the volume advice does not apply to them.
+const passwordRefusedHint = "PostgreSQL refused the password for this user. With the bundled Compose files,\n" +
+	"the postgres container sets the database owner's password only when it creates\n" +
+	"its data volume, so a volume left by an earlier install keeps that install's\n" +
+	"password: see \"Troubleshooting\" in deploy/QUICKSTART.md. A role created by\n" +
+	"hand, such as openrmm_app, or an external PostgreSQL keeps the password set there."
+
+// isPasswordRefused reports whether PostgreSQL refused the credentials:
+// 28P01 invalid_password. PostgreSQL gives the same answer for a role that does
+// not exist, so the hint does not say which of the two it was.
+func isPasswordRefused(err error) bool {
+	var pgErr *pgconn.PgError
+	return errors.As(err, &pgErr) && pgErr.Code == "28P01"
+}
+
 func isPermissionError(err error) bool {
 	var pgErr *pgconn.PgError
 	if errors.As(err, &pgErr) {

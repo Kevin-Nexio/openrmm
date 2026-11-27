@@ -19,6 +19,13 @@ docker compose up -d
 curl localhost:3005/healthz      # -> ok
 ```
 
+The stack runs as the Compose project `openrmm-dev`, so it never shares
+containers or volumes with a production install from `deploy/` (project
+`openrmm`). A development stack started before the project had this name took
+the checkout folder's name instead. Stop it with
+`docker compose -p <folder> down` before starting this one; its database stays
+in the `<folder>_rmm_pgdata` volume, and the new stack starts with an empty one.
+
 ## Run locally
 
 ```bash
