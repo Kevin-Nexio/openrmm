@@ -8,6 +8,7 @@ import (
 	"testing"
 	"time"
 
+	"github.com/google/uuid"
 	"github.com/p1ngu/rmm/internal/models"
 )
 
@@ -258,5 +259,30 @@ func TestDeliveryNonincidentFilterAndDisabledTransportIntegration(t *testing.T) 
 	f.store.pool.QueryRow(ctx, `SELECT count(*) FROM notifications`).Scan(&count)
 	if count != 2 {
 		t.Fatalf("disabled transport banked stale mail: %d", count)
+	}
+	// An incident event lacking alert_id provenance must fail closed for
+	// selected-rules filters while still delivering under mode='all'.
+	noAlertCtx, err := json.Marshal(models.NotificationDeliveryContext{
+		Version: 1, EventType: NotifyCheckFailed, AgentID: f.agent.ID,
+		SiteID: f.site.ID, Route: models.NotificationRouteSnapshot{Mode: "automatic"},
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	noAlertRow := models.Notification{
+		EventType: NotifyCheckFailed, UserID: &u.ID, Recipient: u.Email,
+		DeliveryContext: noAlertCtx,
+	}
+	if ok, _, err := f.store.NotificationDeliveryAllowed(ctx, &noAlertRow, false); err != nil || ok {
+		t.Fatalf("incident context without alert_id bypassed selected rule filter: ok=%v err=%v", ok, err)
+	}
+	if err := f.store.SetNotificationRuleFilter(ctx, u.ID, NotificationRuleFilter{Mode: "all"}); err != nil {
+		t.Fatal(err)
+	}
+	if ok, _, err := f.store.NotificationDeliveryAllowed(ctx, &noAlertRow, false); err != nil || !ok {
+		t.Fatalf("mode=all control case denied: ok=%v err=%v", ok, err)
+	}
+	if err := f.store.QueueAgentNotifications(ctx, uuid.NewString(), NotifyJobFailed, "s", "b", "missing-agent", false); !errors.Is(err, ErrNotFound) {
+		t.Fatalf("missing agent QueueAgentNotifications = %v, want ErrNotFound", err)
 	}
 }

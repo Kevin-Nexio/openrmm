@@ -9,7 +9,6 @@ import (
 	"io"
 	"reflect"
 	"strings"
-	"time"
 
 	"github.com/google/uuid"
 	"github.com/jackc/pgx/v5"
@@ -45,22 +44,33 @@ func alertDeliveryContext(a *models.Alert, eventType string) models.Notification
 		RuleID: notificationString(a.RuleID), Route: models.NotificationRouteSnapshot{Mode: "automatic"}}
 }
 
+// isIncidentNotificationEvent reports whether an event type belongs to an alert
+// incident lifecycle and therefore must honor per-user rule filters.
+func isIncidentNotificationEvent(eventType string) bool {
+	return eventType != NotifyJobFailed && eventType != NotifyAIReleaseRevoked && eventType != NotifyDeviceKeyIssue
+}
+
 // sameNotificationModel compares the fields that identify the rendered
 // transition, including content changed by observations that do NOT bump Version.
 // Heartbeat timestamps and occurrence counts are not part of the email model.
 func sameNotificationModel(a, b *models.Alert) bool {
+	if a == nil || b == nil {
+		return a == b
+	}
+	if !sameAlertTime(a.AgentMonitoringScopeSince, b.AgentMonitoringScopeSince) {
+		return false
+	}
 	type content struct {
 		Version, Seq                                                                      int64
 		Pending                                                                           bool
 		Kind, Status, Hostname, Severity, Message, Output, ResolutionKind, ResolutionNote string
 		Observed, Threshold                                                               *float64
-		AgentMonitoringScopeSince                                                         *time.Time
 		Context                                                                           models.NotificationDeliveryContext
 	}
 	model := func(a *models.Alert) content {
 		return content{a.Version, a.NotificationSeq, a.NotificationPending, a.NotificationKind,
 			a.Status, a.AgentHostname, a.Severity, a.Message, a.Output, a.ResolutionKind, a.ResolutionNote,
-			a.ObservedValue, a.ThresholdValue, a.AgentMonitoringScopeSince, alertDeliveryContext(a, "")}
+			a.ObservedValue, a.ThresholdValue, alertDeliveryContext(a, "")}
 	}
 	return reflect.DeepEqual(model(a), model(b))
 }
@@ -117,6 +127,9 @@ func (s *Store) QueueAgentNotifications(ctx context.Context, agentID, eventType,
 	var siteID, clientID, groupID *string
 	if err := tx.QueryRow(ctx, `SELECT a.site_id,s.client_id,a.group_id FROM agents a LEFT JOIN sites s ON s.id=a.site_id
 		WHERE a.id=$1 FOR SHARE OF a`, agentID).Scan(&siteID, &clientID, &groupID); err != nil {
+		if errors.Is(err, pgx.ErrNoRows) {
+			return ErrNotFound
+		}
 		return err
 	}
 	context := models.NotificationDeliveryContext{Version: 1, EventType: eventType, AgentID: agentID,
@@ -152,6 +165,8 @@ func fanoutNotification(ctx context.Context, tx pgx.Tx, delivery models.Notifica
 // One predicate serves fanout and delivery. IDs come from the closed snapshot,
 // never from current agent membership or the alert's current rule.
 func recipientsForDelivery(ctx context.Context, q dbQuerier, d models.NotificationDeliveryContext, scopeKnown, ruleKnown bool, userID, address string, operator bool) ([]NotificationRecipient, error) {
+	incidentEvent := isIncidentNotificationEvent(d.EventType) || d.AlertID != ""
+	effectiveRuleKnown := ruleKnown && d.AlertID != ""
 	rows, err := q.Query(ctx, `SELECT u.id,u.email,u.email_verified_at IS NOT NULL
 		FROM users u LEFT JOIN notification_subscriptions ns ON ns.user_id=u.id AND ns.event_type=$1
 		WHERE u.disabled_at IS NULL AND u.email IS NOT NULL AND u.email<>''
@@ -167,8 +182,8 @@ func recipientsForDelivery(ctx context.Context, q dbQuerier, d models.Notificati
 		 OR ($8 AND (($13::uuid IS NULL AND $14<>'check' AND EXISTS (SELECT 1 FROM notification_rule_filters f WHERE f.user_id=u.id AND f.include_defaults))
 		 OR EXISTS (SELECT 1 FROM notification_rule_selections sel WHERE sel.user_id=u.id AND sel.check_id=$13))))
 		ORDER BY u.id`, d.EventType, DefaultSubscribed(d.EventType), notificationUUID(d.AgentID), notificationUUID(d.ClientID),
-		notificationUUID(d.SiteID), notificationUUID(d.GroupID), scopeKnown, ruleKnown, notificationUUID(userID), address,
-		operator, d.AlertID != "", notificationUUID(d.RuleID), d.SourceType)
+		notificationUUID(d.SiteID), notificationUUID(d.GroupID), scopeKnown, effectiveRuleKnown, notificationUUID(userID), address,
+		operator, incidentEvent, notificationUUID(d.RuleID), d.SourceType)
 	if err != nil {
 		return nil, err
 	}
@@ -249,7 +264,7 @@ func (s *Store) NotificationDeliveryAllowed(ctx context.Context, n *models.Notif
 				d.GroupID = notificationString(groupID)
 				scopeKnown = true
 			}
-		} else if n.EventType != NotifyJobFailed && n.EventType != NotifyAIReleaseRevoked && n.EventType != NotifyDeviceKeyIssue {
+		} else if isIncidentNotificationEvent(n.EventType) {
 			// Unknown incident origin must not bypass a selected-rules preference.
 			d.AlertID = "legacy-unknown"
 		}
