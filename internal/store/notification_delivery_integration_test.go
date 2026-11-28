@@ -19,8 +19,12 @@ func deliveryUser(t *testing.T, f alertReliabilityFixture, name string, scopes [
 	if err != nil {
 		t.Fatal(err)
 	}
-	if _, err = f.store.UpdateUserEmail(ctx, u.ID, name+"@example.test"); err != nil {
+	u, err = f.store.UpdateUserEmail(ctx, u.ID, name+"@example.test")
+	if err != nil {
 		t.Fatal(err)
+	}
+	if u.Email == "" {
+		t.Fatal("expected updated user email")
 	}
 	return u
 }
